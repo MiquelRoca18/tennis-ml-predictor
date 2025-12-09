@@ -49,3 +49,6 @@ backups/**/*
 
 # Keep folder structure
 !**/.gitkeep
+
+guiasProyecto/
+*.md
