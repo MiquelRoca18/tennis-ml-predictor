@@ -17,6 +17,7 @@ from features_fatiga import FatigaCalculator
 from features_forma_reciente import FormaRecienteCalculator
 from features_h2h_mejorado import HeadToHeadCalculator
 from features_superficie import SuperficieSpecializationCalculator
+from features_age_experience import AgeExperienceCalculator, crear_features_edad_experiencia_partido
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class CompleteFeatureEngineer:
         self.forma_calc = FormaRecienteCalculator(self.df)
         self.h2h_calc = HeadToHeadCalculator(self.df)
         self.superficie_calc = SuperficieSpecializationCalculator(self.df)
+        self.age_exp_calc = AgeExperienceCalculator(self.df)
         
         logger.info("✅ Calculadores inicializados")
     
@@ -193,8 +195,11 @@ class CompleteFeatureEngineer:
         )
         features.update(ventaja_sup)
         
+        # 8. Features de edad y experiencia
+        age_exp_features = crear_features_edad_experiencia_partido(self.age_exp_calc, partido_row)
+        features.update(age_exp_features)
         
-        # 8. Features de interacción
+        # 9. Features de interacción
         features.update(self._features_interaccion(features))
         
         return features

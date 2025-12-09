@@ -7,22 +7,34 @@ __pycache__/
 venv/
 env/
 ENV/
+*.egg-info/
+dist/
+build/
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Data
+# Data files (too large for git)
 datos/raw/*.csv
 datos/processed/*.csv
-*.csv
-*.pkl
-*.joblib
+!datos/raw/.gitkeep
+!datos/processed/.gitkeep
 
-# Models
+# Models (too large for git)
 modelos/*.pkl
 modelos/*.joblib
+modelos/*.h5
+modelos/*.keras
+modelos/backup_*/
 !modelos/.gitkeep
+
+# Results (generated files)
+resultados/*.csv
+resultados/*.png
+resultados/*.html
+resultados/*.txt
+!resultados/.gitkeep
 
 # Logs
 logs/*.log
@@ -31,25 +43,43 @@ logs/*.log
 # Environment
 .env
 .env.local
+*.env
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
 # OS
 .DS_Store
 Thumbs.db
+*.bak
+*~
 
-# Outputs
-resultados/**/*.png
-resultados/**/*.html
-backups/**/*
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
 
 # Keep folder structure
 !**/.gitkeep
 
+# Documentation to keep (important)
+!README.md
+!README_PIPELINE.md
+!CONTRIBUTING.md
+!LICENSE.md
+!CHANGELOG.md
+
+# Exclude other markdown files in root
+/*.md
+!README*.md
+
+# Exclude guides and docs folders
 guiasProyecto/
 docs/
-*.md
+/*.sh
+/*.md
