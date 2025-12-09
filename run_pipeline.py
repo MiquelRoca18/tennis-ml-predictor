@@ -1,5 +1,6 @@
 """
 Script principal para ejecutar todo el pipeline de Fase 1
+Actualizado para usar TML-Database (datos hasta 2025)
 """
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ import logging
 # Añadir src al path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-from data.descargar_datos import descargar_datos_atp
+from data.tml_data_downloader import actualizar_datos_completos
 from data.data_processor import explorar_datos, limpiar_datos
 from features.feature_engineer import crear_dataset_jugadores, crear_features_basicas, preparar_dataset_final
 import pandas as pd
@@ -22,16 +23,20 @@ logger = logging.getLogger(__name__)
 
 def ejecutar_pipeline_completo():
     """
-    Ejecuta todo el pipeline de Fase 1
+    Ejecuta todo el pipeline de Fase 1 con datos TML actualizados
     """
     
     logger.info("=" * 70)
-    logger.info("🚀 INICIANDO PIPELINE COMPLETO - FASE 1")
+    logger.info("🚀 INICIANDO PIPELINE COMPLETO - FASE 1 (TML-Database)")
     logger.info("=" * 70)
     
-    # Paso 1: Descargar datos
-    logger.info("\n📥 PASO 1: DESCARGANDO DATOS...")
-    df_raw = descargar_datos_atp(years=[2020, 2021, 2022, 2023, 2024])
+    # Paso 1: Descargar/actualizar datos TML
+    logger.info("\n📥 PASO 1: ACTUALIZANDO DATOS TML...")
+    df_raw = actualizar_datos_completos()
+    
+    if df_raw is None:
+        logger.error("❌ Error al descargar datos TML")
+        return None
     
     # Paso 2: Explorar datos
     logger.info("\n📊 PASO 2: EXPLORANDO DATOS...")
