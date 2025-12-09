@@ -51,15 +51,15 @@ def descargar_tml_data(year=2025):
 
 def actualizar_datos_completos():
     """
-    Actualiza con datos de 2020-2025 desde TML
+    Actualiza con datos de 2018-2025 desde TML
     """
     
     logger.info("=" * 60)
     logger.info("🔄 ACTUALIZACIÓN COMPLETA DE DATOS - TML DATABASE")
     logger.info("=" * 60)
     
-    # Descargar 2020-2025
-    years = [2020, 2021, 2022, 2023, 2024, 2025]
+    # Descargar 2018-2025 (añadiendo 2018-2019 para más datos)
+    years = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
     datos = []
     
     for year in years:

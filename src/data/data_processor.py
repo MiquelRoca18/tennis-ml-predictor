@@ -111,8 +111,8 @@ def explorar_datos(df):
 
 
 if __name__ == "__main__":
-    # Cargar datos crudos
-    df_raw = pd.read_csv("datos/raw/atp_matches_raw.csv")
+    # Cargar datos crudos (actualizados con 2018-2025)
+    df_raw = pd.read_csv("datos/raw/atp_matches_raw_updated.csv")
     
     # Explorar
     explorar_datos(df_raw)

@@ -17,6 +17,8 @@ from features_fatiga import FatigaCalculator
 from features_forma_reciente import FormaRecienteCalculator
 from features_h2h_mejorado import HeadToHeadCalculator
 from features_superficie import SuperficieSpecializationCalculator
+from features_momentum import MomentumCalculator, crear_features_momentum_partido
+from features_tournament_context import TournamentContextCalculator, crear_features_torneo_partido
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,6 +35,8 @@ class CompleteFeatureEngineer:
     - Forma reciente
     - Head-to-Head mejorado
     - Especialización por superficie
+    - Features de momentum (tendencias de forma)
+    - Features de contexto de torneo
     - Features de interacción
     """
     
@@ -63,6 +67,8 @@ class CompleteFeatureEngineer:
         self.forma_calc = FormaRecienteCalculator(self.df)
         self.h2h_calc = HeadToHeadCalculator(self.df)
         self.superficie_calc = SuperficieSpecializationCalculator(self.df)
+        self.momentum_calc = MomentumCalculator(self.df)
+        self.tournament_calc = TournamentContextCalculator(self.df)
         
         logger.info("✅ Calculadores inicializados")
     
@@ -191,7 +197,15 @@ class CompleteFeatureEngineer:
         )
         features.update(ventaja_sup)
         
-        # 8. Features de interacción
+        # 8. Features de momentum
+        momentum_features = crear_features_momentum_partido(self.momentum_calc, partido_row)
+        features.update(momentum_features)
+        
+        # 9. Features de contexto de torneo
+        tournament_features = crear_features_torneo_partido(self.tournament_calc, partido_row)
+        features.update(tournament_features)
+        
+        # 10. Features de interacción
         features.update(self._features_interaccion(features))
         
         return features
@@ -291,6 +305,9 @@ class CompleteFeatureEngineer:
                 'jugador_rank': row['winner_rank'],
                 'oponente_rank': row['loser_rank'],
                 'superficie': row['surface'],
+                'tourney_level': row.get('tourney_level', 'D'),
+                'tourney_name': row.get('tourney_name', ''),
+                'round': row.get('round', ''),
                 'resultado': 1
             }
             
@@ -302,6 +319,9 @@ class CompleteFeatureEngineer:
                 'jugador_rank': row['loser_rank'],
                 'oponente_rank': row['winner_rank'],
                 'superficie': row['surface'],
+                'tourney_level': row.get('tourney_level', 'D'),
+                'tourney_name': row.get('tourney_name', ''),
+                'round': row.get('round', ''),
                 'resultado': 0
             }
             

@@ -143,9 +143,9 @@ class ModelComparator:
                           f"Val {resultados['brier_val']:.4f} | "
                           f"Test {resultados['brier_test']:.4f}")
                 
-                # Calibrar
+                # Calibrar (usando isotonic para mejor Brier Score)
                 logger.info(f"   Calibrando...")
-                modelo_calibrado = CalibratedClassifierCV(modelo, method='sigmoid', cv='prefit')
+                modelo_calibrado = CalibratedClassifierCV(modelo, method='isotonic', cv='prefit')
                 modelo_calibrado.fit(X_val, y_val)
                 
                 y_prob_test_cal = modelo_calibrado.predict_proba(X_test)[:, 1]
