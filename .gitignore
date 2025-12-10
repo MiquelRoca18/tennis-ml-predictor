@@ -81,5 +81,9 @@ tmp/
 # Exclude guides and docs folders
 guiasProyecto/
 docs/
-/*.sh
-/*.md
+
+# Allow README but block other markdown/shell files
+#/*.sh
+#/*.md
+!README.md
+!README_PIPELINE.md

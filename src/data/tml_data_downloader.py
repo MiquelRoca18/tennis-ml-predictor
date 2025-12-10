@@ -57,9 +57,9 @@ def actualizar_datos_completos():
     logger.info("=" * 60)
     logger.info("🔄 ACTUALIZACIÓN COMPLETA DE DATOS - TML DATABASE")
     logger.info("=" * 60)
-    
-    # Descargar 2020-2025 (datos más recientes = mejor modelo)
-    years = [2020, 2021, 2022, 2023, 2024, 2025]
+    # Años a descargar (2022-2025 - ventana óptima)
+    # Experimento demostró: 2022-2025 = 70.29% vs 2020-2025 = 69.37%
+    years = list(range(2022, 2026))
     datos = []
     
     for year in years:
