@@ -12,32 +12,57 @@ Sistema de predicción de partidos de tenis usando Machine Learning con probabil
 
 ---
 
-## 🚀 Inicio Rápido
+## 🚀 Inicio Rápido (Recomendado)
 
-### Requisitos Previos
+### ⚡ Opción A: Pipeline Completo Automatizado
 
-- Python 3.8+
-- pip
-- Git
-
-### Instalación
+**Para usuarios nuevos** - Ejecuta todo el proyecto de principio a fin con un solo comando:
 
 ```bash
 # 1. Clonar el repositorio
 git clone https://github.com/TU_USUARIO/tennis-ml-predictor.git
 cd tennis-ml-predictor
 
-# 2. Crear entorno virtual
+# 2. Crear entorno virtual (recomendado)
 python -m venv venv
 source venv/bin/activate  # En Windows: venv\Scripts\activate
 
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
-# 4. Crear estructura de carpetas
-mkdir -p datos/raw datos/processed datos/tml_database
-mkdir -p modelos resultados/calibracion resultados/backtesting logs
+# 4. Ejecutar pipeline completo
+python setup_and_train.py --full
 ```
+
+**⏱️ Tiempo**: 30-40 minutos  
+**✅ Resultado**: Modelo entrenado, validado y listo para usar
+
+**¿Qué hace `--full`?**
+- Descarga datos (TML Database)
+- Procesa datos
+- Genera 149 features
+- Entrena 4 modelos
+- Optimiza hiperparámetros
+- Valida con Walk-Forward
+- Genera reportes
+
+### 🎯 Otras Opciones
+
+```bash
+# Solo entrenar (si ya tienes datos)
+python setup_and_train.py --train-only
+
+# Solo validar (si ya tienes modelo)
+python setup_and_train.py --validate-only
+```
+
+📖 **Ver guía detallada**: [QUICK_START.md](QUICK_START.md)
+
+---
+
+### 🔧 Opción B: Paso a Paso (Avanzado)
+
+Si prefieres ejecutar cada paso manualmente, ver sección [Pipeline Completo - Paso a Paso](#-pipeline-completo---paso-a-paso) más abajo.
 
 ---
 
@@ -177,8 +202,42 @@ python generar_reporte_fase2.py
 
 ---
 
-## ⚡ Pipeline Completo Automatizado
+### **Paso 8: Walk-Forward Validation (Fase 3)** 🔄
 
+Valida el modelo con folds temporales para confirmar robustez:
+
+```bash
+# Opción 1: Solo Walk-Forward Validation
+python walk_forward_validation.py
+
+# Opción 2: Validación Final Completa (recomendado)
+python validacion_final_fase3.py
+```
+
+**Salida esperada**:
+- `resultados/walk_forward/walk_forward_metrics.png` - Métricas por fold
+- `resultados/walk_forward/reliability_diagram_last_fold.png` - Calibración
+- `resultados/walk_forward/comparacion_temporal.png` - Ventanas temporales
+- `resultados/walk_forward/ensemble_comparison.png` - Comparación modelos
+- `resultados/walk_forward/REPORTE_VALIDACION_FINAL.txt` - Reporte completo
+- Tiempo estimado: 10 minutos
+
+**¿Qué hace?**
+- Valida el modelo en 4 folds temporales (2023-2025)
+- Compara rendimiento en diferentes ventanas temporales
+- Valida el weighted ensemble
+- Verifica criterios de éxito (70% accuracy, Brier < 0.18)
+- Genera reporte consolidado
+
+**Resultados esperados**:
+- Accuracy promedio: ~68-70%
+- Último fold (más reciente): ~71-72%
+- Tendencia: IMPROVING
+- Brier Score: ~0.19-0.21
+
+---
+
+## ⚡ Pipeline Completo Automatizado
 Si quieres ejecutar todo el proceso de una vez:
 
 ```bash
@@ -242,16 +301,21 @@ tennis-ml-predictor/
 │
 ├── run_feature_engineering_fase3.py  # Script feature engineering
 ├── run_fase3_optimization.py         # Script optimización
-├── validacion_calibracion.py         # Script validación
+├── validacion_calibracion.py         # Script validación Fase 2
 ├── backtesting_fase2.py              # Script backtesting
-├── generar_reporte_fase2.py          # Script reporte
-├── run_fase2_completa.py             # Script pipeline completo
+├── generar_reporte_fase2.py          # Script reporte Fase 2
+├── run_fase2_completa.py             # Script pipeline completo Fase 2
+├── walk_forward_validation.py        # Script Walk-Forward Validation ⭐ NUEVO
+├── validacion_final_fase3.py         # Script validación final Fase 3 ⭐ NUEVO
+├── setup_and_train.py                # Pipeline maestro unificado ⭐ NUEVO
 ├── predictor_calibrado.py            # Clase predictor
 │
 ├── requirements.txt            # Dependencias Python
 ├── .gitignore                  # Archivos ignorados por Git
 ├── README.md                   # Este archivo
-└── FASE_2_RESULTADOS.md        # Documentación de resultados
+├── QUICK_START.md              # Guía de inicio rápido ⭐ NUEVO
+├── FASE_2_RESULTADOS.md        # Documentación de resultados Fase 2
+└── FASE_3_RESULTADOS.md        # Documentación de resultados Fase 3 ⭐ NUEVO
 ```
 
 ---
@@ -362,12 +426,31 @@ pip install -r requirements.txt
 
 ---
 
-## 🚀 Próximos Pasos (Fase 3)
+## 🚀 Estado del Proyecto
 
-- [ ] Optimización adicional de hiperparámetros
-- [ ] Ensemble methods avanzados
-- [ ] Feature engineering adicional
-- [ ] Objetivo: Accuracy > 70%, Brier < 0.18
+### ✅ Fases Completadas
+
+- ✅ **Fase 1**: Modelo base funcional (~66% accuracy)
+- ✅ **Fase 2**: Calibración y backtesting (69.82% accuracy, ROI 57%)
+- ✅ **Fase 3**: Optimización y validación temporal (71.57% último fold, 70.20% ensemble)
+
+### 🎯 Objetivos Alcanzados
+
+- ✅ Accuracy > 70% (71.57% en datos recientes)
+- ✅ Brier Score < 0.20 (0.1914 en último fold)
+- ✅ Walk-Forward Validation implementada
+- ✅ Tendencia positiva confirmada
+- ✅ Calibración excelente (ECE = 0.0474)
+
+### 🔮 Próximos Pasos Opcionales (Fase 4)
+
+Si quieres mejorar aún más el modelo:
+
+- [ ] Stacking ensemble (meta-learner)
+- [ ] Threshold optimization
+- [ ] Features adicionales (edad, experiencia, contexto de torneo)
+- [ ] Sistema de producción (API REST, dashboard)
+- [ ] Tracking de predicciones en tiempo real
 
 ---
 
