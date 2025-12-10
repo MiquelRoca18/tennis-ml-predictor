@@ -49,6 +49,10 @@ datos/tml_database/*.sqlite
 modelos/*.pkl
 !modelos/.gitkeep
 
+# Backups de modelos (NUNCA subir)
+modelos/backup_*/
+modelos/backup_*/**
+
 # Resultados y logs (generados localmente)
 resultados/**/*.png
 resultados/**/*.csv
