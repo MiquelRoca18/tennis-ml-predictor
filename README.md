@@ -472,6 +472,33 @@ Esto te permite identificar:
 - ❌ Categorías perdedoras (dónde evitar)
 - 📊 Patrones de éxito/fracaso
 
+### Actualización Automática del Sistema
+
+Para actualizar todo el sistema de tracking con un solo comando:
+
+```bash
+python actualizar_tracking.py
+```
+
+Esto ejecuta automáticamente:
+1. ✅ Verifica la base de datos
+2. ✅ Genera dashboard principal actualizado
+3. ✅ Genera análisis por categorías (superficie, ranking, EV, cuotas)
+4. ✅ Crea reportes semanal y mensual
+5. ✅ Compara periodos y muestra tendencias
+6. ✅ Exporta datos a CSV
+
+**Archivos generados:**
+- `resultados/dashboard.html` - Dashboard principal
+- `resultados/reportes/reporte_semanal_*.html` - Reporte semanal
+- `resultados/reportes/reporte_mensual_*.html` - Reporte mensual
+- `resultados/export_predicciones.csv` - Exportación de datos
+
+**Uso con base de datos personalizada:**
+```bash
+python actualizar_tracking.py mi_base_datos.db
+```
+
 ---
 
 ## 🎯 Uso del Modelo para Predicciones (Avanzado)

@@ -183,6 +183,48 @@ class AnalisisCategorias:
             print(f"   Win Rate: {win_rate:.1f}%")
             print(f"   ROI: {roi:+.1f}%")
     
+    def analisis_por_cuota(self):
+        """Análisis por rango de cuotas"""
+        
+        df = self.db.obtener_predicciones()
+        df = df[(df['decision'] == 'APOSTAR') & (df['resultado_real'].notna())]
+        
+        if len(df) == 0:
+            print("⚠️  No hay datos suficientes")
+            return
+        
+        print("\n" + "=" * 60)
+        print("💰 ANÁLISIS POR RANGO DE CUOTAS")
+        print("=" * 60)
+        
+        # Definir rangos
+        df['cuota_range'] = pd.cut(
+            df['cuota'],
+            bins=[0, 1.5, 2.0, 3.0, 10.0],
+            labels=['<1.5 (Favoritos)', '1.5-2.0', '2.0-3.0', '>3.0 (Underdogs)']
+        )
+        
+        for rango in ['<1.5 (Favoritos)', '1.5-2.0', '2.0-3.0', '>3.0 (Underdogs)']:
+            df_rango = df[df['cuota_range'] == rango]
+            
+            if len(df_rango) == 0:
+                continue
+            
+            total = len(df_rango)
+            ganadas = (df_rango['resultado_real'] == 1).sum()
+            win_rate = ganadas / total * 100
+            
+            total_apostado = df_rango['apuesta_cantidad'].sum()
+            ganancia_neta = df_rango['ganancia'].sum()
+            roi = (ganancia_neta / total_apostado) * 100 if total_apostado > 0 else 0
+            
+            cuota_promedio = df_rango['cuota'].mean()
+            
+            print(f"\nCuotas {rango}:")
+            print(f"   Apuestas: {total}")
+            print(f"   Cuota promedio: {cuota_promedio:.2f}")
+            print(f"   Win Rate: {win_rate:.1f}%")
+            print(f"   ROI: {roi:+.1f}%")
     def generar_reporte_completo(self):
         """Genera reporte completo de todas las categorías"""
         
