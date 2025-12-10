@@ -2,13 +2,14 @@
 
 Sistema de predicción de partidos de tenis usando Machine Learning con probabilidades calibradas para apuestas deportivas.
 
-## 📊 Resultados Actuales (Fase 2 Completada)
+## 📊 Resultados Actuales (Fase 4 Completada)
 
-- **Accuracy**: 69.82% en test set 2025
-- **Brier Score**: 0.1991 (calibración excelente)
-- **ECE**: 0.0222 (calibración casi perfecta)
+- **Accuracy**: 71.57% en datos más recientes (70.20% ensemble)
+- **Brier Score**: 0.1914 (calibración excelente)
+- **ECE**: 0.0474 (calibración casi perfecta)
 - **ROI en Backtesting**: 57.41% (excepcional)
 - **Modelo**: Random Forest con 30 features seleccionadas
+- **Sistema de Tracking**: Dashboard interactivo + análisis por categorías
 
 ---
 
@@ -278,6 +279,13 @@ tennis-ml-predictor/
 │   │   ├── hyperparameter_tuning.py      # Optimización hiperparámetros
 │   │   └── weighted_ensemble.py          # Ensemble de modelos
 │   │
+│   ├── tracking/                      # ⭐ NUEVO - Fase 4
+│   │   ├── __init__.py
+│   │   ├── database_setup.py             # Base de datos SQLite
+│   │   ├── tracking_system.py            # Sistema de registro
+│   │   ├── dashboard_generator.py        # Dashboard HTML interactivo
+│   │   └── analisis_categorias.py        # Análisis por categorías
+│   │
 │   └── utils/
 │       └── __init__.py
 │
@@ -306,16 +314,17 @@ tennis-ml-predictor/
 ├── generar_reporte_fase2.py          # Script reporte Fase 2
 ├── run_fase2_completa.py             # Script pipeline completo Fase 2
 ├── walk_forward_validation.py        # Script Walk-Forward Validation ⭐ NUEVO
-├── validacion_final_fase3.py         # Script validación final Fase 3 ⭐ NUEVO
-├── setup_and_train.py                # Pipeline maestro unificado ⭐ NUEVO
+├── validacion_final_fase3.py         # Script validación final Fase 3
+├── setup_and_train.py                # Pipeline maestro unificado
 ├── predictor_calibrado.py            # Clase predictor
+├── demo_tracking_fase4.py            # Demo sistema de tracking ⭐ NUEVO
 │
 ├── requirements.txt            # Dependencias Python
 ├── .gitignore                  # Archivos ignorados por Git
 ├── README.md                   # Este archivo
-├── QUICK_START.md              # Guía de inicio rápido ⭐ NUEVO
+├── QUICK_START.md              # Guía de inicio rápido
 ├── FASE_2_RESULTADOS.md        # Documentación de resultados Fase 2
-└── FASE_3_RESULTADOS.md        # Documentación de resultados Fase 3 ⭐ NUEVO
+└── FASE_3_RESULTADOS.md        # Documentación de resultados Fase 3
 ```
 
 ---
@@ -342,10 +351,152 @@ print(f"Predicción: {'Gana' if resultado['prediccion'] == 1 else 'Pierde'}")
 
 ### Análisis de Apuesta
 
+```
+
+---
+
+## 📊 Sistema de Tracking (Fase 4)
+
+### ¿Qué es?
+
+Sistema completo de tracking que registra automáticamente todas tus predicciones, calcula métricas financieras y genera dashboards interactivos.
+
+### Demostración Rápida
+
+```bash
+# Ver el sistema en acción con datos de ejemplo
+python demo_tracking_fase4.py
+```
+
+Esto genera:
+- `apuestas_tracker_demo.db` - Base de datos con 50 predicciones
+- `resultados/dashboard_demo.html` - Dashboard interactivo (ábrelo en tu navegador)
+
+### Uso en Producción
+
+#### 1. Inicializar Sistema
+
 ```python
-# Analizar si vale la pena apostar
-cuota = 2.50  # Cuota disponible
-analisis = predictor.recomendar_apuesta(features, cuota, umbral_ev=0.08)
+from src.tracking.tracking_system import TrackingSystem
+
+sistema = TrackingSystem(
+    modelo_path="modelos/random_forest_calibrado.pkl",
+    db_path="apuestas_tracker.db"
+)
+```
+
+#### 2. Registrar Predicción
+
+```python
+# Preparar información del partido
+partido = {
+    'fecha_partido': '2024-12-11',
+    'jugador_nombre': 'Alcaraz',
+    'jugador_rank': 3,
+    'oponente_nombre': 'Sinner',
+    'oponente_rank': 1,
+    'superficie': 'Hard',
+    'torneo': 'ATP Finals',
+    'cuota': 2.10,
+    'bookmaker': 'Bet365',
+    'features': {...}  # Features preparadas
+}
+
+# Predecir y registrar automáticamente
+resultado = sistema.predecir_y_registrar(partido, umbral_ev=0.03)
+# → Se guarda automáticamente en la base de datos
+```
+
+#### 3. Actualizar Resultados
+
+```python
+import pandas as pd
+
+# Después de que se jueguen los partidos
+resultados_reales = pd.DataFrame([
+    {'prediccion_id': 1, 'resultado': 1},  # Ganó
+    {'prediccion_id': 2, 'resultado': 0},  # Perdió
+])
+
+sistema.actualizar_resultados_batch(resultados_reales)
+# → Calcula ganancias/pérdidas automáticamente
+```
+
+#### 4. Generar Dashboard
+
+```python
+from src.tracking.dashboard_generator import DashboardGenerator
+
+generator = DashboardGenerator("apuestas_tracker.db")
+generator.generar_dashboard_completo("resultados/dashboard.html")
+# → Abre dashboard.html en tu navegador
+```
+
+#### 5. Análisis por Categorías
+
+```python
+from src.tracking.analisis_categorias import AnalisisCategorias
+
+analisis = AnalisisCategorias("apuestas_tracker.db")
+analisis.generar_reporte_completo()
+# → Muestra análisis por superficie, ranking, EV, cuotas
+```
+
+### Características del Dashboard
+
+- 📈 **Curva de ganancias acumuladas**
+- 🥧 **Win Rate** (% apuestas ganadas)
+- 📊 **Distribución de EV**
+- 🎾 **Performance por superficie** (Hard/Clay/Grass)
+- 🔍 **EV vs Resultado Real**
+- 📋 **Tabla de últimas 10 apuestas**
+
+### Métricas Calculadas
+
+- **Total apostado**
+- **Ganancia neta**
+- **ROI** (Return on Investment)
+- **Win Rate**
+- **EV promedio**
+
+### Análisis por Categorías
+
+El sistema analiza tu rendimiento segmentado por:
+- **Superficie**: Hard, Clay, Grass
+- **Ranking**: Top 10, 11-50, 51-100, 100+
+- **Rango de EV**: 0-3%, 3-5%, 5-10%, >10%
+- **Rango de Cuotas**: <1.5, 1.5-2.0, 2.0-3.0, >3.0
+
+Esto te permite identificar:
+- ✅ Nichos rentables (dónde apostar más)
+- ❌ Categorías perdedoras (dónde evitar)
+- 📊 Patrones de éxito/fracaso
+
+---
+
+## 🎯 Uso del Modelo para Predicciones (Avanzado)
+
+### Predicción Simple
+
+```python
+from predictor_calibrado import PredictorCalibrado
+import numpy as np
+
+# Cargar modelo
+predictor = PredictorCalibrado("modelos/random_forest_calibrado.pkl")
+
+# Preparar features (ejemplo con las 30 features seleccionadas)
+features = np.array([...])  # Tus 30 features
+
+# Predecir
+resultado = predictor.predecir(features)
+print(f"Probabilidad: {resultado['probabilidad']*100:.1f}%")
+print(f"Predicción: {'Gana' if resultado['prediccion'] == 1 else 'Pierde'}")
+```
+
+### Análisis de Apuesta
+
+```python
 
 print(f"Decisión: {analisis['decision']}")
 print(f"EV: {analisis['ev_porcentaje']:+.2f}%")
@@ -433,6 +584,7 @@ pip install -r requirements.txt
 - ✅ **Fase 1**: Modelo base funcional (~66% accuracy)
 - ✅ **Fase 2**: Calibración y backtesting (69.82% accuracy, ROI 57%)
 - ✅ **Fase 3**: Optimización y validación temporal (71.57% último fold, 70.20% ensemble)
+- ✅ **Fase 4**: Sistema de tracking y análisis (Dashboard + DB SQLite)
 
 ### 🎯 Objetivos Alcanzados
 
@@ -442,15 +594,15 @@ pip install -r requirements.txt
 - ✅ Tendencia positiva confirmada
 - ✅ Calibración excelente (ECE = 0.0474)
 
-### 🔮 Próximos Pasos Opcionales (Fase 4)
+### 🔮 Próximos Pasos Opcionales (Fase 5)
 
 Si quieres mejorar aún más el modelo:
 
+- [ ] Kelly Criterion para gestión de bankroll
 - [ ] Stacking ensemble (meta-learner)
-- [ ] Threshold optimization
 - [ ] Features adicionales (edad, experiencia, contexto de torneo)
-- [ ] Sistema de producción (API REST, dashboard)
-- [ ] Tracking de predicciones en tiempo real
+- [ ] API REST para producción
+- [ ] Integración con bookmakers
 
 ---
 
@@ -478,5 +630,5 @@ Para preguntas o sugerencias, abre un issue en GitHub.
 
 ---
 
-**Última actualización**: Diciembre 2025  
-**Versión**: 2.0 (Fase 2 Completada)
+**Última actualización**: Diciembre 2024  
+**Versión**: 4.0 (Fase 4 Completada - Sistema de Tracking)

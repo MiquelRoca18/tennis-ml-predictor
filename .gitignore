@@ -45,6 +45,10 @@ datos/processed/*.csv
 datos/tml_database/*.db
 datos/tml_database/*.sqlite
 
+# Tracking databases (generados localmente)
+*.db
+apuestas_tracker*.db
+
 # Modelos entrenados (demasiado grandes)
 modelos/*.pkl
 !modelos/.gitkeep
