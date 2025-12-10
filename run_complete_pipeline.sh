@@ -9,8 +9,8 @@ echo "🚀 PIPELINE COMPLETO - PREDICCIÓN DE TENIS"
 echo "========================================================================"
 echo ""
 
-# Directorio del proyecto
-cd /Users/miquelroca/Desktop/proyecto/tennis-ml-predictor
+# Directorio del proyecto (usar directorio actual)
+# cd se ejecutará desde donde se llame el script
 
 echo "========================================================================"
 echo "🧹 PASO 0: LIMPIEZA (Opcional - comentar si no quieres limpiar)"
@@ -78,12 +78,7 @@ echo "Combinando modelos con pesos optimizados..."
 python src/models/weighted_ensemble.py
 echo ""
 
-echo "========================================================================"
-echo "📊 PASO 6: VALIDACIÓN FINAL"
-echo "========================================================================"
-echo ""
-python src/models/validacion_final_fase3.py
-echo ""
+# Paso 6 eliminado - validación incluida en weighted_ensemble.py
 
 echo "========================================================================"
 echo "✅ PIPELINE COMPLETADO"
@@ -98,8 +93,8 @@ echo "  ✅ modelos/gradient_boosting_calibrado.pkl - GB calibrado"
 echo "  ✅ resultados/weighted_ensemble_metrics.csv - Métricas del ensemble"
 echo "  ✅ resultados/selected_features.txt - 30 features seleccionadas"
 echo ""
-echo "🎯 Modelo Final: Weighted Ensemble"
-echo "   Accuracy esperado: ~69.35% - 69.81%"
-echo "   Brier Score esperado: ~0.1991 - 0.2002"
+echo "🎯 Modelo Final: Weighted Ensemble (2022-2025)"
+echo "   Accuracy esperado: ~70.20%"
+echo "   Brier Score esperado: ~0.1980"
 echo ""
 echo "🎉 ¡Listo para usar!"
