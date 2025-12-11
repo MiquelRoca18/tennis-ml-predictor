@@ -95,3 +95,11 @@ notebooks/
 
 guiasProyecto/
 docs/
+
+# Fase 6: Archivos con información sensible (NO SUBIR)
+.env
+VALIDACION_FASE6_REAL.md
+
+# Fase 6: Caché de cuotas (generado localmente)
+datos/cache_cuotas/
+

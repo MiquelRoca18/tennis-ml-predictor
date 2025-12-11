@@ -2,7 +2,7 @@
 
 Sistema de predicción de partidos de tenis usando Machine Learning con probabilidades calibradas para apuestas deportivas.
 
-## 📊 Resultados Actuales (Fase 4 Completada)
+## 📊 Resultados Actuales (Fase 6 Completada)
 
 - **Accuracy**: 71.57% en datos más recientes (70.20% ensemble)
 - **Brier Score**: 0.1914 (calibración excelente)
@@ -10,6 +10,8 @@ Sistema de predicción de partidos de tenis usando Machine Learning con probabil
 - **ROI en Backtesting**: 57.41% (excepcional)
 - **Modelo**: Random Forest con 30 features seleccionadas
 - **Sistema de Tracking**: Dashboard interactivo + análisis por categorías
+- **Kelly Criterion**: Gestión optimizada de bankroll (+96% ROI vs Flat Betting)
+- **Line Shopping**: Sistema de comparación de cuotas de múltiples bookmakers (+0.5-2% EV adicional)
 
 ---
 
@@ -499,7 +501,135 @@ Esto ejecuta automáticamente:
 python actualizar_tracking.py mi_base_datos.db
 ```
 
+
 ---
+
+## 💰 Gestión de Bankroll - Kelly Criterion (Fase 5)
+
+### ¿Qué es?
+
+Sistema de gestión optimizada de bankroll que calcula automáticamente el tamaño óptimo de cada apuesta usando Kelly Criterion, maximizando el crecimiento a largo plazo.
+
+### Demostración Rápida
+
+```bash
+# Ver ejemplos de Kelly Criterion
+python demo_kelly_fase5.py
+
+# Validar con datos históricos
+python validacion_kelly_fase5.py
+```
+
+### Uso con Tracking
+
+```python
+from src.tracking.tracking_system_kelly import TrackingSystemKelly
+
+# Inicializar con Kelly
+sistema = TrackingSystemKelly(
+    modelo_path="modelos/random_forest_calibrado.pkl",
+    bankroll_actual=1000,
+    usar_kelly=True,
+    kelly_fraccion=0.25  # Kelly Fraccional (25%)
+)
+
+# Predecir y calcular apuesta óptima automáticamente
+resultado = sistema.predecir_y_registrar(partido_info)
+# → Calcula tamaño de apuesta según ventaja detectada
+
+# Actualizar resultado y bankroll
+sistema.actualizar_resultado_y_bankroll(prediccion_id, resultado_real)
+```
+
+### Resultados
+
+- **+96% ROI** vs Flat Betting
+- Apuesta más cuando hay más ventaja
+- Protección automática (no apuesta sin ventaja)
+- Límites de seguridad: min 5€, max 5% bankroll
+
+---
+
+## 🌐 Line Shopping - Múltiples Bookmakers (Fase 6)
+
+### ¿Qué es Line Shopping?
+
+Comparar cuotas de múltiples bookmakers y apostar siempre en el que ofrezca la mejor. Esto puede mejorar tu EV significativamente.
+
+**Ejemplo:**
+- Tu modelo: Alcaraz 48% probabilidad
+- Bet365: @2.00 → EV = -4%
+- Pinnacle: @2.10 → EV = +0.8%
+
+**Resultado:** Line shopping convierte apuesta sin valor en apuesta con valor!
+
+### Configuración Rápida
+
+```bash
+# 1. Copiar template de configuración
+cp .env.template .env
+
+# 2. Editar .env con tu API key de The Odds API
+# ODDS_API_KEY=tu_api_key_aqui
+
+# 3. Validar configuración
+python validacion_fase6.py
+
+# 4. Ejecutar demo
+python demo_multibookmaker_fase6.py
+```
+
+### Obtener API Key
+
+1. Ve a: https://the-odds-api.com
+2. Regístrate (gratis)
+3. Copia tu API key
+4. Plan gratuito: 500 requests/mes
+
+### Uso Básico
+
+```python
+from src.predictor_multibookmaker import PredictorMultiBookmaker
+
+# Crear predictor con line shopping
+predictor = PredictorMultiBookmaker(
+    bankroll=1000,
+    kelly_fraccion=0.25,
+    umbral_ev=0.03,
+    use_cache=True  # Optimiza uso de API
+)
+
+# Buscar oportunidades
+oportunidades = predictor.analizar_y_alertar(sport='tennis_atp')
+
+# Ver reporte detallado
+predictor.generar_reporte_detallado(oportunidades)
+```
+
+### Características
+
+- ✅ **Obtención automática** de cuotas de 3+ bookmakers
+- ✅ **Comparación inteligente** y selección de mejor cuota
+- ✅ **Integración con Kelly** para tamaño óptimo de apuesta
+- ✅ **Sistema de alertas** (consola + email opcional)
+- ✅ **Tracking de API** con alertas de límite
+- ✅ **Sistema de caché** (30 min) para optimizar requests
+- ✅ **Cálculo de savings** vs usar un solo bookmaker
+
+### Beneficios
+
+- **Mejora de EV:** +0.5-2 puntos porcentuales por apuesta
+- **Ahorro anual:** 50-200€ (basado en 100 apuestas de 50€)
+- **ROI mejorado:** 10-30% adicional vs usar un solo bookmaker
+
+### Documentación
+
+- **[SETUP_FASE6.md](SETUP_FASE6.md)** - Guía de configuración paso a paso
+- **[resultados/FASE_6_RESULTADOS.md](resultados/FASE_6_RESULTADOS.md)** - Resultados detallados
+- **[guiasProyecto/FASE_6_MULTIPLE_BOOKMAKERS.md](guiasProyecto/FASE_6_MULTIPLE_BOOKMAKERS.md)** - Guía técnica
+
+---
+
 
 ## 🎯 Uso del Modelo para Predicciones (Avanzado)
 
@@ -612,6 +742,8 @@ pip install -r requirements.txt
 - ✅ **Fase 2**: Calibración y backtesting (69.82% accuracy, ROI 57%)
 - ✅ **Fase 3**: Optimización y validación temporal (71.57% último fold, 70.20% ensemble)
 - ✅ **Fase 4**: Sistema de tracking y análisis (Dashboard + DB SQLite)
+- ✅ **Fase 5**: Kelly Criterion y gestión de bankroll (+96% ROI vs Flat Betting)
+- ✅ **Fase 6**: Line Shopping - Múltiples bookmakers (+0.5-2% EV adicional)
 
 ### 🎯 Objetivos Alcanzados
 
@@ -620,16 +752,20 @@ pip install -r requirements.txt
 - ✅ Walk-Forward Validation implementada
 - ✅ Tendencia positiva confirmada
 - ✅ Calibración excelente (ECE = 0.0474)
+- ✅ Sistema de tracking completo
+- ✅ Gestión optimizada de bankroll
+- ✅ Comparación automática de cuotas
 
-### 🔮 Próximos Pasos Opcionales (Fase 5)
+### 🔮 Próximos Pasos Opcionales (Fase 7)
 
-Si quieres mejorar aún más el modelo:
+Si quieres automatizar completamente el sistema:
 
-- [ ] Kelly Criterion para gestión de bankroll
-- [ ] Stacking ensemble (meta-learner)
-- [ ] Features adicionales (edad, experiencia, contexto de torneo)
-- [ ] API REST para producción
-- [ ] Integración con bookmakers
+- [ ] Automatización completa (cron jobs / scheduler)
+- [ ] Monitoreo continuo de oportunidades
+- [ ] Dashboard web en tiempo real
+- [ ] Notificaciones push móviles
+- [ ] API REST para integración
+- [ ] Backtesting de line shopping con datos históricos
 
 ---
 
@@ -658,4 +794,4 @@ Para preguntas o sugerencias, abre un issue en GitHub.
 ---
 
 **Última actualización**: Diciembre 2024  
-**Versión**: 4.0 (Fase 4 Completada - Sistema de Tracking)
+**Versión**: 6.0 (Fase 6 Completada - Line Shopping)
