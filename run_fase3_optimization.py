@@ -7,6 +7,10 @@ import numpy as np
 from pathlib import Path
 import logging
 import sys
+import warnings
+
+# Suprimir warnings para output más limpio
+warnings.filterwarnings('ignore')
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 

@@ -10,6 +10,11 @@ import joblib
 from pathlib import Path
 import time
 import logging
+import warnings
+
+# Suprimir warnings de sklearn para output más limpio
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', module='sklearn')
 
 try:
     from xgboost import XGBClassifier

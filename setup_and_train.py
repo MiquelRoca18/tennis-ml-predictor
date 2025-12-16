@@ -1,40 +1,39 @@
+#!/usr/bin/env python3
 """
-Setup and Train - Pipeline Maestro Unificado
-Ejecuta todo el proyecto de principio a fin con un solo comando
+Pipeline Maestro para Tennis ML Predictor
+Versión FIXED - Corrección en verify_dependencies
 """
 
-import sys
 import subprocess
-import argparse
-from pathlib import Path
+import sys
 import time
+from pathlib import Path
 from datetime import datetime
+import argparse
+
 
 class TennisPipeline:
-    """
-    Pipeline maestro para entrenar el modelo de predicción de tenis
-    """
-    
     def __init__(self):
         self.start_time = time.time()
         self.steps_completed = []
         self.steps_failed = []
-        
-    def print_header(self, message):
-        """Imprime encabezado bonito"""
+    
+    def print_header(self, text):
+        """Imprime encabezado formateado"""
         print("\n" + "=" * 80)
-        print(f"🎾 {message}")
+        print(f"🎾 {text}")
         print("=" * 80 + "\n")
     
-    def print_step(self, step_num, total_steps, message):
+    def print_step(self, step_num, total_steps, description):
         """Imprime paso actual"""
-        print(f"\n{'='*60}")
-        print(f"📍 PASO {step_num}/{total_steps}: {message}")
-        print(f"{'='*60}\n")
+        print("\n" + "=" * 60)
+        print(f"📍 PASO {step_num}/{total_steps}: {description}")
+        print("=" * 60 + "\n")
     
     def run_command(self, command, description, required=True):
-        """Ejecuta un comando y maneja errores"""
-        print(f"🔄 {description}...")
+        """Ejecuta un comando del sistema"""
+        print(f"🔄 Ejecutando: {command}")
+        print(f"   Descripción: {description}")
         
         try:
             result = subprocess.run(
@@ -45,17 +44,16 @@ class TennisPipeline:
                 text=True
             )
             
-            print(f"✅ {description} - COMPLETADO")
+            print(f"✅ {description} - Completado\n")
             self.steps_completed.append(description)
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"❌ {description} - FALLÓ")
+            print(f"\n❌ Error en: {description}")
             self.steps_failed.append(description)
             
             if required:
-                print(f"\n⚠️  Error crítico en: {description}")
-                print(f"Comando: {command}")
+                print(f"Error crítico ejecutando: {command}")
                 print(f"Código de salida: {e.returncode}")
                 return False
             else:
@@ -63,24 +61,31 @@ class TennisPipeline:
                 return True
     
     def verify_dependencies(self):
-        """Verifica que las dependencias estén instaladas"""
+        """Verifica que las dependencias estén instaladas - VERSIÓN CORREGIDA"""
         self.print_step(1, 10, "Verificando Dependencias")
         
         print("📦 Verificando paquetes de Python...")
         
-        required_packages = [
-            'pandas', 'numpy', 'scikit-learn', 'matplotlib', 
-            'seaborn', 'joblib', 'requests'
-        ]
+        # Mapeo correcto: nombre_display -> nombre_importación
+        required_packages = {
+            'pandas': 'pandas',
+            'numpy': 'numpy',
+            'scikit-learn': 'sklearn',  # ← FIX: sklearn es el nombre de importación
+            'xgboost': 'xgboost',
+            'matplotlib': 'matplotlib',
+            'seaborn': 'seaborn',
+            'joblib': 'joblib',
+            'requests': 'requests'
+        }
         
         missing = []
-        for package in required_packages:
+        for display_name, import_name in required_packages.items():
             try:
-                __import__(package)
-                print(f"  ✅ {package}")
+                __import__(import_name)
+                print(f"  ✅ {display_name}")
             except ImportError:
-                print(f"  ❌ {package} - NO INSTALADO")
-                missing.append(package)
+                print(f"  ❌ {display_name} - NO INSTALADO")
+                missing.append(display_name)
         
         if missing:
             print(f"\n⚠️  Faltan paquetes: {', '.join(missing)}")
@@ -345,19 +350,19 @@ class TennisPipeline:
 def main():
     """Función principal"""
     parser = argparse.ArgumentParser(
-        description='Pipeline maestro para Tennis ML Predictor',
+        description='Pipeline maestro para Tennis ML Predictor (FIXED)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos de uso:
   
   # Pipeline completo (primera vez)
-  python setup_and_train.py --full
+  python setup_and_train_fixed.py --full
   
   # Solo entrenar (si ya tienes datos)
-  python setup_and_train.py --train-only
+  python setup_and_train_fixed.py --train-only
   
   # Solo validar (si ya tienes modelo)
-  python setup_and_train.py --validate-only
+  python setup_and_train_fixed.py --validate-only
         """
     )
     

@@ -13,6 +13,12 @@ import seaborn as sns
 import joblib
 from pathlib import Path
 import logging
+import warnings
+
+# Suprimir warnings de sklearn para output más limpio
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', module='sklearn')
 
 try:
     from xgboost import XGBClassifier
