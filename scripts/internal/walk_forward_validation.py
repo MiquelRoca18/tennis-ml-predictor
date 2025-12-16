@@ -132,9 +132,8 @@ class WalkForwardValidator:
                 base_estimator = model.calibrated_classifiers_[0].estimator
                 fold_model_base = clone(base_estimator)
                 
-                # Entrenar y calibrar
-                fold_model_base.fit(X_train, y_train)
-                fold_model = CalibratedClassifierCV(fold_model_base, method='isotonic', cv='prefit')
+                # Entrenar y calibrar con cv=5
+                fold_model = CalibratedClassifierCV(fold_model_base, method='isotonic', cv=5)
                 fold_model.fit(X_train, y_train)
             else:
                 # Modelo normal

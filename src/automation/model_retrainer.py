@@ -239,18 +239,19 @@ class ModelRetrainer:
             n_jobs=-1
         )
         
-        # Entrenar
-        logger.info("   Entrenando modelo base...")
-        modelo_base.fit(X_train, y_train)
-        
-        # Calibrar
-        logger.info("   Calibrando modelo...")
+        # Calibrar con cross-validation
+        logger.info("   Entrenando y calibrando modelo...")
         modelo_calibrado = CalibratedClassifierCV(
             modelo_base,
             method='sigmoid',
-            cv='prefit'
+            cv=5
         )
-        modelo_calibrado.fit(X_val, y_val)
+        
+        # Entrenar en train+val para tener más datos
+        import pandas as pd
+        X_train_val = pd.concat([X_train, X_val])
+        y_train_val = pd.concat([y_train, y_val])
+        modelo_calibrado.fit(X_train_val, y_train_val)
         
         logger.info("   ✅ Modelo entrenado y calibrado")
         

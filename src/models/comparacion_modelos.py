@@ -151,20 +151,44 @@ class ModelComparator:
                 
                 # Calibrar (usando isotonic para mejor Brier Score)
                 logger.info(f"   Calibrando...")
-                modelo_calibrado = CalibratedClassifierCV(modelo, method='isotonic', cv='prefit')
-                modelo_calibrado.fit(X_val, y_val)
-                
-                y_prob_test_cal = modelo_calibrado.predict_proba(X_test)[:, 1]
-                brier_cal = brier_score_loss(y_test, y_prob_test_cal)
-                
-                resultados['brier_test_calibrado'] = brier_cal
-                logger.info(f"   Brier (calibrado): {brier_cal:.4f}")
-                
-                # Guardar modelo calibrado
-                Path("modelos").mkdir(exist_ok=True)
-                model_filename = f"modelos/{nombre.lower().replace(' ', '_')}_calibrado.pkl"
-                joblib.dump(modelo_calibrado, model_filename)
-                logger.info(f"   💾 Guardado: {model_filename}")
+                try:
+                    # Crear un nuevo modelo calibrado con el estimador base
+                    # En versiones nuevas de sklearn, no se puede usar cv='prefit'
+                    # En su lugar, creamos un CalibratedClassifierCV y lo entrenamos con train+val
+                    from sklearn.base import clone
+                    
+                    # Clonar el modelo base para calibración
+                    modelo_base_calibrado = clone(modelo)
+                    
+                    # Crear el calibrador con cv=5 (cross-validation interno)
+                    modelo_calibrado = CalibratedClassifierCV(
+                        modelo_base_calibrado, 
+                        method='isotonic', 
+                        cv=5
+                    )
+                    
+                    # Entrenar en train+val para tener más datos
+                    X_train_val = pd.concat([X_train, X_val])
+                    y_train_val = pd.concat([y_train, y_val])
+                    modelo_calibrado.fit(X_train_val, y_train_val)
+                    
+                    y_prob_test_cal = modelo_calibrado.predict_proba(X_test)[:, 1]
+                    brier_cal = brier_score_loss(y_test, y_prob_test_cal)
+                    
+                    resultados['brier_test_calibrado'] = brier_cal
+                    logger.info(f"   Brier (calibrado): {brier_cal:.4f}")
+                    
+                    # Guardar modelo calibrado
+                    Path("modelos").mkdir(exist_ok=True)
+                    model_filename = f"modelos/{nombre.lower().replace(' ', '_')}_calibrado.pkl"
+                    joblib.dump(modelo_calibrado, model_filename)
+                    logger.info(f"   💾 Guardado: {model_filename}")
+                    
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Error en calibración: {e}")
+                    # Si falla la calibración, usar el Brier sin calibrar
+                    resultados['brier_test_calibrado'] = resultados['brier_test']
+                    logger.info(f"   Usando Brier sin calibrar: {resultados['brier_test']:.4f}")
                 
             except Exception as e:
                 logger.error(f"   ❌ Error entrenando {nombre}: {e}")
