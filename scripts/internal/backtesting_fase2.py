@@ -19,6 +19,12 @@ from pathlib import Path
 import json
 import logging
 from datetime import datetime
+import sys
+import warnings
+
+# Suprimir warnings de sklearn para output más limpio
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
 
 # Configurar logging
 logging.basicConfig(

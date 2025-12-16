@@ -13,7 +13,7 @@ import logging
 # Añadir src al path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.automation.config import Config
+from src.config import Config
 from src.tracking.database_setup import TennisDatabase
 from src.predictor_multibookmaker import PredictorMultiBookmaker
 

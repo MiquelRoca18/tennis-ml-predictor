@@ -14,7 +14,7 @@ import shutil
 # Añadir src al path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.automation.config import Config
+from src.config import Config
 from src.bookmakers.odds_fetcher import OddsFetcher
 from src.bookmakers.odds_comparator import OddsComparator
 from src.tracking.tracking_system import TrackingSystem

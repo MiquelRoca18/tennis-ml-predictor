@@ -16,7 +16,7 @@ from pathlib import Path
 import json
 import time
 
-from .config import BookmakerConfig
+from src.config import Config as BookmakerConfig
 
 
 class APILimitError(Exception):

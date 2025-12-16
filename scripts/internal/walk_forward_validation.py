@@ -10,6 +10,11 @@ from pathlib import Path
 from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
+import warnings
+
+# Suprimir warnings de sklearn para output más limpio
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
 from sklearn.calibration import calibration_curve
 

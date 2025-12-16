@@ -19,8 +19,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.bookmakers.odds_fetcher import OddsFetcher, APILimitError
 from src.bookmakers.odds_comparator import OddsComparator
 from src.bookmakers.alert_system import AlertSystem
-from src.bookmakers.config import BookmakerConfig
-from src.kelly_calculator import KellyCalculator
+from src.config import Config as BookmakerConfig
+from src.betting.kelly_calculator import KellyCalculator
 
 
 class PredictorMultiBookmaker:

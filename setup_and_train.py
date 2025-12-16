@@ -146,7 +146,7 @@ class TennisPipeline:
         print("⏱️  Este paso puede tardar 3-5 minutos...")
         
         return self.run_command(
-            "python run_feature_engineering_fase3.py",
+            "python scripts/internal/run_feature_engineering_fase3.py",
             "Generar 149 features avanzadas",
             required=True
         )
@@ -158,7 +158,7 @@ class TennisPipeline:
         print("⏱️  Este paso puede tardar 10-15 minutos...")
         
         return self.run_command(
-            "python run_fase3_optimization.py",
+            "python scripts/internal/run_fase3_optimization.py",
             "Entrenar modelos y optimizar hiperparámetros",
             required=True
         )
@@ -168,7 +168,7 @@ class TennisPipeline:
         self.print_step(7, 10, "Validación de Calibración")
         
         return self.run_command(
-            "python validacion_calibracion.py",
+            "python validate.py --phase 2",
             "Validar calibración del modelo",
             required=True
         )
@@ -180,7 +180,7 @@ class TennisPipeline:
         print("⏱️  Este paso puede tardar 5 minutos...")
         
         return self.run_command(
-            "python backtesting_fase2.py",
+            "python scripts/internal/backtesting_fase2.py",
             "Ejecutar backtesting con datos históricos",
             required=True
         )
@@ -192,7 +192,7 @@ class TennisPipeline:
         print("⏱️  Este paso puede tardar 10 minutos...")
         
         return self.run_command(
-            "python validacion_final_fase3.py",
+            "python validate.py --phase 3",
             "Validación temporal con folds",
             required=True
         )
@@ -202,7 +202,7 @@ class TennisPipeline:
         self.print_step(10, 10, "Generando Reportes")
         
         return self.run_command(
-            "python generar_reporte_fase2.py",
+            "python scripts/internal/generar_reporte_fase2.py",
             "Generar reporte HTML interactivo",
             required=False
         )

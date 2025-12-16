@@ -12,11 +12,11 @@ import warnings
 # Suprimir warnings para output más limpio
 warnings.filterwarnings('ignore')
 
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from models.comparacion_modelos import ModelComparator
-from models.hyperparameter_tuning import tune_xgboost, tune_lightgbm
-from models.feature_selection import FeatureSelector
+from src.models.comparacion_modelos import ModelComparator
+from src.models.hyperparameter_tuning import tune_xgboost, tune_lightgbm
+from src.models.feature_selection import FeatureSelector
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

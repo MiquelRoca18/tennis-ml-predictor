@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 # Añadir src al path
-sys.path.append(str(Path(__file__).parent / 'src'))
+sys.path.append(str(Path(__file__).parent.parent.parent / 'src'))
 
 from features.feature_engineer_completo import CompleteFeatureEngineer
 import pandas as pd

@@ -16,6 +16,8 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -25,7 +27,8 @@ MANIFEST
 venv/
 env/
 ENV/
-.venv
+env.bak/
+venv.bak/
 
 # IDEs
 .vscode/
@@ -39,67 +42,87 @@ ENV/
 .ipynb_checkpoints
 *.ipynb
 
-# Data files (demasiado grandes para Git)
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Datos (NO subir datasets grandes)
 datos/raw/*.csv
 datos/processed/*.csv
+datos/processed/*.json
 datos/tml_database/*.db
-datos/tml_database/*.sqlite
+datos/tml_database/*.csv
+datos/processed/archive/
+datos/raw/archive/
 
-# Tracking databases (generados localmente)
-*.db
-apuestas_tracker*.db
-
-# Modelos entrenados (demasiado grandes)
+# Modelos entrenados (NO subir modelos, son muy grandes)
 modelos/*.pkl
-!modelos/.gitkeep
+modelos/*.joblib
+modelos/production/
+modelos/archive/
+modelos/backups/
+modelos/backup*/
 
-# Backups de modelos (NUNCA subir)
-modelos/backup_*/
-modelos/backup_*/**
+# Resultados y reportes (NO subir, se generan localmente)
+resultados/*.html
+resultados/*.png
+resultados/*.jpg
+resultados/*.pdf
+resultados/*.csv
+resultados/calibracion/
+resultados/backtesting/
+resultados/walk_forward/
+resultados/reportes/
 
-# Resultados y logs (generados localmente)
-resultados/**/*.png
-resultados/**/*.csv
-resultados/**/*.json
-resultados/**/*.html
-!resultados/.gitkeep
-logs/*.log
-!logs/.gitkeep
+# Logs
+logs/
+*.log
 
-# Backups (no necesarios en Git)
-backups/
+# Cache de bookmakers
+cache/
+*.cache
+
+# Base de datos de tracking
+*.db
+!datos/tml_database/.gitkeep
 
 # Archivos temporales
 *.tmp
+*.temp
 *.bak
-.cache/
+*.backup
 
-# Sistema
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pytest
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Archivos específicos del proyecto que NO queremos en Git
-temporal_window_experiment.py
-notebooks/
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Archivos de configuración local
+config.local.py
+settings.local.py
+
+# Archivos grandes de análisis
+*.xlsx
+*.xls
+analisis/*.xlsx
+
+# Documentación de desarrollo (NO subir guías internas)
+guiasProyecto/
 
 # Mantener estructura de carpetas vacías
 !datos/raw/.gitkeep
 !datos/processed/.gitkeep
-!datos/tml_database/.gitkeep
 !modelos/.gitkeep
 !resultados/.gitkeep
-!resultados/calibracion/.gitkeep
-!resultados/backtesting/.gitkeep
 !logs/.gitkeep
-
-guiasProyecto/
-docs/
-
-# Fase 6: Archivos con información sensible (NO SUBIR)
-.env
-VALIDACION_FASE6_REAL.md
-
-# Fase 6: Caché de cuotas (generado localmente)
-datos/cache_cuotas/
-

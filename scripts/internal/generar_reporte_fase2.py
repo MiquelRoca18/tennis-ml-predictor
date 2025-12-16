@@ -403,7 +403,6 @@ class GeneradorReporteFase2:
                                 <th>Accuracy</th>
                                 <th>Brier Score</th>
                                 <th>ECE</th>
-                                <th>Log Loss</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -417,7 +416,6 @@ class GeneradorReporteFase2:
                                 <td>{row['Accuracy']*100:.2f}%</td>
                                 <td>{row['Brier_Score']:.4f}</td>
                                 <td>{row['ECE']:.4f}</td>
-                                <td>{row['Log_Loss']:.4f}</td>
                             </tr>
 """
         
