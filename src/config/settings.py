@@ -48,7 +48,7 @@ class Config:
     DB_PATH = os.getenv('DB_PATH', 'apuestas_tracker.db')
     
     # ==================== MODELO ====================
-    MODEL_PATH = os.getenv('MODEL_PATH', 'modelos/production/random_forest_calibrado.pkl')
+    MODEL_PATH = os.getenv('MODEL_PATH', 'modelos/random_forest_calibrado.pkl')
     MODEL_BACKUP_DIR = os.getenv('MODEL_BACKUP_DIR', 'modelos/archive')
     
     # ==================== DATOS ====================
