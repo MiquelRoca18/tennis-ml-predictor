@@ -612,82 +612,18 @@ class BacktestingProduccionReal:
         
         logger.info(f"\n💾 Resultados guardados en: {self.resultados_dir}")
 
-def descargar_archivo(url, destino):
-    """Descarga un archivo desde una URL a una ruta de destino."""
-    if destino.exists():
-        logger.info(f"Archivo ya existe: {destino}. Saltando descarga.")
-        return
-    
-    logger.info(f"Descargando {url} a {destino}...")
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status() # Lanza un error para códigos de estado HTTP malos
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 1024 # 1 Kibibyte
-        
-        with open(destino, 'wb') as f:
-            for data in tqdm(response.iter_content(block_size), total=total_size // block_size, unit='KB', unit_scale=True):
-                f.write(data)
-        logger.info(f"Descarga completada: {destino}")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Error al descargar {url}: {e}")
-
-def descargar_datos_automaticamente(year):
-    """
-    Descarga los datos históricos y de cuotas para un año específico si no existen.
-    Retorna las rutas a los archivos descargados.
-    """
-    base_url_historico = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_"
-    base_url_odds = "https://raw.githubusercontent.com/JeffSackmann/tennis_resource/master/tennis_odds_"
-
-    # Rutas de directorios
-    raw_dir = Path("datos/raw")
-    odds_dir = Path("datos/odds_historicas")
-    
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    odds_dir.mkdir(parents=True, exist_ok=True)
-
-    # Archivo histórico
-    historico_filename = f"atp_matches_{year}.csv"
-    historico_file_path = raw_dir / historico_filename
-    historico_url = f"{base_url_historico}{year}.csv"
-    
-    # Archivo de cuotas
-    # Jeff Sackmann a veces tiene los odds en un rango de años, o por año.
-    # Para simplificar, asumimos que el archivo de odds es para el año específico.
-    # Si no existe, se podría intentar con un rango como 2025_2025.csv
-    odds_filename = f"tennis_odds_{year}.csv"
-    odds_file_path = odds_dir / odds_filename
-    odds_url = f"{base_url_odds}{year}.csv"
-
-    # Intentar descargar el archivo de odds con el formato simple primero
-    try:
-        descargar_archivo(historico_url, historico_file_path)
-        descargar_archivo(odds_url, odds_file_path)
-    except Exception as e:
-        logger.warning(f"No se pudo descargar {odds_url} ({e}). Intentando con formato de rango...")
-        # Si falla, intentar con el formato de rango (ej. 2025_2025.csv)
-        odds_filename_range = f"tennis_odds_{year}_{year}.csv"
-        odds_file_path_range = odds_dir / odds_filename_range
-        odds_url_range = f"{base_url_odds}{year}_{year}.csv"
-        descargar_archivo(odds_url_range, odds_file_path_range)
-        odds_file_path = odds_file_path_range # Actualizar la ruta si se descargó con éxito
-
-    return historico_file_path, odds_file_path
-
-
 def main():
     """
     Función principal
     """
     # CONFIGURACIÓN: Cambiar año aquí para backtesting de diferentes años
-    AÑO_BACKTESTING = 2025  # Cambiar a 2024, 2025, etc.
+    AÑO_BACKTESTING = 2024  # Cambiar a 2024, 2025, etc.
     
     logger.info("\n" + "="*70)
     logger.info(f"🎾 BACKTESTING DE PRODUCCIÓN REAL - AÑO {AÑO_BACKTESTING}")
     logger.info("="*70)
     
-    # Descargar datos automáticamente si no existen
+    # Descargar datos automáticamente si no existen (usa TML)
     try:
         historico_file, odds_file = descargar_datos_automaticamente(AÑO_BACKTESTING)
     except Exception as e:
