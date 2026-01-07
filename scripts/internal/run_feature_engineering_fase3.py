@@ -69,9 +69,7 @@ def main():
     
     # Estadísticas básicas
     logger.info(f"\n📈 ESTADÍSTICAS:")
-    logger.info(f"   Balance de clases:")
-    logger.info(f"      Victorias (1): {(df_features['resultado'] == 1).sum():,} ({(df_features['resultado'] == 1).mean()*100:.1f}%)")
-    logger.info(f"      Derrotas (0): {(df_features['resultado'] == 0).sum():,} ({(df_features['resultado'] == 0).mean()*100:.1f}%)")
+    logger.info(f"   Columnas totales: {len(df_features.columns)}")
     
     # Verificar valores faltantes
     missing = df_features.isnull().sum().sum()
