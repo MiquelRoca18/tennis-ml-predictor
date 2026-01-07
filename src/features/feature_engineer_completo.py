@@ -274,6 +274,7 @@ class CompleteFeatureEngineer:
     def procesar_dataset_completo(self, save_path=None):
         """
         Procesa todo el dataset con las features completas
+        NUEVO FORMATO: 1 fila por partido con features de ambos jugadores
         
         Args:
             save_path: Ruta donde guardar el dataset procesado
@@ -283,80 +284,96 @@ class CompleteFeatureEngineer:
         """
         
         logger.info("=" * 60)
-        logger.info("🔧 PROCESANDO DATASET COMPLETO CON TODAS LAS FEATURES")
+        logger.info("🔧 PROCESANDO DATASET COMPLETO - FORMATO NUEVO (1 FILA/PARTIDO)")
         logger.info("=" * 60)
         
-        # Primero crear dataset de jugadores (formato de Fase 1)
-        logger.info("\n📊 Creando dataset de jugadores...")
-        datos = []
-        
-        for idx, row in self.df.iterrows():
-            # Partido original: Ganador vs Perdedor (resultado = 1)
-            partido_1 = {
-                'fecha': row['tourney_date'],
-                'jugador_nombre': row['winner_name'],
-                'oponente_nombre': row['loser_name'],
-                'jugador_rank': row['winner_rank'],
-                'oponente_rank': row['loser_rank'],
-                'superficie': row['surface'],
-                'tourney_level': row.get('tourney_level', 'D'),
-                'tourney_name': row.get('tourney_name', ''),
-                'round': row.get('round', ''),
-                'resultado': 1
-            }
-            
-            # Partido invertido: Perdedor vs Ganador (resultado = 0)
-            partido_2 = {
-                'fecha': row['tourney_date'],
-                'jugador_nombre': row['loser_name'],
-                'oponente_nombre': row['winner_name'],
-                'jugador_rank': row['loser_rank'],
-                'oponente_rank': row['winner_rank'],
-                'superficie': row['surface'],
-                'tourney_level': row.get('tourney_level', 'D'),
-                'tourney_name': row.get('tourney_name', ''),
-                'round': row.get('round', ''),
-                'resultado': 0
-            }
-            
-            datos.append(partido_1)
-            datos.append(partido_2)
-        
-        df_jugadores = pd.DataFrame(datos)
-        logger.info(f"✅ Dataset de jugadores creado: {len(df_jugadores):,} filas")
-        
-        # Ahora crear features para cada partido
-        logger.info("\n🔧 Creando features avanzadas...")
+        logger.info("\n📊 Creando features para cada partido...")
         features_list = []
-        targets = []
         
-        total = len(df_jugadores)
-        for idx, row in df_jugadores.iterrows():
+        total = len(self.df)
+        for idx, row in self.df.iterrows():
             if idx % 500 == 0:
                 logger.info(f"   Progreso: {idx:,}/{total:,} ({idx/total*100:.1f}%)")
             
             try:
-                features = self.crear_features_partido(row)
-                features_list.append(features)
-                targets.append(row['resultado'])
+                # ALEATORIZAR: 50% de las veces, intercambiamos ganador y perdedor
+                # Esto balancea el dataset (50% ganador_j1=1, 50% ganador_j1=0)
+                import random
+                if random.random() < 0.5:
+                    # Ganador como j1, perdedor como j2
+                    j1_nombre = row['winner_name']
+                    j2_nombre = row['loser_name']
+                    j1_rank = row['winner_rank']
+                    j2_rank = row['loser_rank']
+                    ganador_j1 = 1
+                else:
+                    # Perdedor como j1, ganador como j2
+                    j1_nombre = row['loser_name']
+                    j2_nombre = row['winner_name']
+                    j1_rank = row['loser_rank']
+                    j2_rank = row['winner_rank']
+                    ganador_j1 = 0
+                
+                # Crear datos para jugador 1
+                partido_j1 = {
+                    'fecha': row['tourney_date'],
+                    'jugador_nombre': j1_nombre,
+                    'oponente_nombre': j2_nombre,
+                    'jugador_rank': j1_rank,
+                    'oponente_rank': j2_rank,
+                    'superficie': row['surface'],
+                    'tourney_level': row.get('tourney_level', 'D'),
+                    'tourney_name': row.get('tourney_name', ''),
+                    'round': row.get('round', '')
+                }
+                
+                # Crear datos para jugador 2
+                partido_j2 = {
+                    'fecha': row['tourney_date'],
+                    'jugador_nombre': j2_nombre,
+                    'oponente_nombre': j1_nombre,
+                    'jugador_rank': j2_rank,
+                    'oponente_rank': j1_rank,
+                    'superficie': row['surface'],
+                    'tourney_level': row.get('tourney_level', 'D'),
+                    'tourney_name': row.get('tourney_name', ''),
+                    'round': row.get('round', '')
+                }
+                
+                # Generar features para ambos jugadores
+                features_j1 = self.crear_features_partido(partido_j1)
+                features_j2 = self.crear_features_partido(partido_j2)
+                
+                # Combinar features con prefijos
+                features_partido = {
+                    # Features jugador 1 con prefijo 'j1_'
+                    **{f'j1_{k}': v for k, v in features_j1.items()},
+                    # Features jugador 2 con prefijo 'j2_'
+                    **{f'j2_{k}': v for k, v in features_j2.items()},
+                    # Target: 1 si gana j1, 0 si gana j2
+                    'ganador_j1': ganador_j1,
+                    'fecha': row['tourney_date']
+                }
+                
+                features_list.append(features_partido)
+                
             except Exception as e:
                 logger.warning(f"   ⚠️  Error en partido {idx}: {e}")
                 continue
         
         # Crear DataFrame
         df_features = pd.DataFrame(features_list)
-        df_features['resultado'] = targets
-        df_features['fecha'] = df_jugadores['fecha'].values[:len(df_features)]
         
         logger.info(f"\n✅ Procesamiento completado!")
         logger.info(f"   Features creadas: {len(df_features.columns) - 2}")
         logger.info(f"   Partidos procesados: {len(df_features):,}")
+        logger.info(f"   Formato: 1 fila por partido (j1_ y j2_ prefijos)")
         
         # Mostrar algunas features
         logger.info(f"\n📊 Primeras 20 features:")
-        for col in sorted(df_features.columns)[:20]:
-            if col not in ['resultado', 'fecha']:
-                logger.info(f"   - {col}")
+        feature_cols = [col for col in sorted(df_features.columns) if col not in ['ganador_j1', 'fecha']]
+        for col in feature_cols[:20]:
+            logger.info(f"   - {col}")
         
         # Guardar
         if save_path:

@@ -74,6 +74,7 @@ resultados/calibracion/
 resultados/backtesting/
 resultados/walk_forward/
 resultados/reportes/
+resultados/
 
 # Logs
 logs/
@@ -125,4 +126,5 @@ guiasProyecto/
 !datos/processed/.gitkeep
 !modelos/.gitkeep
 !resultados/.gitkeep
-!logs/.gitkeep
+!logs/.gitkeepdatos/odds_historicas/*.xlsx
+datos/odds_historicas/*.csv

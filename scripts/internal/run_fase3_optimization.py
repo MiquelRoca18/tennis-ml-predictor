@@ -43,7 +43,7 @@ def main():
     logger.info(f"   Dataset: {len(df)} partidos")
     
     # Todas las features disponibles
-    all_features = [col for col in df.columns if col not in ['resultado', 'fecha']]
+    all_features = [col for col in df.columns if col not in ['ganador_j1', 'fecha']]
     logger.info(f"   Features totales: {len(all_features)}")
     
     # Split: 60% train, 20% val, 20% test
@@ -51,15 +51,15 @@ def main():
     train_end = int(n * 0.6)
     val_end = int(n * 0.8)
     
-    # ========================================================================
-    # PASO 1: Feature Selection (PRIMERO)
-    # ========================================================================
-    logger.info("\n" + "=" * 70)
-    logger.info("🎯 PASO 1: FEATURE SELECTION")
-    logger.info("=" * 70)
+    X_all = df[all_features]
+    y_all = df['ganador_j1']
     
     X_train_all = df.iloc[:train_end][all_features]
-    y_train = df.iloc[:train_end]['resultado']
+    y_train = df.iloc[:train_end]['ganador_j1']
+    X_val_all = df.iloc[train_end:val_end][all_features]
+    y_val = df.iloc[train_end:val_end]['ganador_j1']
+    X_test_all = df.iloc[val_end:][all_features]
+    y_test = df.iloc[val_end:]['ganador_j1']
     
     selector = FeatureSelector(X_train_all, y_train)
     
@@ -95,8 +95,8 @@ def main():
     X_train = df.iloc[:train_end][selected_features]
     X_val = df.iloc[train_end:val_end][selected_features]
     X_test = df.iloc[val_end:][selected_features]
-    y_val = df.iloc[train_end:val_end]['resultado']
-    y_test = df.iloc[val_end:]['resultado']
+    y_val = df.iloc[train_end:val_end]['ganador_j1']
+    y_test = df.iloc[val_end:]['ganador_j1']
     
     logger.info(f"   Splits: Train {len(X_train)} | Val {len(X_val)} | Test {len(X_test)}")
     
