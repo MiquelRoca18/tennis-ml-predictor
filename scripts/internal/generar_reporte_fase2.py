@@ -50,14 +50,35 @@ class GeneradorReporteFase2:
         with open(self.calibracion_dir / "calibration_analysis.json") as f:
             self.analisis_calibracion = json.load(f)
         
-        # Comparación de umbrales EV
-        self.comparacion_ev = pd.read_csv(
-            self.backtesting_dir / "ev_threshold_comparison.csv"
-        )
+        # Comparación de umbrales EV (opcional)
+        ev_comparison_path = self.backtesting_dir / "ev_threshold_comparison.csv"
+        if ev_comparison_path.exists():
+            self.comparacion_ev = pd.read_csv(ev_comparison_path)
+        else:
+            logger.warning("⚠️  No se encontró ev_threshold_comparison.csv, usando datos por defecto")
+            self.comparacion_ev = pd.DataFrame({
+                'Umbral_EV': [0.10],
+                'Apuestas': [0],
+                'Win_Rate': [0.0],
+                'ROI': [0.0],
+                'Ganancia': [0.0]
+            })
         
-        # Resumen de backtesting
-        with open(self.backtesting_dir / "backtesting_summary.json") as f:
-            self.resumen_backtesting = json.load(f)
+        # Resumen de backtesting (opcional)
+        summary_path = self.backtesting_dir / "backtesting_summary.json"
+        if summary_path.exists():
+            with open(summary_path) as f:
+                self.resumen_backtesting = json.load(f)
+        else:
+            logger.warning("⚠️  No se encontró backtesting_summary.json, usando datos por defecto")
+            self.resumen_backtesting = {
+                'mejor_umbral': {
+                    'umbral': '10%',
+                    'roi': 0.0,
+                    'win_rate': 0.0,
+                    'apuestas': 0
+                }
+            }
         
         logger.info("✅ Datos cargados correctamente")
     
