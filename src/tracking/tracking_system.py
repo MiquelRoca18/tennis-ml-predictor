@@ -12,7 +12,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.tracking.database_setup import TennisDatabase
-from predictor_calibrado import PredictorCalibrado
+from src.prediction.predictor_calibrado import PredictorCalibrado
 from datetime import datetime
 
 
