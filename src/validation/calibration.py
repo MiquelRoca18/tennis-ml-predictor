@@ -248,7 +248,7 @@ def validar_calibracion():
     test_start = int(n * 0.8)
     
     X_test = df.iloc[test_start:][feature_cols]
-    y_test = df.iloc[test_start:]['resultado']
+    y_test = df.iloc[test_start:]['ganador_j1']  # Columna correcta en el nuevo formato
     
     print(f"  Test set: {len(X_test)} partidos ({len(X_test)/n*100:.1f}%)")
     
