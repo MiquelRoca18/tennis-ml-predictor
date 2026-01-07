@@ -122,36 +122,40 @@ async def health_check():
     
     Verifica que:
     - La API está funcionando
-    - El modelo está cargado
+    - El modelo está cargado (opcional)
     - La base de datos está accesible
-    """
-    try:
-        # Verificar modelo
-        model_loaded = False
-        try:
-            get_predictor()
-            model_loaded = True
-        except:
-            pass
-        
-        # Verificar base de datos
-        db_connected = False
-        try:
-            db.obtener_predicciones()
-            db_connected = True
-        except:
-            pass
-        
-        return HealthResponse(
-            status="ok" if (model_loaded and db_connected) else "degraded",
-            timestamp=datetime.now(),
-            model_loaded=model_loaded,
-            database_connected=db_connected
-        )
     
+    Retorna 200 OK siempre que la API responda, incluso si el modelo no está cargado.
+    """
+    # Verificar modelo (no crítico)
+    model_loaded = False
+    try:
+        # Solo verificar si el archivo existe, no intentar cargarlo
+        model_path = Path(Config.MODEL_PATH)
+        if model_path.exists():
+            model_loaded = True
+            logger.info(f"✅ Modelo encontrado en {Config.MODEL_PATH}")
+        else:
+            logger.warning(f"⚠️  Modelo no encontrado en {Config.MODEL_PATH}")
     except Exception as e:
-        logger.error(f"Error en health check: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"⚠️  Error verificando modelo: {e}")
+    
+    # Verificar base de datos (no crítico)
+    db_connected = False
+    try:
+        db.obtener_predicciones()
+        db_connected = True
+        logger.info("✅ Base de datos conectada")
+    except Exception as e:
+        logger.warning(f"⚠️  Error conectando a base de datos: {e}")
+    
+    # Siempre retornar 200 OK si la API responde
+    return HealthResponse(
+        status="ok" if (model_loaded and db_connected) else "degraded",
+        timestamp=datetime.now(),
+        model_loaded=model_loaded,
+        database_connected=db_connected
+    )
 
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
