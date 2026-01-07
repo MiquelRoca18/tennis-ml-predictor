@@ -39,9 +39,6 @@ RUN apt-get update && apt-get install -y \
 # Copiar dependencias de Python desde builder
 COPY --from=builder /root/.local /root/.local
 
-# Asegurar que los scripts de Python están en PATH
-ENV PATH=/root/.local/bin:$PATH
-
 # Copiar código de la aplicación
 COPY src/ ./src/
 COPY scripts/ ./scripts/
@@ -52,9 +49,16 @@ RUN mkdir -p logs datos modelos resultados
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \
-    chown -R tennisml:tennisml /app
+    chown -R tennisml:tennisml /app && \
+    # Copiar binarios de Python al directorio del usuario
+    cp -r /root/.local /home/tennisml/.local && \
+    chown -R tennisml:tennisml /home/tennisml/.local
 
+# Cambiar a usuario no-root
 USER tennisml
+
+# Asegurar que los scripts de Python están en PATH
+ENV PATH=/home/tennisml/.local/bin:$PATH
 
 # Exponer puerto
 EXPOSE 8000
