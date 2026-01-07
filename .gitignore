@@ -128,3 +128,6 @@ guiasProyecto/
 !resultados/.gitkeep
 !logs/.gitkeepdatos/odds_historicas/*.xlsx
 datos/odds_historicas/*.csv
+
+
+*.md

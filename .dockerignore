@@ -1,0 +1,74 @@
+# .dockerignore - Archivos excluidos del build de Docker
+# =======================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Data (se monta como volumen)
+datos/raw/
+datos/cache_cuotas/
+backups/
+
+# Modelos (se monta como volumen)
+modelos/archive/
+
+# Tests
+tests/
+*.test.py
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporal
+tmp/
+temp/
+*.tmp
+
+# Database (se monta como volumen)
+*.db
+*.sqlite
+*.sqlite3
+
+# Resultados
+resultados/
