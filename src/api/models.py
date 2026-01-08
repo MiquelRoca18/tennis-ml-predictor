@@ -18,22 +18,75 @@ class Superficie(str, Enum):
 
 class MatchPredictionRequest(BaseModel):
     """Request para predicción de partido"""
-    jugador_nombre: str = Field(..., description="Nombre del jugador", min_length=2)
-    jugador_rank: int = Field(..., description="Ranking ATP del jugador", ge=1, le=1000)
-    oponente_nombre: str = Field(..., description="Nombre del oponente", min_length=2)
-    oponente_rank: int = Field(..., description="Ranking ATP del oponente", ge=1, le=1000)
+    jugador1_nombre: str = Field(..., description="Nombre del jugador 1", min_length=2)
+    jugador1_cuota: float = Field(..., description="Cuota para jugador 1", gt=1.0, le=100.0)
+    jugador2_nombre: str = Field(..., description="Nombre del jugador 2", min_length=2)
+    jugador2_cuota: float = Field(..., description="Cuota para jugador 2", gt=1.0, le=100.0)
     superficie: Superficie = Field(..., description="Superficie del partido")
-    cuota: float = Field(..., description="Cuota del bookmaker", gt=1.0, le=100.0)
+    
+    # Campos opcionales para compatibilidad con versión anterior
+    jugador_nombre: Optional[str] = Field(None, description="(Deprecated) Usar jugador1_nombre")
+    oponente_nombre: Optional[str] = Field(None, description="(Deprecated) Usar jugador2_nombre")
+    cuota: Optional[float] = Field(None, description="(Deprecated) Usar jugador1_cuota")
+    jugador_rank: Optional[int] = Field(None, description="Ranking ATP del jugador (opcional, se obtiene del histórico)", ge=1, le=1000)
+    oponente_rank: Optional[int] = Field(None, description="Ranking ATP del oponente (opcional, se obtiene del histórico)", ge=1, le=1000)
     
     class Config:
         json_schema_extra = {
             "example": {
-                "jugador_nombre": "Alcaraz",
-                "jugador_rank": 2,
-                "oponente_nombre": "Sinner",
-                "oponente_rank": 1,
-                "superficie": "Hard",
-                "cuota": 2.10
+                "jugador1_nombre": "Alcaraz",
+                "jugador1_cuota": 2.10,
+                "jugador2_nombre": "Sinner",
+                "jugador2_cuota": 1.75,
+                "superficie": "Hard"
+            }
+        }
+
+
+class PlayerPrediction(BaseModel):
+    """Predicción para un jugador específico"""
+    nombre: str
+    probabilidad: float
+    probabilidad_porcentaje: str
+    cuota: float
+    expected_value: float
+    decision: str
+    kelly_stake: Optional[float] = None
+    edge: float
+
+
+class DualPredictionResponse(BaseModel):
+    """Response con análisis de ambas opciones de apuesta"""
+    jugador1: PlayerPrediction
+    jugador2: PlayerPrediction
+    recomendacion_final: str
+    mejor_opcion: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jugador1": {
+                    "nombre": "Alcaraz",
+                    "probabilidad": 0.44,
+                    "probabilidad_porcentaje": "44.42%",
+                    "cuota": 2.10,
+                    "expected_value": -0.067,
+                    "decision": "NO APOSTAR ❌",
+                    "kelly_stake": None,
+                    "edge": -0.032
+                },
+                "jugador2": {
+                    "nombre": "Sinner",
+                    "probabilidad": 0.56,
+                    "probabilidad_porcentaje": "55.58%",
+                    "cuota": 1.75,
+                    "expected_value": -0.027,
+                    "decision": "NO APOSTAR ❌",
+                    "kelly_stake": None,
+                    "edge": -0.015
+                },
+                "recomendacion_final": "Ninguna apuesta recomendada - EV negativo en ambas opciones",
+                "mejor_opcion": None
             }
         }
 

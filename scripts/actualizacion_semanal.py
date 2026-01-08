@@ -55,17 +55,17 @@ class ActualizadorSemanal:
         self.processed_dir = Path("datos/processed")
         self.modelos_dir = Path("modelos")
         
-        # URLs de TML GitHub
-        self.tml_base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master"
+        # URLs de TML-Database (Tennismylife)
+        self.tml_base_url = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
         
         logger.info("🔄 Actualizador Semanal inicializado")
         logger.info(f"   Ventana temporal: {ventana_años} años")
     
     def descargar_datos_tml(self):
         """
-        Descarga datos actualizados de TML GitHub
+        Descarga datos actualizados de TML-Database
         """
-        logger.info("\n📥 Descargando datos de TML GitHub...")
+        logger.info("\n📥 Descargando datos de TML-Database...")
         
         año_actual = datetime.now().year
         años_a_descargar = range(año_actual - self.ventana_años, año_actual + 1)
@@ -73,7 +73,8 @@ class ActualizadorSemanal:
         archivos_descargados = []
         
         for año in años_a_descargar:
-            filename = f"atp_matches_{año}.csv"
+            # TML usa formato: 2024.csv, 2025.csv, etc.
+            filename = f"{año}.csv"
             url = f"{self.tml_base_url}/{filename}"
             output_path = self.datos_dir / f"atp_matches_{año}_tml.csv"
             

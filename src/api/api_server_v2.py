@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.api.models import (
     MatchPredictionRequest,
     PredictionResponse,
+    DualPredictionResponse,
     MatchInfo,
     SystemStats,
     HealthResponse,
@@ -158,79 +159,126 @@ async def health_check():
     )
 
 
-@app.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
+@app.post("/predict", response_model=DualPredictionResponse, tags=["Predictions"])
 async def predict_match(request: MatchPredictionRequest):
     """
-    Genera una predicción para un partido
+    Genera predicciones para ambas opciones de apuesta en un partido
     
     Args:
-        request: Datos del partido (jugadores, rankings, superficie, cuota)
+        request: Datos del partido (ambos jugadores con sus cuotas y superficie)
     
     Returns:
-        Predicción con probabilidad, EV, decisión y stake recomendado
+        Análisis completo de ambas opciones de apuesta con recomendación final
     
     Example:
         ```json
         {
-            "jugador_nombre": "Alcaraz",
-            "jugador_rank": 2,
-            "oponente_nombre": "Sinner",
-            "oponente_rank": 1,
-            "superficie": "Hard",
-            "cuota": 2.10
+            "jugador1_nombre": "Alcaraz",
+            "jugador1_cuota": 2.10,
+            "jugador2_nombre": "Sinner",
+            "jugador2_cuota": 1.75,
+            "superficie": "Hard"
         }
         ```
     """
     try:
         pred = get_predictor()
         
-        # Generar predicción
-        resultado = pred.predecir_partido(
-            jugador1=request.jugador_nombre,
-            jugador1_rank=request.jugador_rank,
-            jugador2=request.oponente_nombre,
-            jugador2_rank=request.oponente_rank,
+        # Soporte para formato antiguo (compatibilidad)
+        j1_nombre = request.jugador1_nombre or request.jugador_nombre
+        j2_nombre = request.jugador2_nombre or request.oponente_nombre
+        j1_cuota = request.jugador1_cuota if hasattr(request, 'jugador1_cuota') else request.cuota
+        j2_cuota = request.jugador2_cuota if hasattr(request, 'jugador2_cuota') else None
+        
+        if not j1_nombre or not j2_nombre:
+            raise HTTPException(status_code=400, detail="Nombres de jugadores requeridos")
+        
+        # Predicción para jugador 1
+        resultado_j1 = pred.predecir_partido(
+            jugador1=j1_nombre,
+            jugador1_rank=request.jugador_rank or 999,
+            jugador2=j2_nombre,
+            jugador2_rank=request.oponente_rank or 999,
             superficie=request.superficie.value,
-            cuota=request.cuota
+            cuota=j1_cuota
         )
         
-        # Formatear respuesta
-        probabilidad = resultado.get('probabilidad', 0.5)
-        ev = resultado.get('expected_value', 0)
+        prob_j1 = resultado_j1.get('probabilidad', 0.5)
+        ev_j1 = resultado_j1.get('expected_value', 0)
+        edge_j1 = resultado_j1.get('edge', 0)
         
-        # Determinar decisión
-        decision = "APOSTAR ✅" if ev > Config.EV_THRESHOLD else "NO APOSTAR ❌"
+        # Calcular kelly stake para j1
+        kelly_j1 = None
+        if ev_j1 > 0:
+            kelly_pct = (prob_j1 * j1_cuota - 1) / (j1_cuota - 1)
+            kelly_j1 = round(kelly_pct * 0.25 * 100, 2)  # 25% Kelly conservador
         
-        # Determinar confianza
-        if abs(probabilidad - 0.5) > 0.15:
-            confianza = "Alta"
-        elif abs(probabilidad - 0.5) > 0.08:
-            confianza = "Media"
+        # Predicción para jugador 2 (si hay cuota)
+        prob_j2 = 1 - prob_j1  # Probabilidad complementaria
+        
+        if j2_cuota:
+            ev_j2 = (prob_j2 * j2_cuota) - 1
+            edge_j2 = prob_j2 - (1 / j2_cuota)
+            
+            # Calcular kelly stake para j2
+            kelly_j2 = None
+            if ev_j2 > 0:
+                kelly_pct = (prob_j2 * j2_cuota - 1) / (j2_cuota - 1)
+                kelly_j2 = round(kelly_pct * 0.25 * 100, 2)
         else:
-            confianza = "Baja"
+            # Si no hay cuota para j2, usar valores por defecto
+            j2_cuota = 1 / prob_j2 if prob_j2 > 0 else 2.0
+            ev_j2 = 0
+            edge_j2 = 0
+            kelly_j2 = None
         
-        # Kelly stake (si está habilitado)
-        kelly_stake = None
-        if Config.KELLY_ENABLED and ev > 0:
-            kelly_pct = (probabilidad * request.cuota - 1) / (request.cuota - 1)
-            kelly_stake = round(kelly_pct * Config.KELLY_FRACTION * 100, 2)
+        # Decisiones
+        umbral_ev = Config.EV_THRESHOLD
+        decision_j1 = "APOSTAR ✅" if ev_j1 > umbral_ev else "NO APOSTAR ❌"
+        decision_j2 = "APOSTAR ✅" if ev_j2 > umbral_ev else "NO APOSTAR ❌"
         
-        # Razón
-        if ev > Config.EV_THRESHOLD:
-            razon = f"EV positivo ({ev*100:.1f}%) con confianza {confianza.lower()}"
+        # Determinar mejor opción y recomendación final
+        mejor_opcion = None
+        if ev_j1 > umbral_ev or ev_j2 > umbral_ev:
+            if ev_j1 > ev_j2:
+                mejor_opcion = j1_nombre
+                recomendacion = f"Apostar a {j1_nombre} - EV: {ev_j1*100:.1f}%"
+            else:
+                mejor_opcion = j2_nombre
+                recomendacion = f"Apostar a {j2_nombre} - EV: {ev_j2*100:.1f}%"
         else:
-            razon = f"EV insuficiente ({ev*100:.1f}%), umbral mínimo {Config.EV_THRESHOLD*100:.1f}%"
+            recomendacion = "Ninguna apuesta recomendada - EV negativo en ambas opciones"
         
-        return PredictionResponse(
-            probabilidad=probabilidad,
-            probabilidad_porcentaje=f"{probabilidad*100:.2f}%",
-            expected_value=ev,
-            decision=decision,
-            confianza=confianza,
-            kelly_stake=kelly_stake,
-            razon=razon
+        # Construir respuesta
+        from src.api.models import PlayerPrediction
+        
+        return DualPredictionResponse(
+            jugador1=PlayerPrediction(
+                nombre=j1_nombre,
+                probabilidad=prob_j1,
+                probabilidad_porcentaje=f"{prob_j1*100:.2f}%",
+                cuota=j1_cuota,
+                expected_value=ev_j1,
+                decision=decision_j1,
+                kelly_stake=kelly_j1,
+                edge=edge_j1
+            ),
+            jugador2=PlayerPrediction(
+                nombre=j2_nombre,
+                probabilidad=prob_j2,
+                probabilidad_porcentaje=f"{prob_j2*100:.2f}%",
+                cuota=j2_cuota,
+                expected_value=ev_j2,
+                decision=decision_j2,
+                kelly_stake=kelly_j2,
+                edge=edge_j2
+            ),
+            recomendacion_final=recomendacion,
+            mejor_opcion=mejor_opcion
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error en predicción: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

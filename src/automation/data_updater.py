@@ -19,7 +19,7 @@ class DataUpdater:
     
     def __init__(self, data_path="datos/processed/dataset_features_completas.csv"):
         self.data_path = Path(data_path)
-        self.tml_base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_MatchChartingProject/master"
+        self.tml_base_url = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
         
     def obtener_ultima_fecha_local(self):
         """
@@ -77,8 +77,8 @@ class DataUpdater:
             year = datetime.now().year
         
         try:
-            # URL del archivo de datos del año
-            url = f"https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_{year}.csv"
+            # URL del archivo de datos del año (TML-Database usa formato: 2024.csv)
+            url = f"https://raw.githubusercontent.com/Tennismylife/TML-Database/master/{year}.csv"
             
             logger.info(f"📥 Descargando datos de {year} desde TML...")
             
