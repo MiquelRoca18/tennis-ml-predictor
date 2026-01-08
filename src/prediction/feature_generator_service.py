@@ -95,11 +95,25 @@ class FeatureGeneratorService:
         try:
             with open('resultados/selected_features.txt', 'r') as f:
                 features = [line.strip() for line in f if line.strip()]
-            logger.info(f"  ✅ {len(features)} features cargadas")
+            logger.info(f"  ✅ {len(features)} features cargadas desde archivo")
             return features
         except Exception as e:
-            logger.warning(f"  ⚠️  No se pudieron cargar features: {e}")
-            return []
+            logger.warning(f"  ⚠️  No se pudo cargar selected_features.txt: {e}")
+            logger.info("  📝 Usando lista de features por defecto (30 features)")
+            # Lista hardcodeada de las 30 features del modelo
+            return [
+                'j1_jugador_elo', 'j1_oponente_elo', 'j1_elo_diff', 
+                'j1_jugador_elo_surface', 'j1_oponente_elo_surface', 'j1_elo_diff_surface', 'j1_elo_expected_prob',
+                'j1_jugador_rank', 'j1_oponente_rank', 'j1_rank_diff', 'j1_rank_ratio',
+                'j1_diff_win_rate_60d',
+                'j1_j1_serve_first_serve_in_pct', 'j1_j1_serve_first_serve_won_pct', 'j1_j1_serve_second_serve_won_pct',
+                'j1_j1_serve_df_pct', 'j1_j1_serve_bp_saved_pct', 'j1_j1_serve_power',
+                'j1_j2_serve_first_serve_in_pct', 'j1_j2_serve_first_serve_won_pct', 'j1_j2_serve_second_serve_won_pct',
+                'j1_j2_serve_df_pct', 'j1_j2_serve_bp_saved_pct', 'j1_j2_serve_aces_per_match',
+                'j1_j1_return_return_quality_score', 'j1_serve_vs_return_advantage',
+                'j1_ventaja_superficie',
+                'j1_rank_diff_x_forma', 'j1_elo_x_forma', 'j1_superficie_x_rank'
+            ]
     
     def _obtener_ranking(self, jugador, fecha):
         """Obtiene el ranking más reciente de un jugador"""
