@@ -71,6 +71,7 @@ class PredictorCalibrado:
             'confianza': max(prob, 1 - prob)
         }
     
+    
     def calcular_ev(self, prob, cuota):
         """
         Calcula Expected Value
@@ -85,6 +86,57 @@ class PredictorCalibrado:
             EV (Expected Value)
         """
         return (prob * cuota) - 1
+    
+    def predecir_partido(self, jugador1, jugador1_rank, jugador2, jugador2_rank, superficie, cuota):
+        """
+        Predice un partido con parámetros individuales (wrapper para API)
+        
+        NOTA: Este método es un placeholder simplificado.
+        En producción real, necesitarías generar las 30 features completas
+        usando los calculadores de ELO, forma reciente, H2H, etc.
+        
+        Args:
+            jugador1: Nombre del jugador 1
+            jugador1_rank: Ranking del jugador 1
+            jugador2: Nombre del jugador 2  
+            jugador2_rank: Ranking del jugador 2
+            superficie: Superficie (Hard/Clay/Grass)
+            cuota: Cuota para jugador 1
+            
+        Returns:
+            dict con predicción y análisis
+        """
+        # PLACEHOLDER: Features simplificadas
+        # En producción, deberías usar los calculadores reales
+        features = {
+            'jugador_rank': jugador1_rank,
+            'oponente_rank': jugador2_rank,
+            'rank_diff': jugador2_rank - jugador1_rank,
+            'rank_ratio': jugador1_rank / max(jugador2_rank, 1),
+            # Valores por defecto para otras features requeridas
+            'elo_diff': (1500 - jugador1_rank * 10) - (1500 - jugador2_rank * 10),
+            'elo_expected_prob': 0.5,
+            'diff_win_rate_60d': 0.0,
+            # ... resto de features con valores neutros
+        }
+        
+        # Usar recomendar_apuesta para obtener análisis completo
+        analisis = self.recomendar_apuesta(
+            features=features,
+            cuota=cuota,
+            umbral_ev=0.03,
+            stake=10.0
+        )
+        
+        # Formatear respuesta para la API
+        return {
+            'probabilidad': analisis['probabilidad_modelo'],
+            'expected_value': analisis['ev'],
+            'decision': analisis['decision'],
+            'stake_recomendado': analisis['stake_recomendado'],
+            'confianza': analisis['confianza'],
+            'edge': analisis['edge']
+        }
     
     def recomendar_apuesta(self, features, cuota, umbral_ev=0.03, stake=10.0):
         """
