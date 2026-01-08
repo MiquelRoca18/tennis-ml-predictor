@@ -90,7 +90,13 @@ class PredictorCalibrado:
     
     def predecir_partido(self, jugador1, jugador1_rank, jugador2, jugador2_rank, superficie, cuota):
         """
-        Predice un partido generando las 30 features completas
+        Predice un partido usando predicción bidireccional (igual que backtesting)
+        
+        Este método replica EXACTAMENTE el proceso del backtesting:
+        1. Genera features completas para j1 vs j2
+        2. Genera features completas para j2 vs j1
+        3. Combina con prefijos j1_ y j2_
+        4. Hace UNA predicción: ¿Ganará j1?
         
         Args:
             jugador1: Nombre del jugador 1
@@ -109,41 +115,72 @@ class PredictorCalibrado:
         # Obtener servicio de generación de features (singleton)
         feature_service = FeatureGeneratorService()
         
-        # Generar features bidireccionales completas
-        features_dict = feature_service.generar_features_bidireccionales(
-            jugador1=jugador1,
-            jugador2=jugador2,
+        # PREDICCIÓN BIDIRECCIONAL (igual que backtesting)
+        # Generar features para jugador1 (como 'jugador')
+        features_j1 = feature_service.generar_features(
+            jugador=jugador1,
+            oponente=jugador2,
             superficie=superficie,
             fecha=datetime.now()
         )
         
+        # Generar features para jugador2 (como 'jugador')
+        features_j2 = feature_service.generar_features(
+            jugador=jugador2,
+            oponente=jugador1,
+            superficie=superficie,
+            fecha=datetime.now()
+        )
+        
+        # Combinar con prefijos j1_ y j2_
+        features_combined = {}
+        for key, value in features_j1.items():
+            features_combined[f'j1_{key}'] = value
+        for key, value in features_j2.items():
+            features_combined[f'j2_{key}'] = value
+        
         # Convertir a array en el orden correcto de features
         features_array = []
         for feat_name in feature_service.feature_cols:
-            if feat_name in features_dict:
-                features_array.append(features_dict[feat_name])
+            if feat_name in features_combined:
+                features_array.append(features_combined[feat_name])
             else:
                 # Si falta alguna feature, usar 0
                 features_array.append(0.0)
         
         features_array = np.array(features_array).reshape(1, -1)
         
-        # Usar recomendar_apuesta para obtener análisis completo
-        analisis = self.recomendar_apuesta(
-            features=features_array,
-            cuota=cuota,
-            umbral_ev=0.03,
-            stake=10.0
-        )
+        # Predecir probabilidad de que jugador1 gane
+        prob_j1_gana = self.modelo.predict_proba(features_array)[0, 1]
+        
+        # Calcular EV
+        ev = self.calcular_ev(prob_j1_gana, cuota)
+        
+        # Decisión
+        umbral_ev = 0.03
+        decision = "APOSTAR" if ev > umbral_ev else "NO APOSTAR"
+        
+        # Probabilidad implícita de la cuota
+        prob_implicita = 1 / cuota
+        
+        # Edge (ventaja sobre la casa)
+        edge = prob_j1_gana - prob_implicita
+        
+        # Kelly stake
+        stake_recomendado = 0
+        if ev > 0:
+            kelly_pct = (prob_j1_gana * cuota - 1) / (cuota - 1)
+            kelly_pct = kelly_pct * 0.25  # Kelly fraction conservador
+            stake_recomendado = max(kelly_pct * 100, 0)  # Stake en €
         
         # Formatear respuesta para la API
         return {
-            'probabilidad': analisis['probabilidad_modelo'],
-            'expected_value': analisis['ev'],
-            'decision': analisis['decision'],
-            'stake_recomendado': analisis['stake_recomendado'],
-            'confianza': analisis['confianza'],
-            'edge': analisis['edge']
+            'probabilidad': prob_j1_gana,
+            'expected_value': ev,
+            'decision': decision,
+            'stake_recomendado': stake_recomendado,
+            'confianza': max(prob_j1_gana, 1 - prob_j1_gana),
+            'edge': edge
         }
     
     def recomendar_apuesta(self, features, cuota, umbral_ev=0.03, stake=10.0):
