@@ -87,42 +87,50 @@ class PredictorCalibrado:
         """
         return (prob * cuota) - 1
     
+    
     def predecir_partido(self, jugador1, jugador1_rank, jugador2, jugador2_rank, superficie, cuota):
         """
-        Predice un partido con parámetros individuales (wrapper para API)
-        
-        NOTA: Este método es un placeholder simplificado.
-        En producción real, necesitarías generar las 30 features completas
-        usando los calculadores de ELO, forma reciente, H2H, etc.
+        Predice un partido generando las 30 features completas
         
         Args:
             jugador1: Nombre del jugador 1
-            jugador1_rank: Ranking del jugador 1
+            jugador1_rank: Ranking del jugador 1 (no usado, se obtiene del histórico)
             jugador2: Nombre del jugador 2  
-            jugador2_rank: Ranking del jugador 2
+            jugador2_rank: Ranking del jugador 2 (no usado, se obtiene del histórico)
             superficie: Superficie (Hard/Clay/Grass)
             cuota: Cuota para jugador 1
             
         Returns:
             dict con predicción y análisis
         """
-        # PLACEHOLDER: Features simplificadas
-        # En producción, deberías usar los calculadores reales
-        features = {
-            'jugador_rank': jugador1_rank,
-            'oponente_rank': jugador2_rank,
-            'rank_diff': jugador2_rank - jugador1_rank,
-            'rank_ratio': jugador1_rank / max(jugador2_rank, 1),
-            # Valores por defecto para otras features requeridas
-            'elo_diff': (1500 - jugador1_rank * 10) - (1500 - jugador2_rank * 10),
-            'elo_expected_prob': 0.5,
-            'diff_win_rate_60d': 0.0,
-            # ... resto de features con valores neutros
-        }
+        from src.prediction.feature_generator_service import FeatureGeneratorService
+        from datetime import datetime
+        
+        # Obtener servicio de generación de features (singleton)
+        feature_service = FeatureGeneratorService()
+        
+        # Generar features bidireccionales completas
+        features_dict = feature_service.generar_features_bidireccionales(
+            jugador1=jugador1,
+            jugador2=jugador2,
+            superficie=superficie,
+            fecha=datetime.now()
+        )
+        
+        # Convertir a array en el orden correcto de features
+        features_array = []
+        for feat_name in feature_service.feature_cols:
+            if feat_name in features_dict:
+                features_array.append(features_dict[feat_name])
+            else:
+                # Si falta alguna feature, usar 0
+                features_array.append(0.0)
+        
+        features_array = np.array(features_array).reshape(1, -1)
         
         # Usar recomendar_apuesta para obtener análisis completo
         analisis = self.recomendar_apuesta(
-            features=features,
+            features=features_array,
             cuota=cuota,
             umbral_ev=0.03,
             stake=10.0
