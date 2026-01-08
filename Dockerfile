@@ -45,8 +45,11 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY .env.production .env
 
+# Copiar modelos entrenados
+COPY modelos/ ./modelos/
+
 # Crear directorios necesarios
-RUN mkdir -p logs datos modelos resultados
+RUN mkdir -p logs datos resultados
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \
