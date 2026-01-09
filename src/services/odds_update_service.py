@@ -10,7 +10,7 @@ import logging
 from datetime import date, datetime
 from typing import List, Dict, Optional
 from src.database.match_database import MatchDatabase
-from src.services.odds_api_client import OddsAPIClient
+from src.services.api_tennis_client import APITennisClient
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +20,20 @@ class OddsUpdateService:
     Servicio para actualizar cuotas de partidos pendientes y detectar nuevos
     """
     
-    def __init__(self, db: MatchDatabase, odds_client: OddsAPIClient = None):
+    def __init__(self, db: MatchDatabase, odds_client: APITennisClient = None):
         """
         Inicializa el servicio de actualización
         
         Args:
             db: Instancia de MatchDatabase
-            odds_client: Cliente de The Odds API (opcional, se crea si no se provee)
+            odds_client: Cliente de API-Tennis (opcional, se crea si no se provee)
         """
         self.db = db
         try:
-            self.odds_client = odds_client or OddsAPIClient()
-            logger.info("✅ OddsUpdateService inicializado con The Odds API")
+            self.odds_client = odds_client or APITennisClient()
+            logger.info("✅ OddsUpdateService inicializado con API-Tennis")
         except Exception as e:
-            logger.warning(f"⚠️  OddsUpdateService inicializado SIN The Odds API: {e}")
+            logger.warning(f"⚠️  OddsUpdateService inicializado SIN API-Tennis: {e}")
             self.odds_client = None
     
     def get_pending_matches(self) -> List[Dict]:
@@ -156,9 +156,12 @@ class OddsUpdateService:
             partidos_nuevos_creados = 0
             
             for match in matches_api:
-                # Extraer fecha del partido
-                commence_time = datetime.fromisoformat(match['commence_time'].replace('Z', '+00:00'))
-                fecha_partido = commence_time.date()
+                # Extraer fecha del partido (API-Tennis usa event_date y event_time)
+                try:
+                    fecha_partido = datetime.strptime(match['date'], '%Y-%m-%d').date()
+                except:
+                    logger.warning(f"⚠️  Fecha inválida para partido: {match}")
+                    continue
                 
                 # Verificar si ya existe
                 match_key = (match['player1_name'], match['player2_name'], str(fecha_partido))
@@ -169,23 +172,24 @@ class OddsUpdateService:
                     logger.info(f"🆕 Partido nuevo detectado: {match['player1_name']} vs {match['player2_name']}")
                     
                     try:
-                        # Crear partido en DB
                         match_id = self.db.create_match(
-                            fecha_partido=fecha_partido,
-                            superficie="Hard",  # Default, se puede mejorar con más info
+                            fecha_partido=str(fecha_partido),
+                            hora_inicio=match.get('time', '00:00'),
+                            torneo=match.get('tournament', 'Unknown'),
+                            ronda=match.get('round', 'Unknown'),
+                            superficie=match.get('surface', 'Hard'),  # Default Hard si no está disponible
                             jugador1_nombre=match['player1_name'],
-                            jugador1_cuota=match['player1_odds'],
+                            jugador1_ranking=None,  # API-Tennis no proporciona ranking en fixtures
+                            jugador1_cuota=match.get('player1_odds'),
                             jugador2_nombre=match['player2_name'],
-                            jugador2_cuota=match['player2_odds'],
-                            hora_inicio=commence_time.strftime("%H:%M")
+                            jugador2_ranking=None,
+                            jugador2_cuota=match.get('player2_odds')
                         )
                         
                         logger.info(f"✅ Partido {match_id} creado: {match['player1_name']} vs {match['player2_name']}")
                         partidos_nuevos_creados += 1
                         
                         # TODO: Generar predicción automática
-                        # Esto se puede hacer llamando al endpoint /matches/predict
-                        # o directamente aquí con el predictor
                         
                     except Exception as e:
                         logger.error(f"❌ Error creando partido: {e}")

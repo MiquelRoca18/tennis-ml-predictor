@@ -38,7 +38,7 @@ from src.database.match_database import MatchDatabase
 from src.prediction.predictor_calibrado import PredictorCalibrado
 from src.config.settings import Config
 from src.services.odds_update_service import OddsUpdateService
-from src.services.odds_api_client import OddsAPIClient
+from src.services.api_tennis_client import APITennisClient
 
 # APScheduler para actualizaciones automáticas
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -73,13 +73,13 @@ app.add_middleware(
 db = MatchDatabase("matches_v2.db")
 predictor = None
 
-# Inicializar OddsAPIClient y OddsUpdateService
+# Inicializar APITennisClient y OddsUpdateService
 try:
-    odds_client = OddsAPIClient()
+    odds_client = APITennisClient()
     update_service = OddsUpdateService(db, odds_client)
-    logger.info("✅ OddsUpdateService inicializado con The Odds API")
+    logger.info("✅ OddsUpdateService inicializado con API-Tennis")
 except Exception as e:
-    logger.warning(f"⚠️  OddsUpdateService inicializado SIN The Odds API: {e}")
+    logger.warning(f"⚠️  OddsUpdateService inicializado SIN API-Tennis: {e}")
     update_service = OddsUpdateService(db, None)
 
 # Inicializar ModelRetrainingExecutor
