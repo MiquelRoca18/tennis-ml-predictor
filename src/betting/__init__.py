@@ -15,4 +15,4 @@ Uso:
 from .kelly_calculator import KellyCalculator
 from .bankroll_simulator import BankrollSimulator
 
-__all__ = ['KellyCalculator', 'BankrollSimulator']
+__all__ = ["KellyCalculator", "BankrollSimulator"]

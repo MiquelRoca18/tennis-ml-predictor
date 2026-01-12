@@ -6,7 +6,7 @@ Este módulo proporciona acceso centralizado a toda la configuración del proyec
 
 Uso:
     from src.config import Config
-    
+
     # Acceder a configuración
     api_key = Config.ODDS_API_KEY
     model_path = Config.MODEL_PATH
@@ -14,4 +14,4 @@ Uso:
 
 from .settings import Config, ENV_TEMPLATE
 
-__all__ = ['Config', 'ENV_TEMPLATE']
+__all__ = ["Config", "ENV_TEMPLATE"]

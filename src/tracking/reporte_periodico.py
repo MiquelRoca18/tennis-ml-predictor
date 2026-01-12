@@ -19,11 +19,11 @@ class ReportePeriodico:
     """
     Genera reportes automáticos por periodo (semanal/mensual)
     """
-    
+
     def __init__(self, db_path="apuestas_tracker.db"):
         self.db = TennisDatabase(db_path)
         self.dashboard_gen = DashboardGenerator(db_path)
-    
+
     def generar_reporte_semanal(self, output_dir="resultados/reportes"):
         """
         Genera reporte de la última semana
@@ -31,37 +31,37 @@ class ReportePeriodico:
         print("=" * 60)
         print("📅 GENERANDO REPORTE SEMANAL")
         print("=" * 60)
-        
+
         fecha_inicio = datetime.now() - timedelta(days=7)
-        
+
         df = self.db.obtener_predicciones()
-        df['fecha_prediccion'] = pd.to_datetime(df['fecha_prediccion'])
-        df_semana = df[df['fecha_prediccion'] >= fecha_inicio]
-        
+        df["fecha_prediccion"] = pd.to_datetime(df["fecha_prediccion"])
+        df_semana = df[df["fecha_prediccion"] >= fecha_inicio]
+
         # Calcular métricas semanales
         metricas = self._calcular_metricas_periodo(df_semana)
-        
+
         if metricas is None:
             print("⚠️  No hay datos suficientes para el reporte semanal")
             return None
-        
+
         # Crear directorio si no existe
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        
+
         # Generar reporte HTML
-        timestamp = datetime.now().strftime('%Y%m%d')
+        timestamp = datetime.now().strftime("%Y%m%d")
         output_path = f"{output_dir}/reporte_semanal_{timestamp}.html"
-        
+
         html_content = self._crear_reporte_html(metricas, "Semanal", df_semana)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
+
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-        
+
         print(f"\n✅ Reporte semanal generado: {output_path}")
         self._mostrar_resumen(metricas, "Semanal")
-        
+
         return metricas
-    
+
     def generar_reporte_mensual(self, output_dir="resultados/reportes"):
         """
         Genera reporte del último mes
@@ -69,37 +69,37 @@ class ReportePeriodico:
         print("=" * 60)
         print("📅 GENERANDO REPORTE MENSUAL")
         print("=" * 60)
-        
+
         fecha_inicio = datetime.now() - timedelta(days=30)
-        
+
         df = self.db.obtener_predicciones()
-        df['fecha_prediccion'] = pd.to_datetime(df['fecha_prediccion'])
-        df_mes = df[df['fecha_prediccion'] >= fecha_inicio]
-        
+        df["fecha_prediccion"] = pd.to_datetime(df["fecha_prediccion"])
+        df_mes = df[df["fecha_prediccion"] >= fecha_inicio]
+
         # Calcular métricas mensuales
         metricas = self._calcular_metricas_periodo(df_mes)
-        
+
         if metricas is None:
             print("⚠️  No hay datos suficientes para el reporte mensual")
             return None
-        
+
         # Crear directorio si no existe
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        
+
         # Generar reporte HTML
-        timestamp = datetime.now().strftime('%Y%m%d')
+        timestamp = datetime.now().strftime("%Y%m%d")
         output_path = f"{output_dir}/reporte_mensual_{timestamp}.html"
-        
+
         html_content = self._crear_reporte_html(metricas, "Mensual", df_mes)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
+
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-        
+
         print(f"\n✅ Reporte mensual generado: {output_path}")
         self._mostrar_resumen(metricas, "Mensual")
-        
+
         return metricas
-    
+
     def comparar_periodos(self, dias_actual=7, dias_anterior=7):
         """
         Compara dos periodos y muestra tendencias
@@ -107,63 +107,65 @@ class ReportePeriodico:
         print("=" * 60)
         print("📊 COMPARACIÓN DE PERIODOS")
         print("=" * 60)
-        
+
         # Periodo actual
         fecha_inicio_actual = datetime.now() - timedelta(days=dias_actual)
         df = self.db.obtener_predicciones()
-        df['fecha_prediccion'] = pd.to_datetime(df['fecha_prediccion'])
-        df_actual = df[df['fecha_prediccion'] >= fecha_inicio_actual]
-        
+        df["fecha_prediccion"] = pd.to_datetime(df["fecha_prediccion"])
+        df_actual = df[df["fecha_prediccion"] >= fecha_inicio_actual]
+
         # Periodo anterior
         fecha_fin_anterior = fecha_inicio_actual
         fecha_inicio_anterior = fecha_fin_anterior - timedelta(days=dias_anterior)
-        df_anterior = df[(df['fecha_prediccion'] >= fecha_inicio_anterior) & 
-                         (df['fecha_prediccion'] < fecha_fin_anterior)]
-        
+        df_anterior = df[
+            (df["fecha_prediccion"] >= fecha_inicio_anterior)
+            & (df["fecha_prediccion"] < fecha_fin_anterior)
+        ]
+
         metricas_actual = self._calcular_metricas_periodo(df_actual)
         metricas_anterior = self._calcular_metricas_periodo(df_anterior)
-        
+
         if metricas_actual is None or metricas_anterior is None:
             print("⚠️  No hay datos suficientes para comparar")
             return
-        
+
         # Mostrar comparación
         print(f"\n📈 PERIODO ACTUAL (últimos {dias_actual} días):")
         self._mostrar_resumen(metricas_actual, "")
-        
+
         print(f"\n📉 PERIODO ANTERIOR ({dias_anterior} días previos):")
         self._mostrar_resumen(metricas_anterior, "")
-        
+
         print("\n🔄 TENDENCIAS:")
         self._mostrar_tendencias(metricas_actual, metricas_anterior)
-    
+
     def _calcular_metricas_periodo(self, df):
         """Calcula métricas para un periodo específico"""
-        df_apuestas = df[df['decision'] == 'APOSTAR']
-        df_completadas = df_apuestas[df_apuestas['resultado_real'].notna()]
-        
+        df_apuestas = df[df["decision"] == "APOSTAR"]
+        df_completadas = df_apuestas[df_apuestas["resultado_real"].notna()]
+
         if len(df_completadas) == 0:
             return None
-        
-        total_apostado = df_completadas['apuesta_cantidad'].sum()
-        ganancia_neta = df_completadas['ganancia'].sum()
+
+        total_apostado = df_completadas["apuesta_cantidad"].sum()
+        ganancia_neta = df_completadas["ganancia"].sum()
         roi = (ganancia_neta / total_apostado) * 100 if total_apostado > 0 else 0
-        
-        ganadas = (df_completadas['resultado_real'] == 1).sum()
+
+        ganadas = (df_completadas["resultado_real"] == 1).sum()
         win_rate = (ganadas / len(df_completadas)) * 100
-        
+
         return {
-            'total_predicciones': len(df),
-            'total_apuestas': len(df_completadas),
-            'ganadas': int(ganadas),
-            'perdidas': len(df_completadas) - int(ganadas),
-            'win_rate': win_rate,
-            'total_apostado': total_apostado,
-            'ganancia_neta': ganancia_neta,
-            'roi': roi,
-            'ev_promedio': df_completadas['ev'].mean() * 100
+            "total_predicciones": len(df),
+            "total_apuestas": len(df_completadas),
+            "ganadas": int(ganadas),
+            "perdidas": len(df_completadas) - int(ganadas),
+            "win_rate": win_rate,
+            "total_apostado": total_apostado,
+            "ganancia_neta": ganancia_neta,
+            "roi": roi,
+            "ev_promedio": df_completadas["ev"].mean() * 100,
         }
-    
+
     def _mostrar_resumen(self, metricas, periodo):
         """Muestra resumen de métricas en consola"""
         if periodo:
@@ -177,18 +179,19 @@ class ReportePeriodico:
         print(f"   Ganancia neta: {metricas['ganancia_neta']:+.2f}€")
         print(f"   ROI: {metricas['roi']:+.2f}%")
         print(f"   EV promedio: +{metricas['ev_promedio']:.2f}%")
-    
+
     def _mostrar_tendencias(self, actual, anterior):
         """Muestra tendencias entre dos periodos"""
+
         def calcular_cambio(actual_val, anterior_val):
             if anterior_val == 0:
                 return 0
             return ((actual_val - anterior_val) / abs(anterior_val)) * 100
-        
-        cambio_roi = calcular_cambio(actual['roi'], anterior['roi'])
-        cambio_wr = calcular_cambio(actual['win_rate'], anterior['win_rate'])
-        cambio_ev = calcular_cambio(actual['ev_promedio'], anterior['ev_promedio'])
-        
+
+        cambio_roi = calcular_cambio(actual["roi"], anterior["roi"])
+        cambio_wr = calcular_cambio(actual["win_rate"], anterior["win_rate"])
+        cambio_ev = calcular_cambio(actual["ev_promedio"], anterior["ev_promedio"])
+
         def emoji_tendencia(cambio):
             if cambio > 5:
                 return "📈 ⬆️"
@@ -196,40 +199,41 @@ class ReportePeriodico:
                 return "📉 ⬇️"
             else:
                 return "➡️"
-        
+
         print(f"   ROI: {emoji_tendencia(cambio_roi)} {cambio_roi:+.1f}%")
         print(f"   Win Rate: {emoji_tendencia(cambio_wr)} {cambio_wr:+.1f}%")
         print(f"   EV Promedio: {emoji_tendencia(cambio_ev)} {cambio_ev:+.1f}%")
-    
+
     def _crear_reporte_html(self, metricas, periodo, df_periodo):
         """Crea HTML del reporte"""
-        
+
         # Análisis por superficie del periodo
-        df_apuestas = df_periodo[df_periodo['decision'] == 'APOSTAR']
-        df_completadas = df_apuestas[df_apuestas['resultado_real'].notna()]
-        
+        df_apuestas = df_periodo[df_periodo["decision"] == "APOSTAR"]
+        df_completadas = df_apuestas[df_apuestas["resultado_real"].notna()]
+
         analisis_superficie = ""
-        if len(df_completadas) > 0 and not df_completadas['superficie'].isna().all():
-            superficie_stats = df_completadas.groupby('superficie').agg({
-                'resultado_real': ['count', 'sum'],
-                'ganancia': 'sum'
-            }).reset_index()
-            
+        if len(df_completadas) > 0 and not df_completadas["superficie"].isna().all():
+            superficie_stats = (
+                df_completadas.groupby("superficie")
+                .agg({"resultado_real": ["count", "sum"], "ganancia": "sum"})
+                .reset_index()
+            )
+
             if len(superficie_stats) > 0:
                 analisis_superficie = "<h2>📊 Análisis por Superficie</h2><table>"
                 analisis_superficie += "<tr><th>Superficie</th><th>Apuestas</th><th>Ganadas</th><th>Win Rate</th><th>Ganancia</th></tr>"
-                
+
                 for _, row in superficie_stats.iterrows():
-                    superficie = row['superficie']
-                    total = row[('resultado_real', 'count')]
-                    ganadas = row[('resultado_real', 'sum')]
+                    superficie = row["superficie"]
+                    total = row[("resultado_real", "count")]
+                    ganadas = row[("resultado_real", "sum")]
                     wr = (ganadas / total * 100) if total > 0 else 0
-                    ganancia = row[('ganancia', 'sum')]
-                    
+                    ganancia = row[("ganancia", "sum")]
+
                     analisis_superficie += f"<tr><td>{superficie}</td><td>{total}</td><td>{ganadas}</td><td>{wr:.1f}%</td><td>{ganancia:+.2f}€</td></tr>"
-                
+
                 analisis_superficie += "</table>"
-        
+
         html = f"""
 <!DOCTYPE html>
 <html lang="es">
@@ -363,19 +367,19 @@ class ReportePeriodico:
 </body>
 </html>
         """
-        
+
         return html
 
 
 # Ejemplo de uso
 if __name__ == "__main__":
     reporte = ReportePeriodico("apuestas_tracker.db")
-    
+
     # Generar reporte semanal
     reporte.generar_reporte_semanal()
-    
+
     # Generar reporte mensual
     reporte.generar_reporte_mensual()
-    
+
     # Comparar periodos
     reporte.comparar_periodos(dias_actual=7, dias_anterior=7)

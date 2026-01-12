@@ -9,8 +9,4 @@ from .odds_fetcher import OddsFetcher
 from .odds_comparator import OddsComparator
 from .alert_system import AlertSystem
 
-__all__ = [
-    'OddsFetcher',
-    'OddsComparator',
-    'AlertSystem'
-]
+__all__ = ["OddsFetcher", "OddsComparator", "AlertSystem"]

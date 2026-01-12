@@ -12,4 +12,4 @@ Uso:
 
 from .predictor_calibrado import PredictorCalibrado
 
-__all__ = ['PredictorCalibrado']
+__all__ = ["PredictorCalibrado"]
