@@ -349,33 +349,6 @@ class MatchDatabase:
         )
         return bet_id
 
-    def cancel_bet(self, match_id: int) -> bool:
-        """
-        Cancela la apuesta activa de un partido
-
-        Returns:
-            True si se canceló correctamente
-        """
-        cursor = self.conn.cursor()
-
-        cursor.execute(
-            """
-            UPDATE bets
-            SET estado = 'cancelada',
-                resultado = 'cancelada'
-            WHERE match_id = ? AND estado = 'activa'
-        """,
-            (match_id,),
-        )
-
-        self.conn.commit()
-
-        if cursor.rowcount > 0:
-            logger.info(f"✅ Apuesta cancelada para partido {match_id}")
-            return True
-
-        return False
-
     def update_bet_result(self, match_id: int, ganador: str) -> bool:
         """
         Actualiza el resultado de una apuesta cuando el partido termina
