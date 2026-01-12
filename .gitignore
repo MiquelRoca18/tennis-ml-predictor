@@ -130,4 +130,6 @@ guiasProyecto/
 datos/odds_historicas/*.csv
 
 
+# Archivos markdown (excepto README.md de la raíz)
 *.md
+!README.md
