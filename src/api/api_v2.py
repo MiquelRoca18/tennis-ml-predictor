@@ -968,6 +968,138 @@ async def get_retraining_status():
 
 
 # ============================================================
+# NEW ENDPOINTS - MATCH FETCHING & DATE RANGES
+# ============================================================
+
+
+@app.get("/matches/upcoming", tags=["Matches"])
+async def get_upcoming_matches():
+    """
+    Obtiene todos los partidos de los próximos 7 días
+
+    Returns:
+        Partidos agrupados por fecha
+    """
+    try:
+        start_date = date.today()
+        end_date = start_date + timedelta(days=7)
+
+        matches = db.get_matches_date_range(start_date, end_date)
+
+        # Agrupar por fecha
+        matches_by_date = {}
+        for match in matches:
+            fecha = match["fecha_partido"]
+            if fecha not in matches_by_date:
+                matches_by_date[fecha] = []
+            matches_by_date[fecha].append(match)
+
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_matches": len(matches),
+            "dates": len(matches_by_date),
+            "matches_by_date": matches_by_date,
+        }
+
+    except Exception as e:
+        logger.error(f"Error obteniendo partidos próximos: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/matches/range", tags=["Matches"])
+async def get_matches_by_date_range(
+    start_date: str = Query(..., description="Fecha inicial (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="Fecha final (YYYY-MM-DD)"),
+):
+    """
+    Obtiene partidos en un rango de fechas personalizado
+
+    Args:
+        start_date: Fecha inicial en formato YYYY-MM-DD
+        end_date: Fecha final en formato YYYY-MM-DD
+
+    Returns:
+        Partidos en el rango especificado
+    """
+    try:
+        # Parsear fechas
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD"
+            )
+
+        # Validar rango
+        if start > end:
+            raise HTTPException(
+                status_code=400, detail="start_date debe ser anterior a end_date"
+            )
+
+        max_range = timedelta(days=30)
+        if (end - start) > max_range:
+            raise HTTPException(
+                status_code=400, detail="El rango máximo es de 30 días"
+            )
+
+        # Obtener partidos
+        matches = db.get_matches_date_range(start, end)
+
+        return {
+            "start_date": start,
+            "end_date": end,
+            "total_matches": len(matches),
+            "matches": matches,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error obteniendo partidos por rango: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/fetch-matches", tags=["Admin"])
+async def manual_fetch_matches(days_ahead: int = Query(7, ge=1, le=14)):
+    """
+    Ejecuta manualmente el fetch diario de partidos
+
+    Este endpoint permite forzar la obtención de partidos sin esperar
+    al scheduler. Útil para testing y para obtener partidos inmediatamente
+    después de desplegar la aplicación.
+
+    Args:
+        days_ahead: Número de días hacia adelante (1-14)
+
+    Returns:
+        Estadísticas de la operación
+    """
+    try:
+        logger.info(f"🔧 Fetch manual de partidos solicitado ({days_ahead} días)")
+
+        # Initialize daily match fetcher
+        from src.automation.daily_match_fetcher import DailyMatchFetcher
+
+        pred = get_predictor()
+        fetcher = DailyMatchFetcher(db, odds_client, pred)
+
+        # Fetch matches
+        stats = fetcher.fetch_and_store_matches(days_ahead=days_ahead)
+
+        return {
+            "success": True,
+            "message": "Fetch de partidos completado",
+            **stats,
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error en fetch manual: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # WEBHOOKS
 # ============================================================
 
@@ -1103,39 +1235,53 @@ async def startup_event():
             replace_existing=True,
         )
 
-        # Job 3: Limpieza automática de partidos antiguos (cada día)
-        def cleanup_old_matches():
-            """Elimina partidos antiguos sin apuestas (>90 días)"""
+        # Job 3: Fetch diario de partidos (6:00 AM cada día)
+        def daily_match_fetch():
+            """Fetch diario de partidos desde Tennis API"""
             try:
-                fecha_limite = date.today() - timedelta(days=90)
-                cursor = db.conn.cursor()
-                
-                # Eliminar partidos sin apuestas mayores a 90 días
-                cursor.execute(
-                    """
-                    DELETE FROM matches
-                    WHERE fecha_partido < ?
-                    AND id NOT IN (SELECT DISTINCT match_id FROM bets)
-                    """,
-                    (fecha_limite,)
-                )
-                
-                deleted_count = cursor.rowcount
-                db.conn.commit()
-                
+                from src.automation.daily_match_fetcher import DailyMatchFetcher
+
+                logger.info("🌅 Iniciando fetch diario de partidos...")
+                pred = get_predictor()
+                fetcher = DailyMatchFetcher(db, odds_client, pred)
+                stats = fetcher.fetch_and_store_matches(days_ahead=7)
+
+                logger.info(f"✅ Fetch diario completado:")
+                logger.info(f"   - Partidos encontrados: {stats['matches_found']}")
+                logger.info(f"   - Partidos nuevos: {stats['matches_new']}")
+                logger.info(f"   - Predicciones generadas: {stats['predictions_generated']}")
+
+            except Exception as e:
+                logger.error(f"❌ Error en fetch diario: {e}", exc_info=True)
+
+        from apscheduler.triggers.cron import CronTrigger
+
+        scheduler.add_job(
+            func=daily_match_fetch,
+            trigger=CronTrigger(hour=6, minute=0),  # 6:00 AM cada día
+            id="daily_fetch_job",
+            name="Fetch diario de partidos (6 AM)",
+            replace_existing=True,
+        )
+
+        # Job 4: Limpieza automática de partidos antiguos (2:00 AM cada día)
+        def cleanup_old_matches():
+            """Elimina partidos antiguos (>30 días)"""
+            try:
+                deleted_count = db.cleanup_old_matches(days_old=30)
                 if deleted_count > 0:
                     logger.info(f"🧹 Limpieza automática: {deleted_count} partidos antiguos eliminados")
                 else:
                     logger.info("🧹 Limpieza automática: No hay partidos antiguos para eliminar")
-                    
+
             except Exception as e:
                 logger.error(f"❌ Error en limpieza automática: {e}")
 
         scheduler.add_job(
             func=cleanup_old_matches,
-            trigger=IntervalTrigger(hours=24),  # Cada 24 horas
+            trigger=CronTrigger(hour=2, minute=0),  # 2:00 AM cada día
             id="cleanup_job",
-            name="Limpieza automática de partidos antiguos",
+            name="Limpieza automática de partidos antiguos (2 AM)",
             replace_existing=True,
         )
 
@@ -1143,7 +1289,8 @@ async def startup_event():
         logger.info("✅ Scheduler iniciado:")
         logger.info("   - Actualizaciones de cuotas: cada 15 minutos")
         logger.info("   - Verificación de commits TML: cada hora")
-        logger.info("   - Limpieza de partidos antiguos: cada 24 horas")
+        logger.info("   - Fetch diario de partidos: 6:00 AM")
+        logger.info("   - Limpieza de partidos antiguos: 2:00 AM")
     except Exception as e:
         logger.error(f"❌ Error iniciando scheduler: {e}")
 

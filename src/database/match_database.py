@@ -183,6 +183,185 @@ class MatchDatabase:
         logger.warning(f"⚠️  No se pudo actualizar resultado del partido {match_id}")
         return False
 
+    def delete_match(self, match_id: int) -> bool:
+        """
+        Elimina un partido y todas sus predicciones y apuestas asociadas
+
+        Args:
+            match_id: ID del partido a eliminar
+
+        Returns:
+            True si se eliminó correctamente
+        """
+        cursor = self.conn.cursor()
+
+        try:
+            # Eliminar apuestas asociadas
+            cursor.execute("DELETE FROM bets WHERE match_id = ?", (match_id,))
+            bets_deleted = cursor.rowcount
+
+            # Eliminar predicciones asociadas
+            cursor.execute("DELETE FROM predictions WHERE match_id = ?", (match_id,))
+            predictions_deleted = cursor.rowcount
+
+            # Eliminar partido
+            cursor.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+            match_deleted = cursor.rowcount
+
+            self.conn.commit()
+
+            if match_deleted > 0:
+                logger.info(
+                    f"✅ Partido {match_id} eliminado "
+                    f"({predictions_deleted} predicciones, {bets_deleted} apuestas)"
+                )
+                return True
+            else:
+                logger.warning(f"⚠️  Partido {match_id} no encontrado")
+                return False
+
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error eliminando partido {match_id}: {e}")
+            return False
+
+    def match_exists(
+        self, jugador1_nombre: str, jugador2_nombre: str, fecha_partido: date
+    ) -> bool:
+        """
+        Verifica si ya existe un partido entre dos jugadores en una fecha
+
+        Args:
+            jugador1_nombre: Nombre del primer jugador
+            jugador2_nombre: Nombre del segundo jugador
+            fecha_partido: Fecha del partido
+
+        Returns:
+            True si el partido ya existe
+        """
+        cursor = self.conn.cursor()
+
+        # Buscar en ambas direcciones (J1 vs J2 o J2 vs J1)
+        cursor.execute(
+            """
+            SELECT id FROM matches
+            WHERE fecha_partido = ?
+            AND (
+                (jugador1_nombre = ? AND jugador2_nombre = ?)
+                OR
+                (jugador1_nombre = ? AND jugador2_nombre = ?)
+            )
+        """,
+            (fecha_partido, jugador1_nombre, jugador2_nombre, jugador2_nombre, jugador1_nombre),
+        )
+
+        result = cursor.fetchone()
+        exists = result is not None
+
+        if exists:
+            logger.debug(
+                f"ℹ️  Partido ya existe: {jugador1_nombre} vs {jugador2_nombre} ({fecha_partido})"
+            )
+
+        return exists
+
+    def get_matches_date_range(self, start_date: date, end_date: date) -> List[Dict]:
+        """
+        Obtiene todos los partidos en un rango de fechas
+
+        Args:
+            start_date: Fecha inicial (inclusive)
+            end_date: Fecha final (inclusive)
+
+        Returns:
+            Lista de partidos con predicciones
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM matches_with_latest_prediction
+            WHERE fecha_partido BETWEEN ? AND ?
+            ORDER BY fecha_partido ASC, hora_inicio ASC, id ASC
+        """,
+            (start_date, end_date),
+        )
+
+        matches = [dict(row) for row in cursor.fetchall()]
+        logger.info(
+            f"📊 Encontrados {len(matches)} partidos entre {start_date} y {end_date}"
+        )
+        return matches
+
+    def cleanup_old_matches(self, days_old: int = 30) -> int:
+        """
+        Elimina partidos más antiguos de N días
+
+        Args:
+            days_old: Número de días (partidos anteriores a esta fecha se eliminan)
+
+        Returns:
+            Número de partidos eliminados
+        """
+        cursor = self.conn.cursor()
+        cutoff_date = date.today() - timedelta(days=days_old)
+
+        try:
+            # Obtener IDs de partidos a eliminar
+            cursor.execute(
+                """
+                SELECT id FROM matches
+                WHERE fecha_partido < ? AND estado = 'completado'
+            """,
+                (cutoff_date,),
+            )
+
+            match_ids = [row["id"] for row in cursor.fetchall()]
+
+            if not match_ids:
+                logger.info(f"ℹ️  No hay partidos antiguos para eliminar (>{days_old} días)")
+                return 0
+
+            # Eliminar apuestas
+            cursor.execute(
+                f"""
+                DELETE FROM bets 
+                WHERE match_id IN ({','.join('?' * len(match_ids))})
+            """,
+                match_ids,
+            )
+
+            # Eliminar predicciones
+            cursor.execute(
+                f"""
+                DELETE FROM predictions 
+                WHERE match_id IN ({','.join('?' * len(match_ids))})
+            """,
+                match_ids,
+            )
+
+            # Eliminar partidos
+            cursor.execute(
+                f"""
+                DELETE FROM matches 
+                WHERE id IN ({','.join('?' * len(match_ids))})
+            """,
+                match_ids,
+            )
+
+            self.conn.commit()
+            deleted_count = len(match_ids)
+
+            logger.info(
+                f"✅ {deleted_count} partidos antiguos eliminados (anteriores a {cutoff_date})"
+            )
+            return deleted_count
+
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"❌ Error limpiando partidos antiguos: {e}")
+            return 0
+
+
     # ============================================================
     # MÉTODOS DE PREDICCIONES
     # ============================================================
