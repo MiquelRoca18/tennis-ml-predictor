@@ -172,12 +172,20 @@ async def get_matches_by_date(
         else:
             fecha = date.today()
 
-        # Validar rango (máximo 7 días atrás)
+        # Validar rango (7 días atrás hasta 7 días adelante)
         fecha_minima = date.today() - timedelta(days=7)
+        fecha_maxima = date.today() + timedelta(days=7)
+        
         if fecha < fecha_minima:
             raise HTTPException(
                 status_code=400,
-                detail=f"Fecha fuera de rango. Máximo 7 días atrás ({fecha_minima})",
+                detail=f"Fecha fuera de rango. Mínimo: {fecha_minima} (7 días atrás)",
+            )
+        
+        if fecha > fecha_maxima:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fecha fuera de rango. Máximo: {fecha_maxima} (7 días adelante)",
             )
 
         # Obtener partidos
@@ -1095,10 +1103,47 @@ async def startup_event():
             replace_existing=True,
         )
 
+        # Job 3: Limpieza automática de partidos antiguos (cada día)
+        def cleanup_old_matches():
+            """Elimina partidos antiguos sin apuestas (>90 días)"""
+            try:
+                fecha_limite = date.today() - timedelta(days=90)
+                cursor = db.conn.cursor()
+                
+                # Eliminar partidos sin apuestas mayores a 90 días
+                cursor.execute(
+                    """
+                    DELETE FROM matches
+                    WHERE fecha_partido < ?
+                    AND id NOT IN (SELECT DISTINCT match_id FROM bets)
+                    """,
+                    (fecha_limite,)
+                )
+                
+                deleted_count = cursor.rowcount
+                db.conn.commit()
+                
+                if deleted_count > 0:
+                    logger.info(f"🧹 Limpieza automática: {deleted_count} partidos antiguos eliminados")
+                else:
+                    logger.info("🧹 Limpieza automática: No hay partidos antiguos para eliminar")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error en limpieza automática: {e}")
+
+        scheduler.add_job(
+            func=cleanup_old_matches,
+            trigger=IntervalTrigger(hours=24),  # Cada 24 horas
+            id="cleanup_job",
+            name="Limpieza automática de partidos antiguos",
+            replace_existing=True,
+        )
+
         scheduler.start()
         logger.info("✅ Scheduler iniciado:")
         logger.info("   - Actualizaciones de cuotas: cada 15 minutos")
         logger.info("   - Verificación de commits TML: cada hora")
+        logger.info("   - Limpieza de partidos antiguos: cada 24 horas")
     except Exception as e:
         logger.error(f"❌ Error iniciando scheduler: {e}")
 
