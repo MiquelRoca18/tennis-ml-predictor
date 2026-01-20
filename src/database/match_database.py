@@ -38,8 +38,11 @@ class MatchDatabase:
         self.conn = sqlite3.connect(
             self.db_path,
             detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-            check_same_thread=False  # Permitir uso en múltiples threads (necesario para APScheduler)
+            check_same_thread=False,  # Permitir uso en múltiples threads
+            timeout=30.0  # Aumentar timeout a 30s para evitar "database is locked"
         )
+        # Activar WAL mode para mejor concurrencia
+        self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.row_factory = sqlite3.Row  # Permite acceso por nombre de columna
 
     def _initialize_schema(self):

@@ -36,7 +36,7 @@ logs/
 *.log
 
 # Data (se monta como volumen)
-datos/raw/
+# datos/raw/
 datos/cache_cuotas/
 backups/
 
