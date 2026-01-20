@@ -43,7 +43,7 @@ COPY --from=builder /root/.local /root/.local
 # Copiar código de la aplicación
 COPY src/ ./src/
 COPY scripts/ ./scripts/
-COPY .env.production .env
+COPY scripts/ ./scripts/
 
 # Copiar modelos entrenados
 COPY modelos/ ./modelos/
