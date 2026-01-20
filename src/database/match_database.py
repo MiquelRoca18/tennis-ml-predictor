@@ -44,30 +44,27 @@ class MatchDatabase:
 
     def _initialize_schema(self):
         """Crea las tablas si no existen"""
-        # Verificar si las tablas ya existen
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='matches'
-        """
-        )
-
-        if cursor.fetchone():
-            logger.info("✅ Esquema ya existe, saltando inicialización")
-            return
-
-        # Si no existen, crear desde schema
-        schema_path = Path(__file__).parent / "schema_v2.sql"
-
-        if schema_path.exists():
-            with open(schema_path, "r") as f:
-                schema_sql = f.read()
-                self.conn.executescript(schema_sql)
-                self.conn.commit()
-                logger.info("✅ Esquema de base de datos inicializado")
-        else:
-            logger.warning(f"⚠️  No se encontró schema_v2.sql en {schema_path}")
+        # Ejecutar siempre el script de esquema (usa CREATE TABLE IF NOT EXISTS)
+        # Esto asegura que si agregamos tablas nuevas (como match_pointbypoint), se creen.
+        
+        try:
+            # Intentar ruta relativa al modulo
+            schema_path = Path(__file__).parent / "schema_v2.sql"
+            
+            if schema_path.exists():
+                with open(schema_path, "r") as f:
+                    schema_script = f.read()
+                    self.conn.executescript(schema_script)
+                    self.conn.commit()
+            else:
+                # Fallback para ruta absoluta (Docker/prod)
+                with open("/app/src/database/schema_v2.sql", "r") as f:
+                    schema_script = f.read()
+                    self.conn.executescript(schema_script)
+                    self.conn.commit()
+                
+        except Exception as e:
+            logger.error(f"❌ Error inicializando esquema DB: {e}")
 
     # ============================================================
     # MÉTODOS DE PARTIDOS (MATCHES)

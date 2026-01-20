@@ -51,10 +51,10 @@ CREATE TABLE IF NOT EXISTS matches (
     UNIQUE(fecha_partido, jugador1_nombre, jugador2_nombre)
 );
 
-CREATE INDEX idx_matches_fecha ON matches(fecha_partido);
-CREATE INDEX idx_matches_estado ON matches(estado);
-CREATE INDEX idx_matches_fecha_estado ON matches(fecha_partido, estado);
-CREATE INDEX idx_matches_event_key ON matches(event_key);
+CREATE INDEX IF NOT EXISTS idx_matches_fecha ON matches(fecha_partido);
+CREATE INDEX IF NOT EXISTS idx_matches_estado ON matches(estado);
+CREATE INDEX IF NOT EXISTS idx_matches_fecha_estado ON matches(fecha_partido, estado);
+CREATE INDEX IF NOT EXISTS idx_matches_event_key ON matches(event_key);
 
 
 -- Tabla de predicciones versionadas
@@ -106,8 +106,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     UNIQUE(match_id, version)
 );
 
-CREATE INDEX idx_predictions_match ON predictions(match_id);
-CREATE INDEX idx_predictions_timestamp ON predictions(timestamp);
+CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id);
+CREATE INDEX IF NOT EXISTS idx_predictions_timestamp ON predictions(timestamp);
 
 
 -- Tabla de apuestas registradas
@@ -141,10 +141,10 @@ CREATE TABLE IF NOT EXISTS bets (
     UNIQUE(match_id)  -- Solo una apuesta activa por partido
 );
 
-CREATE INDEX idx_bets_match ON bets(match_id);
-CREATE INDEX idx_bets_estado ON bets(estado);
-CREATE INDEX idx_bets_resultado ON bets(resultado);
-CREATE INDEX idx_bets_timestamp ON bets(timestamp_apuesta);
+CREATE INDEX IF NOT EXISTS idx_bets_match ON bets(match_id);
+CREATE INDEX IF NOT EXISTS idx_bets_estado ON bets(estado);
+CREATE INDEX IF NOT EXISTS idx_bets_resultado ON bets(resultado);
+CREATE INDEX IF NOT EXISTS idx_bets_timestamp ON bets(timestamp_apuesta);
 
 
 -- Tabla de historial de cuotas (para análisis y mostrar top 3 en frontend)
@@ -166,9 +166,57 @@ CREATE TABLE IF NOT EXISTS odds_history (
     FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_odds_match ON odds_history(match_id);
-CREATE INDEX idx_odds_timestamp ON odds_history(timestamp);
-CREATE INDEX idx_odds_bookmaker ON odds_history(bookmaker);
+CREATE INDEX IF NOT EXISTS idx_odds_match ON odds_history(match_id);
+CREATE INDEX IF NOT EXISTS idx_odds_timestamp ON odds_history(timestamp);
+CREATE INDEX IF NOT EXISTS idx_odds_bookmaker ON odds_history(bookmaker);
+
+
+-- Tabla de Games (Resultados 6-4, 6-3 etc)
+CREATE TABLE IF NOT EXISTS match_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    
+    set_number VARCHAR(10),       -- ej: "Set 1"
+    game_number INTEGER,          -- ej: 1, 2, 3... global del partido o set
+    
+    server VARCHAR(200),          -- Jugador al servicio
+    winner VARCHAR(200),          -- Ganador del juego
+    score_games VARCHAR(20),      -- Score en juegos (ej: "1-0")
+    score_sets VARCHAR(20),       -- Score en sets (ej: "0-0")
+    was_break BOOLEAN DEFAULT 0,  -- Si hubo break
+    
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
+    UNIQUE(match_id, set_number, game_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_games_match ON match_games(match_id);
+
+
+-- Tabla de Point-by-Point
+CREATE TABLE IF NOT EXISTS match_pointbypoint (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    
+    set_number VARCHAR(10),
+    game_number INTEGER,
+    point_number INTEGER,         -- 1, 2, 3... dentro del juego
+    
+    server VARCHAR(200),
+    score VARCHAR(20),            -- "15-0", "30-15", "40-40"
+    
+    is_break_point BOOLEAN DEFAULT 0,
+    is_set_point BOOLEAN DEFAULT 0,
+    is_match_point BOOLEAN DEFAULT 0,
+    
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
+    UNIQUE(match_id, game_number, point_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pbp_match ON match_pointbypoint(match_id);
 
 
 -- ============================================================
