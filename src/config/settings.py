@@ -56,13 +56,16 @@ class Config:
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")
 
     # ==================== PARÁMETROS DE APUESTA ====================
-    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.03"))  # 3% EV mínimo
-    EV_THRESHOLD_ALERT = float(os.getenv("EV_THRESHOLD_ALERT", "0.05"))  # 5% para alertas
+    # CONFIGURACIÓN CONSERVADORA (alineada con backtesting exitoso)
+    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.10"))  # 10% EV mínimo (backtesting validado)
+    EV_THRESHOLD_ALERT = float(os.getenv("EV_THRESHOLD_ALERT", "0.15"))  # 15% para alertas
+    MAX_CUOTA = float(os.getenv("MAX_CUOTA", "2.0"))  # Solo favoritos (cuota < 2.0)
+    MIN_PROBABILIDAD = float(os.getenv("MIN_PROBABILIDAD", "0.60"))  # Solo cuando modelo > 60%
     BANKROLL_INICIAL = float(os.getenv("BANKROLL_INICIAL", "1000"))
 
     # ==================== KELLY CRITERION ====================
     KELLY_ENABLED = os.getenv("KELLY_ENABLED", "true").lower() == "true"
-    KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))  # 25% Kelly
+    KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.05"))  # 5% Kelly (muy conservador)
 
     # ==================== BOOKMAKERS ====================
     # The Odds API
@@ -259,14 +262,16 @@ MODEL_BACKUP_DIR=modelos/archive
 DATA_PATH=datos/processed/dataset_final.csv
 DATA_BACKUP_DIR=backups
 
-# Betting Parameters
-EV_THRESHOLD=0.03
-EV_THRESHOLD_ALERT=0.05
+# Betting Parameters (CONSERVADOR - alineado con backtesting exitoso)
+EV_THRESHOLD=0.10
+EV_THRESHOLD_ALERT=0.15
+MAX_CUOTA=2.0
+MIN_PROBABILIDAD=0.60
 BANKROLL_INICIAL=1000
 
 # Kelly Criterion
 KELLY_ENABLED=true
-KELLY_FRACTION=0.25
+KELLY_FRACTION=0.05
 
 # Bookmakers
 ODDS_REGIONS=eu,us

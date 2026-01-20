@@ -88,28 +88,21 @@ class PredictorCalibrado:
         """
         return (prob * cuota) - 1
 
-    def predecir_partido(self, jugador1, jugador1_rank, jugador2, jugador2_rank, superficie, cuota):
+    def predecir_partido(self, jugador1: str, jugador2: str, superficie: str, cuota: float):
         """
-        Predice un partido usando predicción bidireccional (igual que backtesting)
-
-        Este método replica EXACTAMENTE el proceso del backtesting:
-        1. Genera features completas para j1 vs j2
-        2. Genera features completas para j2 vs j1
-        3. Combina con prefijos j1_ y j2_
-        4. Hace UNA predicción: ¿Ganará j1?
+        Predice el resultado de un partido y calcula métricas de apuesta
 
         Args:
             jugador1: Nombre del jugador 1
-            jugador1_rank: Ranking del jugador 1 (no usado, se obtiene del histórico)
             jugador2: Nombre del jugador 2
-            jugador2_rank: Ranking del jugador 2 (no usado, se obtiene del histórico)
             superficie: Superficie (Hard/Clay/Grass)
-            cuota: Cuota para jugador 1
+            cuota: Cuota del jugador 1
 
         Returns:
             dict con predicción y análisis
         """
         from src.prediction.feature_generator_service import FeatureGeneratorService
+        from src.config.settings import Config
         from datetime import datetime
 
         # Obtener servicio de generación de features (singleton)
@@ -128,10 +121,17 @@ class PredictorCalibrado:
 
         # Combinar con prefijos j1_ y j2_
         features_combined = {}
+        confidence_metadata = {}  # Extraer metadata de confianza
+        
         for key, value in features_j1.items():
-            features_combined[f"j1_{key}"] = value
+            if key.startswith("_"):  # Metadata (no features del modelo)
+                confidence_metadata[key] = value
+            else:
+                features_combined[f"j1_{key}"] = value
+        
         for key, value in features_j2.items():
-            features_combined[f"j2_{key}"] = value
+            if not key.startswith("_"):  # Solo features, no metadata
+                features_combined[f"j2_{key}"] = value
 
         # Convertir a array en el orden correcto de features
         features_array = []
@@ -160,11 +160,11 @@ class PredictorCalibrado:
         # Edge (ventaja sobre la casa)
         edge = prob_j1_gana - prob_implicita
 
-        # Kelly stake
+        # Kelly stake usando Config.KELLY_FRACTION
         stake_recomendado = 0
         if ev > 0:
             kelly_pct = (prob_j1_gana * cuota - 1) / (cuota - 1)
-            kelly_pct = kelly_pct * 0.25  # Kelly fraction conservador
+            kelly_pct = kelly_pct * Config.KELLY_FRACTION  # Usar configuración centralizada (5%)
             stake_recomendado = max(kelly_pct * 100, 0)  # Stake en €
 
         # Formatear respuesta para la API
@@ -175,6 +175,11 @@ class PredictorCalibrado:
             "stake_recomendado": stake_recomendado,
             "confianza": max(prob_j1_gana, 1 - prob_j1_gana),
             "edge": edge,
+            # Agregar metadata de confianza
+            "confidence_level": confidence_metadata.get("_confidence_level", "UNKNOWN"),
+            "confidence_score": confidence_metadata.get("_confidence_score", 0.0),
+            "player1_known": confidence_metadata.get("_player1_known", False),
+            "player2_known": confidence_metadata.get("_player2_known", False),
         }
 
     def recomendar_apuesta(self, features, cuota, umbral_ev=0.03, stake=10.0):

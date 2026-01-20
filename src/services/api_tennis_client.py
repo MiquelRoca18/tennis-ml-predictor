@@ -62,23 +62,39 @@ class APITennisClient:
             if params:
                 request_params.update(params)
 
-            response = requests.get(self.base_url, params=request_params, timeout=10)
+            # Reintentos con backoff exponencial
+            max_retries = 3
+            timeout = 30  # Aumentado de 10s a 30s
+            
+            for attempt in range(max_retries):
+                try:
+                    response = requests.get(self.base_url, params=request_params, timeout=timeout)
+                    
+                    # Actualizar contador de requests
+                    self.requests_made += 1
+                    logger.debug(f"📊 Requests hechos: {self.requests_made}")
 
-            # Actualizar contador de requests
-            self.requests_made += 1
-            logger.info(f"📊 Requests hechos: {self.requests_made}")
+                    # Manejar errores HTTP
+                    response.raise_for_status()
 
-            # Manejar errores HTTP
-            response.raise_for_status()
+                    data = response.json()
 
-            data = response.json()
+                    # Verificar si la API devolvió success
+                    if data.get("success") != 1:
+                        logger.error(f"❌ API devolvió error: {data}")
+                        return None
 
-            # Verificar si la API devolvió success
-            if data.get("success") != 1:
-                logger.error(f"❌ API devolvió error: {data}")
-                return None
-
-            return data
+                    return data
+                    
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Backoff: 1s, 2s, 4s
+                        logger.warning(f"⚠️  Timeout en intento {attempt + 1}/{max_retries}, reintentando en {wait_time}s...")
+                        import time
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"❌ Timeout después de {max_retries} intentos")
+                        return None
 
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Error en petición a API-Tennis: {e}")
@@ -169,18 +185,36 @@ class APITennisClient:
         try:
             # Extraer información básica del fixture
             match_info = {
+                # IDs para tracking
                 "match_id": match.get("event_key"),
+                "event_key": match.get("event_key"),
+                "player1_key": match.get("first_player_key"),
+                "player2_key": match.get("second_player_key"),
+                "tournament_key": match.get("tournament_key"),
+                
+                # Información básica
                 "date": match.get("event_date"),
                 "time": match.get("event_time"),
                 "tournament": match.get("tournament_name", "Unknown"),
+                "tournament_season": match.get("tournament_season"),
                 "round": match.get("tournament_round", "Unknown"),
                 "surface": None,  # API-Tennis no proporciona superficie directamente
+                
+                # Jugadores
                 "player1_name": match.get("event_first_player", "Unknown"),
+                "player1_logo": match.get("event_first_player_logo"),  # URL del logo
                 "player2_name": match.get("event_second_player", "Unknown"),
-                "player1_key": match.get("first_player_key"),
-                "player2_key": match.get("second_player_key"),
+                "player2_logo": match.get("event_second_player_logo"),  # URL del logo
+                
+                # Estado
                 "status": match.get("event_status", "upcoming"),
                 "event_type": match.get("event_type_type", "Unknown"),
+                "event_live": match.get("event_live", "0"),
+                "event_qualification": match.get("event_qualification", "False"),
+                
+                # Resultado (si está disponible)
+                "event_final_result": match.get("event_final_result", "-"),
+                "event_winner": match.get("event_winner"),
             }
 
             return match_info
@@ -192,13 +226,17 @@ class APITennisClient:
     def extract_best_odds(self, odds_data: Dict, match_key: str) -> Optional[Dict]:
         """
         Extrae las mejores cuotas de los bookmakers
+        
+        Devuelve:
+        - Mejor cuota para cada jugador
+        - Top 3 cuotas para cada jugador (para mostrar en frontend)
 
         Args:
             odds_data: Datos de cuotas de la API
             match_key: ID del partido
 
         Returns:
-            Dict con mejores cuotas o None
+            Dict con mejores cuotas y top 3 o None
         """
         try:
             # Las cuotas vienen en formato: {match_key: {"Home/Away": {"Home": {...}, "Away": {...}}}}
@@ -215,32 +253,175 @@ class APITennisClient:
             if not home_odds or not away_odds:
                 return None
 
-            # Encontrar la mejor cuota (más alta) para cada jugador
-            best_player1_odds = max([float(v) for v in home_odds.values()]) if home_odds else None
-            best_player2_odds = max([float(v) for v in away_odds.values()]) if away_odds else None
+            # Convertir a lista de tuplas (bookmaker, cuota) y ordenar
+            player1_odds_list = [(bm, float(cuota)) for bm, cuota in home_odds.items()]
+            player2_odds_list = [(bm, float(cuota)) for bm, cuota in away_odds.items()]
+            
+            # Ordenar de mayor a menor (mejores cuotas primero)
+            player1_odds_list.sort(key=lambda x: x[1], reverse=True)
+            player2_odds_list.sort(key=lambda x: x[1], reverse=True)
 
-            # Encontrar qué bookmaker tiene las mejores cuotas
-            bookmaker_p1 = (
-                max(home_odds.items(), key=lambda x: float(x[1]))[0] if home_odds else None
-            )
-            bookmaker_p2 = (
-                max(away_odds.items(), key=lambda x: float(x[1]))[0] if away_odds else None
-            )
+            # Mejor cuota (la primera después de ordenar)
+            best_player1_odds = player1_odds_list[0][1] if player1_odds_list else None
+            best_player2_odds = player2_odds_list[0][1] if player2_odds_list else None
+            bookmaker_p1 = player1_odds_list[0][0] if player1_odds_list else None
+            bookmaker_p2 = player2_odds_list[0][0] if player2_odds_list else None
+
+            # Top 3 cuotas para cada jugador (para mostrar en frontend)
+            top3_player1 = [
+                {
+                    "bookmaker": bm,
+                    "odds": cuota,
+                    "is_best": i == 0  # La primera es la mejor
+                }
+                for i, (bm, cuota) in enumerate(player1_odds_list[:3])
+            ]
+            
+            top3_player2 = [
+                {
+                    "bookmaker": bm,
+                    "odds": cuota,
+                    "is_best": i == 0  # La primera es la mejor
+                }
+                for i, (bm, cuota) in enumerate(player2_odds_list[:3])
+            ]
 
             return {
+                # Mejores cuotas (para el modelo)
                 "player1_odds": best_player1_odds,
                 "player2_odds": best_player2_odds,
                 "bookmaker_p1": bookmaker_p1,
                 "bookmaker_p2": bookmaker_p2,
+                
+                # Top 3 para frontend
+                "top3_player1": top3_player1,
+                "top3_player2": top3_player2,
+                
+                # Total de bookmakers disponibles
+                "total_bookmakers": len(player1_odds_list),
             }
 
         except Exception as e:
             logger.error(f"❌ Error extrayendo cuotas: {e}")
             return None
 
+    def get_all_odds_batch(self, date_start: str, date_stop: str) -> Dict:
+        """
+        Obtiene TODAS las cuotas de un rango de fechas en una sola llamada
+        
+        Esta es la optimización clave: en lugar de hacer N llamadas individuales
+        para cada partido, hacemos 1 sola llamada que devuelve todas las cuotas.
+        
+        Args:
+            date_start: Fecha inicial (YYYY-MM-DD)
+            date_stop: Fecha final (YYYY-MM-DD)
+            
+        Returns:
+            Dict con {match_key: odds_data}
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return {}
+        
+        try:
+            logger.info(f"📊 Obteniendo cuotas batch ({date_start} a {date_stop})...")
+            
+            params = {
+                "date_start": date_start,
+                "date_stop": date_stop
+            }
+            
+            data = self._make_request("get_odds", params)
+            
+            if not data:
+                logger.warning("⚠️  No se pudieron obtener cuotas batch")
+                return {}
+            
+            odds_result = data.get("result", {})
+            logger.info(f"✅ Cuotas batch obtenidas para {len(odds_result)} partidos")
+            
+            return odds_result
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo cuotas batch: {e}")
+            return {}
+
+    def get_live_results_batch(self, event_keys: List[str]) -> Dict:
+        """
+        Obtiene resultados actualizados para múltiples partidos
+        
+        Args:
+            event_keys: Lista de IDs de partidos
+        
+        Returns:
+            Dict con event_key como clave y datos del partido
+        """
+        try:
+            # API-Tennis permite filtrar por múltiples IDs
+            # Convertir lista a string separado por comas
+            ids_str = ",".join(str(k) for k in event_keys)
+            
+            params = {
+                "event_key": ids_str
+            }
+            
+            response = self._make_request("get_events", params)
+            
+            if not response or "result" not in response:
+                return {}
+            
+            # Convertir lista a dict con event_key como clave
+            results = {}
+            for match in response["result"]:
+                event_key = match.get("event_key")
+                if event_key:
+                    results[event_key] = {
+                        "scores": match.get("scores"),
+                        "event_live": match.get("event_live"),
+                        "event_status": match.get("event_status"),
+                        "event_final_result": match.get("event_final_result")
+                    }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo resultados en vivo: {e}")
+            return {}
+
+    def get_standings(self, league: str = "ATP") -> List[Dict]:
+        """
+        Obtiene rankings ATP
+        
+        Args:
+            league: "ATP" (WTA no necesario por ahora)
+        
+        Returns:
+            Lista de jugadores con ranking
+        """
+        try:
+            params = {
+                "method": "get_standings",
+                "APIkey": self.api_key,
+                "event_type": league
+            }
+            
+            response = self._make_request(params)
+            
+            if not response or "result" not in response:
+                return []
+            
+            return response["result"]
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo rankings {league}: {e}")
+            return []
+
     def get_all_matches_with_odds(self, days_ahead: int = 7) -> List[Dict]:
         """
         Obtiene todos los partidos próximos con sus cuotas
+        
+        OPTIMIZACIÓN: Usa batch request para obtener todas las cuotas en 1 llamada
+        en lugar de N llamadas individuales.
 
         Args:
             days_ahead: Días hacia adelante
@@ -248,35 +429,66 @@ class APITennisClient:
         Returns:
             Lista de partidos con cuotas procesadas
         """
+        # 1. Obtener fixtures
         matches = self.get_upcoming_matches(days_ahead)
 
         if not matches:
             logger.info("ℹ️  No hay partidos disponibles")
             return []
 
-        matches_with_odds = []
+        logger.info(f"📥 {len(matches)} fixtures obtenidos, obteniendo cuotas batch...")
+
+        # 2. Obtener TODAS las cuotas en una sola llamada batch
+        today = datetime.now()
+        date_start = today.strftime("%Y-%m-%d")
+        date_stop = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        
+        all_odds = self.get_all_odds_batch(date_start, date_stop)
+        
+        if not all_odds:
+            logger.warning("⚠️  No se pudieron obtener cuotas, guardando partidos sin cuotas")
+
+        # 3. Combinar fixtures con cuotas
+        matches_processed = []
 
         for match in matches:
-            # Solo procesar partidos que no hayan empezado
-            if match.get("event_status") not in ["", "upcoming", None]:
-                continue
-
             match_info = self.extract_match_info(match)
             if not match_info:
                 continue
 
-            # Obtener cuotas para este partido
             match_key = match_info["match_id"]
-            odds_data = self.get_match_odds(match_key)
-
-            if odds_data:
-                best_odds = self.extract_best_odds(odds_data, match_key)
+            
+            # Buscar cuotas en el batch
+            if match_key and str(match_key) in all_odds:
+                best_odds = self.extract_best_odds(all_odds, match_key)
                 if best_odds:
                     match_info.update(best_odds)
-                    matches_with_odds.append(match_info)
+                else:
+                    # Partido sin cuotas válidas
+                    match_info.update({
+                        "player1_odds": None,
+                        "player2_odds": None,
+                        "top3_player1": [],
+                        "top3_player2": [],
+                    })
+            else:
+                # Partido sin cuotas
+                match_info.update({
+                    "player1_odds": None,
+                    "player2_odds": None,
+                    "top3_player1": [],
+                    "top3_player2": [],
+                })
+            
+            matches_processed.append(match_info)
 
-        logger.info(f"✅ {len(matches_with_odds)} partidos con cuotas válidas")
-        return matches_with_odds
+        matches_with_odds = [m for m in matches_processed if m.get("player1_odds")]
+        matches_without_odds = [m for m in matches_processed if not m.get("player1_odds")]
+        
+        logger.info(f"✅ {len(matches_with_odds)} partidos con cuotas")
+        logger.info(f"ℹ️  {len(matches_without_odds)} partidos sin cuotas (se guardarán igual)")
+        
+        return matches_processed  # Devolver TODOS los partidos
 
     def get_rate_limit_status(self) -> Dict:
         """

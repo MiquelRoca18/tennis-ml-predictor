@@ -9,22 +9,36 @@
 CREATE TABLE IF NOT EXISTS matches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     
+    -- IDs de API-Tennis (para tracking y sincronización)
+    event_key VARCHAR(50),  -- ID único del partido en API-Tennis
+    jugador1_key VARCHAR(50),  -- ID del jugador 1 en API-Tennis
+    jugador2_key VARCHAR(50),  -- ID del jugador 2 en API-Tennis
+    tournament_key VARCHAR(50),  -- ID del torneo en API-Tennis
+    
     -- Información del partido
     fecha_partido DATE NOT NULL,
     hora_inicio TIME,
     torneo VARCHAR(200),
+    tournament_season VARCHAR(10),  -- Ej: "2026"
     ronda VARCHAR(100),
     superficie VARCHAR(20) NOT NULL CHECK(superficie IN ('Hard', 'Clay', 'Grass', 'Carpet')),
     
     -- Jugadores
     jugador1_nombre VARCHAR(200) NOT NULL,
     jugador1_ranking INTEGER,
+    jugador1_logo TEXT,  -- URL del logo del jugador 1 desde API-Tennis
     jugador2_nombre VARCHAR(200) NOT NULL,
     jugador2_ranking INTEGER,
+    jugador2_logo TEXT,  -- URL del logo del jugador 2 desde API-Tennis
+    
+    -- Estado en vivo
+    event_live VARCHAR(1) DEFAULT '0',  -- '0' = no live, '1' = en vivo
+    event_qualification VARCHAR(10) DEFAULT 'False',  -- Si es clasificación
     
     -- Resultado (NULL si no ha terminado)
     resultado_ganador VARCHAR(200),  -- Nombre del ganador
     resultado_marcador VARCHAR(100),  -- Ej: "6-4, 7-5, 6-3"
+    event_final_result VARCHAR(20),  -- Ej: "2-0", "2-1"
     
     -- Estado del partido
     estado VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente', 'en_juego', 'completado', 'cancelado')),
@@ -40,6 +54,7 @@ CREATE TABLE IF NOT EXISTS matches (
 CREATE INDEX idx_matches_fecha ON matches(fecha_partido);
 CREATE INDEX idx_matches_estado ON matches(estado);
 CREATE INDEX idx_matches_fecha_estado ON matches(fecha_partido, estado);
+CREATE INDEX idx_matches_event_key ON matches(event_key);
 
 
 -- Tabla de predicciones versionadas
@@ -71,8 +86,14 @@ CREATE TABLE IF NOT EXISTS predictions (
     recomendacion VARCHAR(50) NOT NULL,  -- "APOSTAR a jugador1" | "APOSTAR a jugador2" | "NO APOSTAR"
     mejor_opcion VARCHAR(200),  -- Nombre del jugador recomendado o NULL
     
-    -- Confianza
+    -- Confianza del modelo (basada en diferencia de probabilidades)
     confianza VARCHAR(20) CHECK(confianza IN ('Alta', 'Media', 'Baja')),
+    
+    -- Confianza basada en conocimiento de jugadores (NUEVO)
+    confidence_level VARCHAR(20) CHECK(confidence_level IN ('HIGH', 'MEDIUM', 'LOW', 'UNKNOWN')),
+    confidence_score REAL CHECK(confidence_score >= 0 AND confidence_score <= 1),
+    player1_known BOOLEAN DEFAULT 0,  -- 1 si jugador1 está en datos históricos
+    player2_known BOOLEAN DEFAULT 0,  -- 1 si jugador2 está en datos históricos
     
     -- Kelly stake recomendado
     kelly_stake_jugador1 REAL,
@@ -126,7 +147,7 @@ CREATE INDEX idx_bets_resultado ON bets(resultado);
 CREATE INDEX idx_bets_timestamp ON bets(timestamp_apuesta);
 
 
--- Tabla de historial de cuotas (para análisis)
+-- Tabla de historial de cuotas (para análisis y mostrar top 3 en frontend)
 CREATE TABLE IF NOT EXISTS odds_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match_id INTEGER NOT NULL,
@@ -137,6 +158,7 @@ CREATE TABLE IF NOT EXISTS odds_history (
     
     -- Fuente
     bookmaker VARCHAR(100),  -- Ej: "bet365", "pinnacle"
+    is_best BOOLEAN DEFAULT 0,  -- 1 si es la mejor cuota disponible
     
     -- Timestamp
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -146,6 +168,7 @@ CREATE TABLE IF NOT EXISTS odds_history (
 
 CREATE INDEX idx_odds_match ON odds_history(match_id);
 CREATE INDEX idx_odds_timestamp ON odds_history(timestamp);
+CREATE INDEX idx_odds_bookmaker ON odds_history(bookmaker);
 
 
 -- ============================================================

@@ -133,6 +133,100 @@ class DailyMatchFetcher:
             stats["errors"].append(error_msg)
             return stats
 
+    def fetch_matches_for_date(self, target_date: date) -> Dict:
+        """
+        Fetches matches for a specific date
+        
+        Útil para cargar datos históricos o fetchear días específicos.
+        
+        Args:
+            target_date: Fecha específica para fetchear
+            
+        Returns:
+            Dict con estadísticas de la operación
+        """
+        logger.info(f"📅 Fetching matches for {target_date}...")
+        
+        stats = {
+            "timestamp": datetime.now().isoformat(),
+            "target_date": target_date.isoformat(),
+            "matches_found": 0,
+            "matches_new": 0,
+            "matches_existing": 0,
+            "predictions_generated": 0,
+            "api_calls_made": 0,
+            "errors": [],
+        }
+        
+        try:
+            # Fetch matches para esa fecha específica (1 día)
+            date_str = target_date.strftime("%Y-%m-%d")
+            
+            # Usar el cliente API directamente con fecha específica
+            logger.info(f"📥 Fetching fixtures for {date_str}...")
+            
+            # Calcular días desde hoy
+            days_diff = (target_date - date.today()).days
+            
+            if days_diff < 0:
+                # Fecha pasada - usar días negativos no funciona, usar fecha específica
+                logger.info(f"ℹ️  Fetching historical date: {date_str}")
+                # Modificar temporalmente para obtener esa fecha
+                matches_raw = []
+                params = {"date_start": date_str, "date_stop": date_str}
+                data = self.api_client._make_request("get_fixtures", params)
+                if data:
+                    matches_raw = data.get("result", [])
+                    
+                # Obtener cuotas batch para esa fecha
+                all_odds = self.api_client.get_all_odds_batch(date_str, date_str)
+                
+                # Procesar matches con cuotas
+                matches_processed = []
+                for match in matches_raw:
+                    match_info = self.api_client.extract_match_info(match)
+                    if match_info:
+                        match_key = match_info["match_id"]
+                        if match_key and str(match_key) in all_odds:
+                            best_odds = self.api_client.extract_best_odds(all_odds, match_key)
+                            if best_odds:
+                                match_info.update(best_odds)
+                        matches_processed.append(match_info)
+                
+                matches_raw = matches_processed
+            else:
+                # Fecha futura - usar el método normal
+                matches_raw = self.api_client.get_all_matches_with_odds(days_ahead=max(days_diff, 1))
+            
+            stats["matches_found"] = len(matches_raw)
+            stats["api_calls_made"] = self.api_client.requests_made
+            
+            # Procesar cada partido
+            for match_data in matches_raw:
+                try:
+                    result = self._process_match(match_data)
+                    
+                    if result["created"]:
+                        stats["matches_new"] += 1
+                        if result["prediction_generated"]:
+                            stats["predictions_generated"] += 1
+                    else:
+                        stats["matches_existing"] += 1
+                        
+                except Exception as e:
+                    error_msg = f"Error processing match: {e}"
+                    logger.error(f"❌ {error_msg}")
+                    stats["errors"].append(error_msg)
+            
+            logger.info(f"✅ Fetch for {target_date} completed: {stats['matches_new']} new, {stats['matches_existing']} existing")
+            return stats
+            
+        except Exception as e:
+            error_msg = f"Error fetching matches for {target_date}: {e}"
+            logger.error(f"❌ {error_msg}", exc_info=True)
+            stats["errors"].append(error_msg)
+            return stats
+
     def _process_match(self, match_data: Dict) -> Dict:
         """
         Processes a single match: checks if exists, creates if new, generates prediction
@@ -143,8 +237,47 @@ class DailyMatchFetcher:
         Returns:
             Dict with processing result
         """
+        # ===== FILTROS: Solo ATP individuales =====
+        
+        # 1. Filtrar WTA (verificar múltiples campos)
+        league = match_data.get("league", "").upper()
+        event_type = match_data.get("event_type", "").upper()
+        tournament = match_data.get("tournament", "")
+        tournament_lower = tournament.lower()
+        
+        # Detectar WTA por múltiples indicadores
+        is_wta = (
+            "WTA" in league or
+            "WTA" in event_type or
+            "WTA" in tournament or
+            "WOMEN" in event_type or
+            "WOMEN" in tournament_lower or
+            "LADIES" in event_type or
+            "LADIES" in tournament_lower or
+            "FEMALE" in event_type or
+            "FEMALE" in tournament_lower or
+            # W-series tournaments - verificar inicio del nombre
+            (tournament.startswith("W") and " " in tournament and tournament.split()[0][1:].isdigit())
+        )
+        
+        if is_wta:
+            logger.debug(f"⏭️  Ignorando partido WTA: {tournament}")
+            return {"created": False, "match_info": None, "prediction_generated": False}
+        
+        # 2. Filtrar dobles (buscar "/" o "Doubles" en nombres)
         player1_name = match_data.get("player1_name", "Unknown")
         player2_name = match_data.get("player2_name", "Unknown")
+        
+        if "/" in player1_name or "/" in player2_name:
+            logger.debug(f"⏭️  Ignorando partido de dobles: {player1_name} vs {player2_name}")
+            return {"created": False, "match_info": None, "prediction_generated": False}
+        
+        if "Doubles" in tournament or "doubles" in tournament:
+            logger.debug(f"⏭️  Ignorando torneo de dobles: {tournament}")
+            return {"created": False, "match_info": None, "prediction_generated": False}
+        
+        # ===== Continuar con procesamiento normal =====
+        
         match_date_str = match_data.get("date")
 
         # Parse date
@@ -160,20 +293,34 @@ class DailyMatchFetcher:
             return {"created": False, "match_info": None, "prediction_generated": False}
 
         # Determine surface
-        tournament = match_data.get("tournament", "Unknown")
         surface = self.surface_mapper.get_surface(tournament)
 
-        # Get odds
-        player1_odds = match_data.get("player1_odds")
-        player2_odds = match_data.get("player2_odds")
+        # Get odds (pueden ser None)
+        player1_odds = match_data.get("player1_odds") or 0.0
+        player2_odds = match_data.get("player2_odds") or 0.0
+        
+        has_odds = player1_odds > 0 and player2_odds > 0
 
-        if not player1_odds or not player2_odds:
-            logger.warning(
-                f"⚠️  Missing odds for {player1_name} vs {player2_name}, skipping"
-            )
-            return {"created": False, "match_info": None, "prediction_generated": False}
+        # Determinar estado inicial del partido basándose en datos de la API
+        event_live = match_data.get("event_live", "0")
+        event_final_result = match_data.get("event_final_result", "-")
+        event_status = match_data.get("status", "")
+        
+        # Lógica de determinación de estado - PRIORIDAD: live > completado > pendiente
+        if event_live == "1":
+            # Si está en vivo, SIEMPRE es "en_juego" aunque tenga resultado parcial
+            estado_inicial = "en_juego"
+        elif event_final_result and event_final_result != "-":
+            # Si tiene resultado final y NO está en vivo, está completado
+            estado_inicial = "completado"
+        elif event_status and event_status.lower() in ["finished", "ended", "completed"]:
+            # Si el status indica finalizado
+            estado_inicial = "completado"
+        else:
+            # Por defecto, pendiente
+            estado_inicial = "pendiente"
 
-        # Create match in database
+        # Create match in database (SIEMPRE, con o sin cuotas)
         try:
             match_id = self.db.create_match(
                 fecha_partido=match_date,
@@ -185,23 +332,45 @@ class DailyMatchFetcher:
                 hora_inicio=match_data.get("time"),
                 torneo=tournament,
                 ronda=match_data.get("round"),
-                jugador1_ranking=None,  # Tennis API doesn't provide rankings
+                jugador1_ranking=None,
                 jugador2_ranking=None,
+                # Campos adicionales para tracking
+                event_key=match_data.get("event_key"),
+                jugador1_key=match_data.get("player1_key"),
+                jugador2_key=match_data.get("player2_key"),
+                tournament_key=match_data.get("tournament_key"),
+                tournament_season=match_data.get("tournament_season"),
+                event_live=event_live,
+                event_qualification=match_data.get("event_qualification"),
+                # Logos de jugadores
+                jugador1_logo=match_data.get("player1_logo"),
+                jugador2_logo=match_data.get("player2_logo"),
+                # Estado inicial determinado
+                estado=estado_inicial,
             )
 
-            logger.info(
-                f"✅ Created match {match_id}: {player1_name} vs {player2_name} ({surface})"
-            )
+            if has_odds:
+                logger.info(
+                    f"✅ Created match {match_id}: {player1_name} vs {player2_name} ({surface}) - Cuotas: {player1_odds}/{player2_odds}"
+                )
+            else:
+                logger.info(
+                    f"✅ Created match {match_id}: {player1_name} vs {player2_name} ({surface}) - SIN CUOTAS"
+                )
 
-            # Generate prediction
-            prediction_generated = self._generate_prediction(
-                match_id=match_id,
-                player1_name=player1_name,
-                player2_name=player2_name,
-                surface=surface,
-                player1_odds=player1_odds,
-                player2_odds=player2_odds,
-            )
+            # Generate prediction SOLO si hay cuotas
+            prediction_generated = False
+            if has_odds:
+                prediction_generated = self._generate_prediction(
+                    match_id=match_id,
+                    player1_name=player1_name,
+                    player2_name=player2_name,
+                    surface=surface,
+                    player1_odds=player1_odds,
+                    player2_odds=player2_odds,
+                )
+            else:
+                logger.debug(f"ℹ️  Skipping prediction for match {match_id} (no odds)")
 
             return {
                 "created": True,
@@ -212,6 +381,7 @@ class DailyMatchFetcher:
                     "date": match_date.isoformat(),
                     "tournament": tournament,
                     "surface": surface,
+                    "has_odds": has_odds,
                 },
                 "prediction_generated": prediction_generated,
             }
@@ -247,9 +417,7 @@ class DailyMatchFetcher:
             # Generate prediction using ML model
             resultado_pred = self.predictor.predecir_partido(
                 jugador1=player1_name,
-                jugador1_rank=999,  # Unknown ranking
                 jugador2=player2_name,
-                jugador2_rank=999,
                 superficie=surface,
                 cuota=player1_odds,
             )
@@ -274,7 +442,7 @@ class DailyMatchFetcher:
                 mejor_opcion = player2_name
                 kelly_j1 = None
                 kelly_pct = (prob_j2 * player2_odds - 1) / (player2_odds - 1)
-                kelly_j2 = round(kelly_pct * 0.25 * 100, 2)
+                kelly_j2 = round(kelly_pct * Config.KELLY_FRACTION * 100, 2)
             else:
                 recomendacion = "NO APOSTAR"
                 mejor_opcion = None
@@ -305,6 +473,11 @@ class DailyMatchFetcher:
                 confianza=confianza,
                 kelly_stake_jugador1=kelly_j1,
                 kelly_stake_jugador2=kelly_j2,
+                # Agregar campos de confianza
+                confidence_level=resultado_pred.get("confidence_level"),
+                confidence_score=resultado_pred.get("confidence_score"),
+                player1_known=resultado_pred.get("player1_known"),
+                player2_known=resultado_pred.get("player2_known"),
             )
 
             logger.info(f"✅ Prediction generated for match {match_id}: {recomendacion}")

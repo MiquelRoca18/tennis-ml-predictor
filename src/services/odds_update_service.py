@@ -106,6 +106,8 @@ class OddsUpdateService:
     def detect_new_matches(self) -> Dict:
         """
         Detecta partidos nuevos en The Odds API y los crea automáticamente
+        
+        SOLO procesa partidos ATP (masculino). Partidos WTA son filtrados.
 
         Returns:
             Resumen de partidos nuevos detectados y creados
@@ -128,24 +130,57 @@ class OddsUpdateService:
                     "mensaje": "No hay partidos disponibles",
                 }
 
-            # Obtener partidos existentes en DB
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                """
-                SELECT jugador1_nombre, jugador2_nombre, fecha_partido
-                FROM matches
-                WHERE estado = 'pendiente'
-            """
-            )
-            partidos_existentes = {
-                (row["jugador1_nombre"], row["jugador2_nombre"], row["fecha_partido"])
-                for row in cursor.fetchall()
-            }
-
             # Detectar partidos nuevos
             partidos_nuevos_creados = 0
+            partidos_wta_filtrados = 0
 
             for match in matches_api:
+                # FILTRO WTA Y DOBLES: Solo procesar partidos ATP individuales
+                event_type = match.get("event_type", "").lower()
+                tournament_name = match.get("tournament", "")
+                tournament_lower = tournament_name.lower()
+                player1_name = match.get("player1_name", "")
+                player2_name = match.get("player2_name", "")
+                
+                # Detectar si es WTA por múltiples indicadores
+                is_wta = (
+                    # Keywords en event_type o tournament
+                    "wta" in event_type or
+                    "wta" in tournament_lower or
+                    "women" in event_type or
+                    "women" in tournament_lower or
+                    "ladies" in event_type or
+                    "ladies" in tournament_lower or
+                    "female" in event_type or
+                    "female" in tournament_lower or
+                    # W-series tournaments - verificar inicio del nombre
+                    tournament_name.startswith("W") and (" " in tournament_name and tournament_name.split()[0][1:].isdigit())
+                )
+                
+                # Detectar si es partido de dobles
+                is_doubles = (
+                    "/" in player1_name or
+                    "/" in player2_name or
+                    "doubles" in event_type or
+                    "doubles" in tournament_lower or
+                    "dobles" in tournament_lower
+                )
+                
+                if is_wta:
+                    partidos_wta_filtrados += 1
+                    logger.debug(
+                        f"⚠️  Partido WTA filtrado: {player1_name} vs {player2_name} "
+                        f"(Torneo: {tournament_name}, Tipo: {event_type})"
+                    )
+                    continue
+                
+                if is_doubles:
+                    logger.debug(
+                        f"⚠️  Partido de dobles filtrado: {player1_name} vs {player2_name} "
+                        f"(Torneo: {tournament_name})"
+                    )
+                    continue
+                
                 # Extraer fecha del partido (API-Tennis usa event_date y event_time)
                 try:
                     fecha_partido = datetime.strptime(match["date"], "%Y-%m-%d").date()
@@ -153,60 +188,148 @@ class OddsUpdateService:
                     logger.warning(f"⚠️  Fecha inválida para partido: {match}")
                     continue
 
-                # Verificar si ya existe
-                match_key = (match["player1_name"], match["player2_name"], str(fecha_partido))
-                match_key_reverse = (
-                    match["player2_name"],
-                    match["player1_name"],
-                    str(fecha_partido),
+                # Verificar si ya existe usando el método de la base de datos
+                if self.db.match_exists(match["player1_name"], match["player2_name"], fecha_partido):
+                    logger.debug(
+                        f"ℹ️  Partido ya existe: {match['player1_name']} vs {match['player2_name']} ({fecha_partido})"
+                    )
+                    continue
+
+                # Partido nuevo ATP - crear en DB
+                logger.info(
+                    f"🆕 Partido ATP nuevo detectado: {match['player1_name']} vs {match['player2_name']}"
                 )
 
-                if (
-                    match_key not in partidos_existentes
-                    and match_key_reverse not in partidos_existentes
-                ):
-                    # Partido nuevo - crear en DB
-                    logger.info(
-                        f"🆕 Partido nuevo detectado: {match['player1_name']} vs {match['player2_name']}"
+                try:
+                    match_id = self.db.create_match(
+                        fecha_partido=str(fecha_partido),
+                        hora_inicio=match.get("time", "00:00"),
+                        torneo=match.get("tournament", "Unknown"),
+                        ronda=match.get("round", "Unknown"),
+                        superficie=match.get("surface") or "Hard",  # Garantizar que nunca sea None
+                        jugador1_nombre=match["player1_name"],
+                        jugador1_ranking=None,  # API-Tennis no proporciona ranking en fixtures
+                        jugador1_cuota=match.get("player1_odds"),
+                        jugador2_nombre=match["player2_name"],
+                        jugador2_ranking=None,
+                        jugador2_cuota=match.get("player2_odds"),
+                        # Nuevos campos de tracking
+                        event_key=match.get("event_key"),
+                        jugador1_key=match.get("player1_key"),
+                        jugador2_key=match.get("player2_key"),
+                        tournament_key=match.get("tournament_key"),
+                        tournament_season=match.get("tournament_season"),
+                        event_live=match.get("event_live", "0"),
+                        event_qualification=match.get("event_qualification", "False"),
                     )
 
+                    logger.info(
+                        f"✅ Partido ATP {match_id} creado: {match['player1_name']} vs {match['player2_name']}"
+                    )
+                    partidos_nuevos_creados += 1
+                    
+                    # Guardar top 3 cuotas si están disponibles
+                    if match.get("top3_player1") and match.get("top3_player2"):
+                        self.db.save_top3_odds(
+                            match_id=match_id,
+                            top3_player1=match["top3_player1"],
+                            top3_player2=match["top3_player2"],
+                        )
+
+                    # Generar predicción automáticamente
                     try:
-                        match_id = self.db.create_match(
-                            fecha_partido=str(fecha_partido),
-                            hora_inicio=match.get("time", "00:00"),
-                            torneo=match.get("tournament", "Unknown"),
-                            ronda=match.get("round", "Unknown"),
-                            superficie=match.get(
-                                "surface", "Hard"
-                            ),  # Default Hard si no está disponible
-                            jugador1_nombre=match["player1_name"],
-                            jugador1_ranking=None,  # API-Tennis no proporciona ranking en fixtures
-                            jugador1_cuota=match.get("player1_odds"),
-                            jugador2_nombre=match["player2_name"],
-                            jugador2_ranking=None,
-                            jugador2_cuota=match.get("player2_odds"),
+                        from src.prediction.predictor_calibrado import PredictorCalibrado
+                        from src.config.settings import Config
+                        
+                        # Cargar predictor (lazy loading)
+                        predictor = PredictorCalibrado(Config.MODEL_PATH)
+                        
+                        # Generar predicción para ambos jugadores
+                        resultado_j1 = predictor.predecir_partido(
+                            jugador1=match["player1_name"],
+                            jugador2=match["player2_name"],
+                            superficie=match.get("surface") or "Hard",
+                            cuota=match.get("player1_odds", 2.0)
                         )
-
-                        logger.info(
-                            f"✅ Partido {match_id} creado: {match['player1_name']} vs {match['player2_name']}"
+                        
+                        resultado_j2 = predictor.predecir_partido(
+                            jugador1=match["player2_name"],
+                            jugador2=match["player1_name"],
+                            superficie=match.get("surface") or "Hard",
+                            cuota=match.get("player2_odds", 2.0)
                         )
-                        partidos_nuevos_creados += 1
-
-                        # NOTE: Automatic prediction generation will be implemented
-                        # when predictor is integrated with odds_update_service
-
+                        
+                        # Extraer probabilidades y métricas
+                        prob_j1 = resultado_j1["probabilidad"]
+                        prob_j2 = 1 - prob_j1
+                        ev_j1 = resultado_j1["expected_value"]
+                        ev_j2 = resultado_j2["expected_value"]
+                        edge_j1 = resultado_j1.get("edge", 0)
+                        edge_j2 = resultado_j2.get("edge", 0)
+                        kelly_j1 = resultado_j1.get("stake_recomendado", 0)
+                        kelly_j2 = resultado_j2.get("stake_recomendado", 0)
+                        
+                        # Determinar recomendación
+                        if ev_j1 > 0.03 and ev_j1 > ev_j2:
+                            recomendacion = f"APOSTAR a {match['player1_name']}"
+                            mejor_opcion = match["player1_name"]
+                        elif ev_j2 > 0.03:
+                            recomendacion = f"APOSTAR a {match['player2_name']}"
+                            mejor_opcion = match["player2_name"]
+                        else:
+                            recomendacion = "NO APOSTAR"
+                            mejor_opcion = None
+                        
+                        # Determinar confianza
+                        if abs(prob_j1 - 0.5) > 0.15:
+                            confianza = "Alta"
+                        elif abs(prob_j1 - 0.5) > 0.08:
+                            confianza = "Media"
+                        else:
+                            confianza = "Baja"
+                        
+                        # Guardar predicción
+                        self.db.add_prediction(
+                            match_id=match_id,
+                            jugador1_cuota=match.get("player1_odds", 2.0),
+                            jugador2_cuota=match.get("player2_odds", 2.0),
+                            jugador1_probabilidad=prob_j1,
+                            jugador2_probabilidad=prob_j2,
+                            jugador1_ev=ev_j1,
+                            jugador2_ev=ev_j2,
+                            jugador1_edge=edge_j1,
+                            jugador2_edge=edge_j2,
+                            recomendacion=recomendacion,
+                            mejor_opcion=mejor_opcion,
+                            confianza=confianza,
+                            kelly_stake_jugador1=kelly_j1,
+                            kelly_stake_jugador2=kelly_j2,
+                            confidence_level=resultado_j1.get("confidence_level"),
+                            confidence_score=resultado_j1.get("confidence_score"),
+                            player1_known=resultado_j1.get("player1_known"),
+                            player2_known=resultado_j2.get("player2_known"),
+                        )
+                        
+                        logger.info(f"✅ Predicción generada para partido {match_id}: {recomendacion}")
+                        
                     except Exception as e:
-                        logger.error(f"❌ Error creando partido: {e}")
+                        logger.error(f"❌ Error generando predicción para partido {match_id}: {e}")
+
+                except Exception as e:
+                    logger.error(f"❌ Error creando partido: {e}")
 
             logger.info(
-                f"✅ Detección completada: {partidos_nuevos_creados} partidos nuevos creados"
+                f"✅ Detección completada: {partidos_nuevos_creados} partidos ATP nuevos creados, "
+                f"{partidos_wta_filtrados} partidos WTA filtrados"
             )
 
             return {
                 "success": True,
                 "partidos_api": len(matches_api),
+                "partidos_atp": partidos_nuevos_creados,
+                "partidos_wta_filtrados": partidos_wta_filtrados,
                 "partidos_nuevos": partidos_nuevos_creados,
-                "mensaje": f"{partidos_nuevos_creados} partidos nuevos detectados y creados",
+                "mensaje": f"{partidos_nuevos_creados} partidos ATP nuevos detectados y creados ({partidos_wta_filtrados} WTA filtrados)",
             }
 
         except Exception as e:

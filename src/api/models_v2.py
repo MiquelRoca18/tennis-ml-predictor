@@ -61,7 +61,8 @@ class JugadorInfo(BaseModel):
 
     nombre: str
     ranking: Optional[int] = None
-    cuota: float = Field(..., gt=1.0, le=100.0)
+    cuota: float = Field(..., ge=1.0, le=500.0)  # Permitir cuotas hasta 500
+    logo: Optional[str] = None  # URL del logo del jugador desde API-Tennis
 
 
 # ============================================================
@@ -169,6 +170,118 @@ class MatchResult(BaseModel):
     stake: Optional[float] = None
     ganancia: Optional[float] = None
     roi: Optional[float] = None
+
+
+# ============================================================
+# MODELOS DE ESTADÍSTICAS DETALLADAS
+# ============================================================
+
+
+class SetScore(BaseModel):
+    """Marcador de un set"""
+
+    set: int
+    jugador1: int
+    jugador2: int
+
+
+class MatchStatsBasic(BaseModel):
+    """Estadísticas básicas del partido"""
+
+    total_sets: int
+    sets_ganados_jugador1: int
+    sets_ganados_jugador2: int
+    total_juegos: int
+    juegos_ganados_jugador1: int
+    juegos_ganados_jugador2: int
+    marcador_por_sets: List[SetScore]
+
+
+class PlayerStatsAdvanced(BaseModel):
+    """Estadísticas avanzadas de un jugador"""
+
+    juegos_al_saque: int
+    juegos_al_resto: int
+    juegos_ganados_al_saque: int
+    juegos_ganados_al_resto: int
+    porcentaje_saque: float
+    break_points_enfrentados: int
+    break_points_salvados: int
+    break_points_a_favor: int
+    break_points_convertidos: int
+    puntos_totales: int
+
+
+class MatchStatsAdvanced(BaseModel):
+    """Estadísticas avanzadas del partido"""
+
+    jugador1: PlayerStatsAdvanced
+    jugador2: PlayerStatsAdvanced
+
+
+class TimelineEntry(BaseModel):
+    """Entrada en el timeline del partido"""
+
+    set: str
+    juego: str
+    servidor: str
+    ganador: str
+    marcador_juegos: str
+    marcador_sets: str
+    fue_break: bool
+
+
+class MomentumEntry(BaseModel):
+    """Entrada de momentum del partido"""
+
+    juego: int
+    set: str
+    momentum: float  # -100 a +100
+    dominando: str  # "jugador1", "jugador2", "equilibrado"
+
+
+class KeyPoint(BaseModel):
+    """Punto clave del partido"""
+
+    tipo: str  # "break_point", "set_point", "match_point"
+    set: str
+    juego: str
+    punto: str
+    marcador: str
+    descripcion: str
+
+
+class MatchDetails(BaseModel):
+    """Vista Detallada - Estadísticas completas del partido"""
+
+    # Información básica
+    match_id: int
+    estado: str
+    ganador: Optional[str] = None
+    duracion_estimada: Optional[str] = None
+
+    # Estadísticas
+    estadisticas_basicas: MatchStatsBasic
+    estadisticas_avanzadas: Optional[MatchStatsAdvanced] = None
+
+
+class MatchAnalysis(BaseModel):
+    """Análisis Profundo - Análisis completo del partido"""
+
+    # Información básica
+    match_id: int
+    estado: str
+    ganador: Optional[str] = None
+    duracion_estimada: Optional[str] = None
+
+    # Estadísticas completas
+    estadisticas_basicas: MatchStatsBasic
+    estadisticas_avanzadas: Optional[MatchStatsAdvanced] = None
+
+    # Análisis profundo
+    timeline: List[TimelineEntry] = []
+    momentum: List[MomentumEntry] = []
+    puntos_clave: List[KeyPoint] = []
 
 
 # ============================================================

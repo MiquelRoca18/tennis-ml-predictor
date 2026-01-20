@@ -36,7 +36,9 @@ class MatchDatabase:
     def _connect(self):
         """Establece conexión con la base de datos"""
         self.conn = sqlite3.connect(
-            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+            self.db_path,
+            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            check_same_thread=False  # Permitir uso en múltiples threads (necesario para APScheduler)
         )
         self.conn.row_factory = sqlite3.Row  # Permite acceso por nombre de columna
 
@@ -84,6 +86,19 @@ class MatchDatabase:
         ronda: Optional[str] = None,
         jugador1_ranking: Optional[int] = None,
         jugador2_ranking: Optional[int] = None,
+        # Nuevos campos para tracking
+        event_key: Optional[str] = None,
+        jugador1_key: Optional[str] = None,
+        jugador2_key: Optional[str] = None,
+        tournament_key: Optional[str] = None,
+        tournament_season: Optional[str] = None,
+        event_live: Optional[str] = None,
+        event_qualification: Optional[str] = None,
+        # Logos de jugadores
+        jugador1_logo: Optional[str] = None,
+        jugador2_logo: Optional[str] = None,
+        # Estado del partido
+        estado: Optional[str] = "pendiente",
     ) -> int:
         """
         Crea un nuevo partido
@@ -97,10 +112,13 @@ class MatchDatabase:
             """
             INSERT INTO matches (
                 fecha_partido, hora_inicio, torneo, ronda, superficie,
-                jugador1_nombre, jugador1_ranking,
-                jugador2_nombre, jugador2_ranking,
+                jugador1_nombre, jugador1_ranking, jugador1_logo,
+                jugador2_nombre, jugador2_ranking, jugador2_logo,
+                event_key, jugador1_key, jugador2_key,
+                tournament_key, tournament_season,
+                event_live, event_qualification,
                 estado
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 fecha_partido,
@@ -110,8 +128,18 @@ class MatchDatabase:
                 superficie,
                 jugador1_nombre,
                 jugador1_ranking,
+                jugador1_logo,
                 jugador2_nombre,
                 jugador2_ranking,
+                jugador2_logo,
+                event_key,
+                jugador1_key,
+                jugador2_key,
+                tournament_key,
+                tournament_season,
+                event_live,
+                event_qualification,
+                estado,
             ),
         )
 
@@ -182,6 +210,98 @@ class MatchDatabase:
 
         logger.warning(f"⚠️  No se pudo actualizar resultado del partido {match_id}")
         return False
+
+    def get_live_matches(self) -> List[Dict]:
+        """Obtiene partidos que están en vivo"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM matches 
+            WHERE event_live = '1' 
+            AND estado IN ('pendiente', 'en_juego')
+            AND event_key IS NOT NULL
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_match_live_data(
+        self,
+        match_id: int,
+        scores: str = None,
+        event_live: str = None,
+        event_status: str = None,
+        event_final_result: str = None
+    ):
+        """Actualiza datos en vivo de un partido"""
+        cursor = self.conn.cursor()
+        
+        updates = []
+        params = []
+        
+        if scores is not None:
+            updates.append("resultado_marcador = ?")
+            params.append(str(scores))
+        
+        if event_live is not None:
+            updates.append("event_live = ?")
+            params.append(event_live)
+        
+        if event_status is not None:
+            # Mapear estado de API a nuestro estado
+            if event_status.lower() == "finished":
+                updates.append("estado = 'completado'")
+            elif event_live == "1":
+                updates.append("estado = 'en_juego'")
+        
+        if event_final_result is not None:
+            updates.append("event_final_result = ?")
+            params.append(event_final_result)
+        
+        if updates:
+            params.append(match_id)
+            query = f"UPDATE matches SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
+            self.conn.commit()
+            logger.debug(f"Actualizado partido en vivo {match_id}")
+
+    def get_match_by_event_key(self, event_key: str) -> Optional[Dict]:
+        """
+        Obtiene un partido por su event_key de API-Tennis
+        
+        Args:
+            event_key: ID del partido en API-Tennis
+        
+        Returns:
+            Dict con datos del partido o None si no se encuentra
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE event_key = ?", (event_key,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_recent_matches(self, days: int = 7) -> List[Dict]:
+        """
+        Obtiene partidos de los últimos N días
+        
+        Args:
+            days: Número de días hacia atrás (default: 7)
+        
+        Returns:
+            Lista de partidos
+        """
+        from datetime import date, timedelta
+        
+        cursor = self.conn.cursor()
+        fecha_inicio = date.today() - timedelta(days=days)
+        
+        cursor.execute(
+            """
+            SELECT * FROM matches 
+            WHERE fecha_partido >= ? 
+            ORDER BY fecha_partido DESC, hora_inicio DESC
+            """,
+            (str(fecha_inicio),)
+        )
+        
+        return [dict(row) for row in cursor.fetchall()]
 
     def delete_match(self, match_id: int) -> bool:
         """
@@ -382,6 +502,11 @@ class MatchDatabase:
         jugador2_edge: Optional[float] = None,
         kelly_stake_jugador1: Optional[float] = None,
         kelly_stake_jugador2: Optional[float] = None,
+        # Nuevos parámetros de confianza
+        confidence_level: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        player1_known: Optional[bool] = None,
+        player2_known: Optional[bool] = None,
     ) -> int:
         """
         Añade una nueva versión de predicción para un partido
@@ -414,8 +539,9 @@ class MatchDatabase:
                 jugador1_ev, jugador2_ev,
                 jugador1_edge, jugador2_edge,
                 recomendacion, mejor_opcion, confianza,
-                kelly_stake_jugador1, kelly_stake_jugador2
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                kelly_stake_jugador1, kelly_stake_jugador2,
+                confidence_level, confidence_score, player1_known, player2_known
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 match_id,
@@ -433,13 +559,19 @@ class MatchDatabase:
                 confianza,
                 kelly_stake_jugador1,
                 kelly_stake_jugador2,
+                confidence_level,
+                confidence_score,
+                1 if player1_known else 0,
+                1 if player2_known else 0,
             ),
         )
 
         self.conn.commit()
         prediction_id = cursor.lastrowid
-
-        logger.info(f"✅ Predicción v{new_version} creada para partido {match_id}: {recomendacion}")
+        
+        # Log con información de confianza
+        confidence_msg = f" (Confianza: {confidence_level})" if confidence_level else ""
+        logger.info(f"✅ Predicción v{new_version} creada para partido {match_id}: {recomendacion}{confidence_msg}")
         return prediction_id
 
     def get_latest_prediction(self, match_id: int) -> Optional[Dict]:
@@ -681,6 +813,134 @@ class MatchDatabase:
         )
 
         return [dict(row) for row in cursor.fetchall()]
+
+    # ============================================================
+    # MÉTODOS DE CUOTAS (ODDS HISTORY)
+    # ============================================================
+
+    def save_top3_odds(
+        self,
+        match_id: int,
+        top3_player1: List[Dict],
+        top3_player2: List[Dict],
+    ) -> bool:
+        """
+        Guarda el top 3 de cuotas para cada jugador
+        
+        Args:
+            match_id: ID del partido
+            top3_player1: Lista de dicts con bookmaker, odds, is_best
+            top3_player2: Lista de dicts con bookmaker, odds, is_best
+            
+        Returns:
+            True si se guardó correctamente
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Guardar cuotas de jugador 1
+            for odds_info in top3_player1:
+                cursor.execute(
+                    """
+                    INSERT INTO odds_history (
+                        match_id, jugador1_cuota, jugador2_cuota,
+                        bookmaker, is_best
+                    ) VALUES (?, ?, ?, ?, ?)
+                """,
+                    (
+                        match_id,
+                        odds_info["odds"],
+                        0.0,  # Placeholder para jugador2
+                        odds_info["bookmaker"],
+                        1 if odds_info["is_best"] else 0,
+                    ),
+                )
+            
+            # Guardar cuotas de jugador 2
+            for odds_info in top3_player2:
+                cursor.execute(
+                    """
+                    INSERT INTO odds_history (
+                        match_id, jugador1_cuota, jugador2_cuota,
+                        bookmaker, is_best
+                    ) VALUES (?, ?, ?, ?, ?)
+                """,
+                    (
+                        match_id,
+                        0.0,  # Placeholder para jugador1
+                        odds_info["odds"],
+                        odds_info["bookmaker"],
+                        1 if odds_info["is_best"] else 0,
+                    ),
+                )
+            
+            self.conn.commit()
+            logger.info(f"✅ Top 3 cuotas guardadas para partido {match_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error guardando top 3 cuotas: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_top3_odds(self, match_id: int) -> Dict:
+        """
+        Obtiene el top 3 de cuotas para un partido
+        
+        Args:
+            match_id: ID del partido
+            
+        Returns:
+            Dict con top3_player1 y top3_player2
+        """
+        cursor = self.conn.cursor()
+        
+        # Obtener cuotas de jugador 1 (donde jugador1_cuota > 0)
+        cursor.execute(
+            """
+            SELECT bookmaker, jugador1_cuota as odds, is_best
+            FROM odds_history
+            WHERE match_id = ? AND jugador1_cuota > 0
+            ORDER BY jugador1_cuota DESC
+            LIMIT 3
+        """,
+            (match_id,),
+        )
+        
+        top3_player1 = [
+            {
+                "bookmaker": row["bookmaker"],
+                "odds": row["odds"],
+                "is_best": bool(row["is_best"]),
+            }
+            for row in cursor.fetchall()
+        ]
+        
+        # Obtener cuotas de jugador 2 (donde jugador2_cuota > 0)
+        cursor.execute(
+            """
+            SELECT bookmaker, jugador2_cuota as odds, is_best
+            FROM odds_history
+            WHERE match_id = ? AND jugador2_cuota > 0
+            ORDER BY jugador2_cuota DESC
+            LIMIT 3
+        """,
+            (match_id,),
+        )
+        
+        top3_player2 = [
+            {
+                "bookmaker": row["bookmaker"],
+                "odds": row["odds"],
+                "is_best": bool(row["is_best"]),
+            }
+            for row in cursor.fetchall()
+        ]
+        
+        return {
+            "top3_player1": top3_player1,
+            "top3_player2": top3_player2,
+        }
 
     # ============================================================
     # MÉTODOS DE UTILIDAD
