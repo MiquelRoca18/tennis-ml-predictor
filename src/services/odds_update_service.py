@@ -149,16 +149,20 @@ class OddsUpdateService:
                 event_type = match.get("event_type", "").lower()
                 tournament_name = match.get("tournament", "")
                 
+                # Si no es ATP, ignorar (contar si es WTA para estadísticas)
+                if "wta" in event_type or "wta" in tournament_name.lower():
+                    partidos_wta_filtrados += 1
+                    continue
+
+                # Ignorar dobles
+                if "doubles" in event_type or "doubles" in tournament_name.lower():
+                    continue
+
                 # Extraer fecha del partido (API-Tennis usa event_date y event_time)
                 try:
                     fecha_partido = datetime.strptime(match["event_date"], "%Y-%m-%d").date()
                 except:
                     logger.warning(f"⚠️  Fecha inválida para partido: {match}")
-                    continue
-
-                # Si no es ATP, ignorar (contar si es WTA para estadísticas)
-                if "wta" in event_type or "wta" in tournament_name.lower():
-                    partidos_wta_filtrados += 1
                     continue
 
                 # Verificar si ya existe usando el método de la base de datos
@@ -311,19 +315,23 @@ class OddsUpdateService:
 
     def update_all_pending_matches(self) -> Dict:
         """
-        Actualiza todos los partidos pendientes
-
-        Proceso completo cada 15 minutos:
-        1. Detectar partidos nuevos en The Odds API
-        2. Actualizar cuotas de partidos existentes
-
-        Returns:
-            Resumen de la actualización
+        Actualiza cuotas de partidos pendientes con rate limiting para proteger la API.
+        
+        Estrategia de optimización:
+        1. Solo actualizar partidos que empiezan en las próximas 24 horas
+        2. Limitar a máximo 20 actualizaciones por ejecución (cada 15 min = 80/hora)
+        3. Priorizar partidos más próximos
         """
+        # IMPORTANTE: Crear nueva conexión para el thread
+        temp_db = MatchDatabase(self.db.db_path)
+        
         try:
             # PASO 1: Detectar partidos nuevos
-            resultado_nuevos = self.detect_new_matches()
-
+            # Nota: detect_new_matches crea su propia conexión interna, 
+            # pero podríamos optimizarlo pasándole temp_db si lo refactorizamos.
+            # Por ahora lo dejamos así para no tocar demasiadas cosas.
+            self.detect_new_matches()
+            
             # PASO 2: Actualizar partidos existentes con RATE LIMITING
             
             # Usar temp_db para queries con filtro de fecha (hoy y mañana)
