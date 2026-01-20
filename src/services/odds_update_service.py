@@ -36,14 +36,20 @@ class OddsUpdateService:
             logger.warning(f"⚠️  OddsUpdateService inicializado SIN API-Tennis: {e}")
             self.odds_client = None
 
-    def get_pending_matches(self) -> List[Dict]:
+    def get_pending_matches(self, db_connection: MatchDatabase = None) -> List[Dict]:
         """
         Obtiene todos los partidos pendientes (no completados)
+        
+        Args:
+            db_connection: Conexión opcional a DB (para threads)
 
         Returns:
             Lista de partidos pendientes
         """
-        cursor = self.db.conn.cursor()
+        # Usar la conexión proporcionada o la por defecto
+        database = db_connection or self.db
+        cursor = database.conn.cursor()
+        
         cursor.execute(
             """
             SELECT * FROM matches
@@ -322,37 +328,41 @@ class OddsUpdateService:
             pending_matches = self.get_pending_matches()
 
             if not pending_matches:
-                logger.info("ℹ️  No hay partidos pendientes para actualizar")
-                return {
-                    "success": True,
-                    "partidos_nuevos": resultado_nuevos.get("partidos_nuevos", 0),
-                    "partidos_actualizados": 0,
-                    "mensaje": "Actualización completada - no hay partidos pendientes",
-                }
+                return {"success": True, "updated": 0, "message": "No hay partidos pendientes"}
 
-            # Por ahora solo registramos que se ejecutó
-            logger.info(
-                f"🔄 Ejecutando actualización de {len(pending_matches)} partidos existentes"
-            )
+            updates_count = 0
+            
+            # Usar una instancia local del servicio con la DB temporal
+            # Hack: Creamos una instancia temporal de OddsUpdateService que usa temp_db
+            temp_service = OddsUpdateService(temp_db, self.odds_client)
 
-            # TODO: Aquí iría la integración con The Odds API
-            # Por cada partido:
-            # 1. Consultar cuotas actuales en The Odds API
-            # 2. Si las cuotas cambiaron significativamente (>5%)
-            # 3. Llamar al endpoint /matches/{id}/refresh
+            for match in pending_matches:
+                try:
+                    # Usar el método existente pero con la conexión correcta
+                    # (update_match_odds_manual usa self.db, por eso usamos temp_service)
+                    result = temp_service.update_match_odds_manual(match["id"])
+                    if result["success"]:
+                        updates_count += 1
+                except Exception as e:
+                    logger.error(f"Error actualizando match {match['id']}: {e}")
 
+            logger.info(f"✅ Actualización masiva completada: {updates_count}/{len(pending_matches)} partidos")
+            
+            # También detectar nuevos
+            # self.detect_new_matches() # Ya usa su propia temp_db si se llama desde aquí
+            
             return {
-                "success": True,
-                "partidos_nuevos": resultado_nuevos.get("partidos_nuevos", 0),
-                "partidos_encontrados": len(pending_matches),
-                "partidos_actualizados": 0,
-                "mensaje": "Actualización automática ejecutada (modo mock)",
-                "timestamp": datetime.now().isoformat(),
+                "success": True, 
+                "matches_processed": len(pending_matches),
+                "matches_updated": updates_count
             }
-
+            
         except Exception as e:
             logger.error(f"❌ Error en actualización automática: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
+        finally:
+            if temp_db.conn:
+                temp_db.conn.close()
 
     def get_update_stats(self) -> Dict:
         """
