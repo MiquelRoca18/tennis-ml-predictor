@@ -324,37 +324,51 @@ class OddsUpdateService:
             # PASO 1: Detectar partidos nuevos
             resultado_nuevos = self.detect_new_matches()
 
-            # PASO 2: Actualizar partidos existentes
-            pending_matches = self.get_pending_matches()
+            # PASO 2: Actualizar partidos existentes con RATE LIMITING
+            
+            # Usar temp_db para queries con filtro de fecha (hoy y mañana)
+            cursor = temp_db.conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM matches
+                WHERE estado = 'pendiente'
+                AND fecha_partido BETWEEN DATE('now') AND DATE('now', '+1 day')
+                ORDER BY fecha_partido ASC, hora_inicio ASC
+            """
+            )
+            # Fetch all pero procesaremos limitado
+            pending_matches = [dict(row) for row in cursor.fetchall()]
 
             if not pending_matches:
-                return {"success": True, "updated": 0, "message": "No hay partidos pendientes"}
+                return {"success": True, "updated": 0, "message": "No hay partidos pendientes próximos"}
 
+            # LIMITAR API USAGE: Máximo 20 partidos por ejecución
+            matches_to_update = pending_matches[:20]
             updates_count = 0
             
+            logger.info(f"🔄 Iniciando actualización de cuotas para {len(matches_to_update)} partidos (de {len(pending_matches)} pendientes próximos)")
+            
             # Usar una instancia local del servicio con la DB temporal
-            # Hack: Creamos una instancia temporal de OddsUpdateService que usa temp_db
             temp_service = OddsUpdateService(temp_db, self.odds_client)
 
-            for match in pending_matches:
+            for match in matches_to_update:
                 try:
-                    # Usar el método existente pero con la conexión correcta
-                    # (update_match_odds_manual usa self.db, por eso usamos temp_service)
                     result = temp_service.update_match_odds_manual(match["id"])
                     if result["success"]:
                         updates_count += 1
                 except Exception as e:
                     logger.error(f"Error actualizando match {match['id']}: {e}")
 
-            logger.info(f"✅ Actualización masiva completada: {updates_count}/{len(pending_matches)} partidos")
+            logger.info(f"✅ Actualización parcial completada: {updates_count}/{len(matches_to_update)} partidos actualizados")
             
             # También detectar nuevos
-            # self.detect_new_matches() # Ya usa su propia temp_db si se llama desde aquí
+            # self.detect_new_matches() 
             
             return {
                 "success": True, 
-                "matches_processed": len(pending_matches),
-                "matches_updated": updates_count
+                "matches_processed": len(matches_to_update),
+                "matches_updated": updates_count,
+                "remaining_pending": len(pending_matches) - len(matches_to_update)
             }
             
         except Exception as e:
