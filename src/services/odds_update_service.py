@@ -143,12 +143,16 @@ class OddsUpdateService:
                 event_type = match.get("event_type", "").lower()
                 tournament_name = match.get("tournament", "")
                 
+                # Extraer fecha del partido (API-Tennis usa event_date y event_time)
+                try:
+                    fecha_partido = datetime.strptime(match["event_date"], "%Y-%m-%d").date()
+                except:
+                    logger.warning(f"⚠️  Fecha inválida para partido: {match}")
+                    continue
+
                 # Si no es ATP, ignorar (contar si es WTA para estadísticas)
                 if "wta" in event_type or "wta" in tournament_name.lower():
                     partidos_wta_filtrados += 1
-                    fecha_partido = datetime.strptime(match["date"], "%Y-%m-%d").date()
-                except:
-                    logger.warning(f"⚠️  Fecha inválida para partido: {match}")
                     continue
 
                 # Verificar si ya existe usando el método de la base de datos
