@@ -1446,6 +1446,27 @@ async def startup_event():
     logger.info("🚀 INICIANDO SERVIDOR - SINCRONIZACIÓN INICIAL")
     logger.info("=" * 70)
 
+    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía (Railway/Docker)
+    try:
+        from src.database.match_database import MatchDatabase
+        db_check = MatchDatabase()
+        cursor = db_check.conn.cursor()
+        count = cursor.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        
+        if count < 100:
+            logger.warning(f"⚠️  Base de datos casi vacía ({count} partidos). Iniciando importación de históricos...")
+            try:
+                from scripts.import_historical_data import import_csv_to_db
+                import_csv_to_db()
+                logger.info("✅ Importación histórica completada en el arranque")
+            except Exception as e:
+                logger.error(f"❌ Error importando históricos: {e}")
+        else:
+            logger.info(f"✅ Base de datos contiene {count} partidos históricos")
+            
+    except Exception as e:
+        logger.error(f"⚠️  Error verificando estado DB: {e}")
+
     # 1. PRIMERO: Actualizar estados de partidos existentes
     try:
         from src.services.match_update_service import MatchUpdateService

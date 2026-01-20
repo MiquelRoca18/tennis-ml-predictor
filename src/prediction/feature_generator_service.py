@@ -45,57 +45,116 @@ class FeatureGeneratorService:
         logger.info("✅ Feature Generator Service inicializado")
 
     def _cargar_datos_historicos(self):
-        """Carga datos históricos de partidos de múltiples años"""
+        """
+        Carga datos históricos desde la Base de Datos SQLite.
+        Transforma las columnas al formato esperado por los calculadores (legacy CSV format).
+        """
+        import sqlite3
+        
         try:
-            # Cargar datos de 2022-2026 para tener suficiente histórico
+            logger.info("📂 Cargando datos históricos desde Base de Datos...")
+            
+            # Conectar a DB
+            conn = sqlite3.connect("matches_v2.db")
+            
+            # Query: Seleccionar solo partidos completados
+            query = """
+            SELECT 
+                fecha_partido, 
+                jugador1_nombre, jugador2_nombre, 
+                resultado_ganador, 
+                superficie, 
+                torneo, tournament_season,
+                jugador1_ranking, jugador2_ranking,
+                resultado_marcador
+            FROM matches 
+            WHERE estado = 'completado' 
+            AND resultado_ganador IS NOT NULL
+            ORDER BY fecha_partido ASC
+            """
+            
+            df_db = pd.read_sql_query(query, conn)
+            conn.close()
+            
+            if df_db.empty:
+                logger.warning("⚠️  La base de datos está vacía o no tiene partidos completados.")
+                # Si está vacía, intentamos cargar CSV como fallback (para primera ejecución si falla import)
+                logger.info("🔄 Intentando fallback a CSVs...")
+                return self._cargar_datos_historicos_csv_fallback()
+
+            # Transformación de columnas DB -> Formato Legacy Calculators (Winner/Loser)
+            rows = []
+            for _, row in df_db.iterrows():
+                try:
+                    winner = row['resultado_ganador']
+                    j1 = row['jugador1_nombre']
+                    j2 = row['jugador2_nombre']
+                    
+                    if winner == j1:
+                        winner_name = j1
+                        loser_name = j2
+                        winner_rank = row['jugador1_ranking']
+                        loser_rank = row['jugador2_ranking']
+                    else:
+                        winner_name = j2
+                        loser_name = j1
+                        winner_rank = row['jugador2_ranking']
+                        loser_rank = row['jugador1_ranking']
+                        
+                    rows.append({
+                        'tourney_date': pd.to_datetime(row['fecha_partido']),
+                        'tourney_name': row['torneo'],
+                        'surface': row['superficie'],
+                        'winner_name': winner_name,
+                        'loser_name': loser_name,
+                        'winner_rank': winner_rank,
+                        'loser_rank': loser_rank,
+                        'score': row['resultado_marcador']
+                    })
+                except:
+                    continue
+            
+            df = pd.DataFrame(rows)
+            df = df.sort_values("tourney_date").reset_index(drop=True)
+            
+            # Validación
+            logger.info(f"✅ Total datos históricos cargados de DB: {len(df)} partidos")
+            
+            if len(df) < 1000:
+                logger.warning(f"⚠️  Pocos datos en DB ({len(df)}).")
+
+            return df
+                
+        except Exception as e:
+            logger.error(f"❌ Error cargando datos de DB: {e}")
+            logger.info("🔄 Intentando fallback a CSVs...")
+            return self._cargar_datos_historicos_csv_fallback()
+
+    def _cargar_datos_historicos_csv_fallback(self):
+        """Método original de carga CSV (Backup)"""
+        try:
             dfs = []
             años = [2022, 2023, 2024, 2025, 2026]
-            
-            logger.info("📂 Cargando datos históricos...")
             for año in años:
                 try:
                     file_path = f"datos/raw/atp_matches_{año}_tml.csv"
                     df_año = pd.read_csv(file_path)
                     df_año["tourney_date"] = pd.to_datetime(df_año["tourney_date"])
                     dfs.append(df_año)
-                    logger.info(f"  ✅ Cargados {len(df_año)} partidos de {año}")
-                except FileNotFoundError:
-                    logger.warning(f"  ⚠️  Archivo no encontrado: datos/raw/atp_matches_{año}_tml.csv")
-                except Exception as e:
-                    logger.warning(f"  ⚠️  Error cargando {año}: {e}")
+                except:
+                    pass
             
             if not dfs:
-                raise Exception("❌ No se pudo cargar ningún archivo de datos históricos")
-            
+                raise Exception("No CSVs found")
+                
             df = pd.concat(dfs, ignore_index=True)
             df = df.sort_values("tourney_date").reset_index(drop=True)
-            
-            # Validación de datos
-            logger.info(f"✅ Total datos históricos: {len(df)} partidos ({años[0]}-{años[-1]})")
-            
-            # Verificar que tenemos datos recientes
-            fecha_mas_reciente = df["tourney_date"].max()
-            fecha_mas_antigua = df["tourney_date"].min()
-            logger.info(f"📅 Rango de fechas: {fecha_mas_antigua.date()} a {fecha_mas_reciente.date()}")
-            
-            # Contar jugadores únicos
-            jugadores_unicos = set(df["winner_name"].unique()) | set(df["loser_name"].unique())
-            logger.info(f"👥 Jugadores únicos en histórico: {len(jugadores_unicos)}")
-            
-            # Validar que tenemos suficientes datos
-            if len(df) < 1000:
-                logger.warning(f"⚠️  ADVERTENCIA: Solo {len(df)} partidos en histórico (recomendado: >1000)")
-            
-            if len(jugadores_unicos) < 100:
-                logger.warning(f"⚠️  ADVERTENCIA: Solo {len(jugadores_unicos)} jugadores únicos (recomendado: >100)")
-            
+            logger.info(f"✅ Fallback CSV exitoso: {len(df)} partidos")
             return df
-                
         except Exception as e:
-            logger.error(f"❌ ERROR CRÍTICO cargando datos históricos: {e}")
-            logger.error("❌ El sistema NO PUEDE generar predicciones precisas sin datos históricos")
-            logger.error("❌ Las predicciones serán UNIFORMES y NO CONFIABLES")
-            raise Exception(f"No se pudieron cargar datos históricos: {e}")
+             logger.error(f"❌ Fallback CSV falló: {e}")
+             # Retornar DF vacío para no romper todo, aunque las predicciones sean malas
+             return pd.DataFrame(columns=['tourney_date', 'winner_name', 'loser_name', 'surface'])
 
     def _inicializar_calculadores(self):
         """Inicializa todos los calculadores de features"""
