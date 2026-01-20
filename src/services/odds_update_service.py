@@ -107,15 +107,19 @@ class OddsUpdateService:
         """
         Detecta partidos nuevos en The Odds API y los crea automáticamente
         
-        SOLO procesa partidos ATP (masculino). Partidos WTA son filtrados.
-
+        Detecta y guarda partidos nuevos (para ejecutar en job programado)
+        
         Returns:
-            Resumen de partidos nuevos detectados y creados
+            Dict con estadísticas
         """
         if not self.odds_client:
             logger.warning("⚠️  The Odds API no disponible - saltando detección de partidos nuevos")
             return {"success": False, "partidos_nuevos": 0, "mensaje": "The Odds API no disponible"}
 
+        # IMPORTANTE: Crear nueva conexión para el thread
+        # Evita error "SQLite objects created in a thread can only be used in that same thread"
+        temp_db = MatchDatabase(self.db.db_path)
+        
         try:
             logger.info("🔍 Detectando partidos nuevos en The Odds API...")
 
@@ -138,51 +142,10 @@ class OddsUpdateService:
                 # FILTRO WTA Y DOBLES: Solo procesar partidos ATP individuales
                 event_type = match.get("event_type", "").lower()
                 tournament_name = match.get("tournament", "")
-                tournament_lower = tournament_name.lower()
-                player1_name = match.get("player1_name", "")
-                player2_name = match.get("player2_name", "")
                 
-                # Detectar si es WTA por múltiples indicadores
-                is_wta = (
-                    # Keywords en event_type o tournament
-                    "wta" in event_type or
-                    "wta" in tournament_lower or
-                    "women" in event_type or
-                    "women" in tournament_lower or
-                    "ladies" in event_type or
-                    "ladies" in tournament_lower or
-                    "female" in event_type or
-                    "female" in tournament_lower or
-                    # W-series tournaments - verificar inicio del nombre
-                    tournament_name.startswith("W") and (" " in tournament_name and tournament_name.split()[0][1:].isdigit())
-                )
-                
-                # Detectar si es partido de dobles
-                is_doubles = (
-                    "/" in player1_name or
-                    "/" in player2_name or
-                    "doubles" in event_type or
-                    "doubles" in tournament_lower or
-                    "dobles" in tournament_lower
-                )
-                
-                if is_wta:
+                # Si no es ATP, ignorar (contar si es WTA para estadísticas)
+                if "wta" in event_type or "wta" in tournament_name.lower():
                     partidos_wta_filtrados += 1
-                    logger.debug(
-                        f"⚠️  Partido WTA filtrado: {player1_name} vs {player2_name} "
-                        f"(Torneo: {tournament_name}, Tipo: {event_type})"
-                    )
-                    continue
-                
-                if is_doubles:
-                    logger.debug(
-                        f"⚠️  Partido de dobles filtrado: {player1_name} vs {player2_name} "
-                        f"(Torneo: {tournament_name})"
-                    )
-                    continue
-                
-                # Extraer fecha del partido (API-Tennis usa event_date y event_time)
-                try:
                     fecha_partido = datetime.strptime(match["date"], "%Y-%m-%d").date()
                 except:
                     logger.warning(f"⚠️  Fecha inválida para partido: {match}")
