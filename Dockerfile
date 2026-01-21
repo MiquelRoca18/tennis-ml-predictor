@@ -40,9 +40,9 @@ RUN apt-get update && apt-get install -y \
 # Copiar dependencias de Python desde builder
 COPY --from=builder /root/.local /root/.local
 
+# CACHE BUST: 2026-01-21-17:55 - Force rebuild from here
 # Copiar código de la aplicación
 COPY src/ ./src/
-COPY scripts/ ./scripts/
 COPY scripts/ ./scripts/
 
 # Copiar modelos entrenados
