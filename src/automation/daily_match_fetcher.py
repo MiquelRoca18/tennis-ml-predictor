@@ -262,6 +262,8 @@ class DailyMatchFetcher:
             "LADIES" in tournament_lower or
             "FEMALE" in event_type or
             "FEMALE" in tournament_lower or
+            "GIRLS" in event_type or
+            "GIRLS" in tournament_lower or
             # W-series tournaments - verificar inicio del nombre
             (tournament.startswith("W") and " " in tournament and tournament.split()[0][1:].isdigit())
         )
