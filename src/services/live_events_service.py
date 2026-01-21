@@ -4,7 +4,8 @@ Servicio para manejar eventos de partidos en vivo via WebSocket
 import logging
 import asyncio
 from typing import Dict, Optional
-from src.services.websocket_client import TennisWebSocketClient
+# DISABLED: websocket_client was removed in cleanup commit a764615
+# from src.services.websocket_client import TennisWebSocketClient
 
 logger = logging.getLogger(__name__)
 
