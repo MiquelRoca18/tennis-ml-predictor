@@ -154,9 +154,11 @@ class PlayerService:
             """, (ranking, points, movement, player_key))
         else:
             cursor.execute("""
-                UPDATE players 
-                SET wta_ranking = ?, ranking_points = ?, 
-                    ranking_movement = ?, last_updated = CURRENT_TIMESTAMP
+                UPDATE players
+                SET atp_ranking = ?,
+                    atp_points = ?,
+                    ranking_movement = ?,
+                    last_ranking_update = CURRENT_TIMESTAMP
                 WHERE player_key = ?
             """, (ranking, points, movement, player_key))
         
