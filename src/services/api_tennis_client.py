@@ -361,6 +361,124 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo livescore: {e}")
             return []
 
+    def get_tournaments(self) -> List[Dict]:
+        """
+        Obtiene lista de torneos ATP disponibles
+        
+        Returns:
+            Lista de torneos ATP
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return []
+            
+        try:
+            logger.info("📋 Consultando lista de torneos ATP...")
+            
+            data = self._make_request("get_tournaments", {})
+            
+            if not data:
+                logger.warning("⚠️  No se obtuvieron torneos")
+                return []
+                
+            tournaments = data.get("result", [])
+            
+            # Filtrar solo ATP Singles
+            atp_tournaments = [
+                t for t in tournaments
+                if t.get("event_type_type", "").lower() == "atp singles"
+            ]
+            
+            logger.info(f"✅ {len(atp_tournaments)} torneos ATP encontrados (de {len(tournaments)} totales)")
+            
+            return atp_tournaments
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo torneos: {e}")
+            return []
+
+    def get_events(self) -> List[Dict]:
+        """
+        Obtiene lista de tipos de eventos soportados
+        
+        Returns:
+            Lista de event types (filtrado a ATP Singles)
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return []
+            
+        try:
+            logger.info("📋 Consultando tipos de eventos...")
+            
+            data = self._make_request("get_events", {})
+            
+            if not data:
+                logger.warning("⚠️  No se obtuvieron tipos de eventos")
+                return []
+                
+            events = data.get("result", [])
+            
+            # Filtrar solo ATP Singles
+            atp_events = [
+                e for e in events
+                if e.get("event_type_type", "").lower() == "atp singles"
+            ]
+            
+            logger.info(f"✅ {len(atp_events)} tipos de eventos ATP (de {len(events)} totales)")
+            
+            return atp_events
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo eventos: {e}")
+            return []
+
+    def get_player_profile(self, player_key: str) -> Optional[Dict]:
+        """
+        Obtiene perfil completo de un jugador
+        
+        Args:
+            player_key: ID del jugador
+            
+        Returns:
+            Dict con perfil completo (stats, ranking, etc) o None
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return None
+            
+        try:
+            logger.info(f"👤 Consultando perfil del jugador {player_key}...")
+            
+            params = {"player_key": player_key}
+            data = self._make_request("get_players", params)
+            
+            if not data:
+                logger.warning(f"⚠️  No se obtuvo perfil del jugador {player_key}")
+                return None
+                
+            result = data.get("result", [])
+            
+            if not result:
+                return None
+                
+            player_data = result[0]
+            
+            # Filtrar stats solo de ATP Singles
+            if "stats" in player_data:
+                player_data["stats"] = [
+                    s for s in player_data["stats"]
+                    if s.get("type", "").lower() == "singles"  # Solo individuales
+                ]
+            
+            logger.info(f"✅ Perfil obtenido: {player_data.get('player_name')}")
+            
+            return player_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo perfil: {e}")
+            return None
+
     def extract_best_odds(self, odds_data: Dict, match_key: str) -> Optional[Dict]:
         """
         Extrae las mejores cuotas de los bookmakers
