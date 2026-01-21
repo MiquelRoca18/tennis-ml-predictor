@@ -114,9 +114,10 @@ class LiveMatchDataService:
             if pointbypoint:
                 points_stored = self.save_new_points(match_id, pointbypoint)
             
-            # 3. Guardar scores
+            # 3. Guardar scores estructurados por set
             scores = live_match.get("scores", [])
             if scores:
+                self.save_match_sets(match_id, scores)  # ✅ FIX: Guardar scores estructurados
                 games_stored = self.save_new_games(match_id, scores, pointbypoint)
             
             return {
@@ -127,6 +128,44 @@ class LiveMatchDataService:
         except Exception as e:
             logger.error(f"Error procesando partido {match_id}: {e}")
             return {"points_stored": 0, "games_stored": 0}
+    
+    def save_match_sets(self, match_id: int, scores: List[Dict]):
+        """
+        Guarda scores estructurados por set en la tabla match_sets
+        
+        Args:
+            match_id: ID del partido
+            scores: Array de scores desde API (ej: [{"score_first": "6", "score_second": "4", "score_set": "1"}])
+        """
+        if not scores:
+            return
+            
+        try:
+            cursor = self.conn.cursor()
+            
+            for score in scores:
+                set_number = int(score.get("score_set", 0))
+                player1_score = int(score.get("score_first", 0))
+                player2_score = int(score.get("score_second", 0))
+                
+                # Detectar tiebreak (ej: 7-6)
+                tiebreak_score = None
+                if (player1_score == 7 and player2_score == 6) or (player1_score == 6 and player2_score == 7):
+                    # Podría haber tiebreak, pero la API no siempre lo detalla
+                    tiebreak_score = f"{player1_score}-{player2_score}"
+                
+                # INSERT OR REPLACE para actualizar si ya existe
+                cursor.execute("""
+                    INSERT OR REPLACE INTO match_sets (
+                        match_id, set_number, player1_score, player2_score, tiebreak_score
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (match_id, set_number, player1_score, player2_score, tiebreak_score))
+            
+            self.conn.commit()
+            logger.debug(f"✅ Guardados {len(scores)} sets para partido {match_id}")
+            
+        except Exception as e:
+            logger.error(f"Error guardando sets para partido {match_id}: {e}")
     
     def save_new_points(self, match_id: int, pointbypoint: List[Dict]) -> int:
         """
@@ -284,32 +323,42 @@ class LiveMatchDataService:
         
         Args:
             match_id: ID del partido
-            live_match: Datos del partido en vivo
+            live_match: Datos del partido en vivo desde API
         """
         try:
             cursor = self.conn.cursor()
             
-            event_live = live_match.get("event_live", "0")
+            # Extraer datos del partido en vivo
             event_status = live_match.get("event_status", "")
             event_final_result = live_match.get("event_final_result", "-")
+            event_winner = live_match.get("event_winner")
+            event_game_result = live_match.get("event_game_result")  # ✅ FIX: Capturar score juego
+            event_serve = live_match.get("event_serve")  # ✅ FIX: Capturar quién saca
             
-            # Construir marcador
-            scores = live_match.get("scores", [])
-            score_str = " ".join([f"{s.get('score_first', 0)}-{s.get('score_second', 0)}" for s in scores])
+            # Determinar estado del partido
+            if event_status == "Finished":
+                estado = "completado"
+            elif event_status:
+                estado = "en_juego"
+            else:
+                estado = "pendiente"
             
+            # Actualizar en DB
             cursor.execute("""
-                UPDATE matches
-                SET event_live = ?,
-                    event_status = ?,
+                UPDATE matches 
+                SET estado = ?,
                     event_final_result = ?,
-                    resultado_marcador = ?
+                    resultado_ganador = ?,
+                    event_game_result = ?,
+                    event_serve = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (event_live, event_status, event_final_result, score_str, match_id))
+            """, (estado, event_final_result, event_winner, event_game_result, event_serve, match_id))
             
             self.conn.commit()
             
         except Exception as e:
-            logger.debug(f"Error actualizando estado: {e}")
+            logger.error(f"Error actualizando estado del partido {match_id}: {e}")
 
 
 if __name__ == "__main__":

@@ -202,9 +202,11 @@ class APITennisClient:
                 
                 # Información de jugadores
                 "player1_name": match.get("event_first_player", "Unknown"),
-                "player1_logo": match.get("event_first_player_logo"),
+                "player1_key": match.get("first_player_key"),
+                "player1_logo": match.get("event_first_player_logo"),  # ✅ FIX: Capturar logo
                 "player2_name": match.get("event_second_player", "Unknown"),
-                "player2_logo": match.get("event_second_player_logo"),
+                "player2_key": match.get("second_player_key"),
+                "player2_logo": match.get("event_second_player_logo"),  # ✅ FIX: Capturar logo
                 
                 # Estado del partido
                 "status": match.get("event_status", ""),
@@ -478,6 +480,51 @@ class APITennisClient:
         except Exception as e:
             logger.error(f"❌ Error obteniendo perfil: {e}")
             return None
+
+    def get_live_odds(self, match_key: str = None) -> Dict:
+        """
+        Obtiene cuotas en vivo para partidos ATP Singles
+        
+        Args:
+            match_key: ID del partido específico (opcional)
+            
+        Returns:
+            Dict con cuotas en vivo por partido
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return {}
+            
+        try:
+            logger.info(f"📊 Consultando cuotas en vivo{f' para partido {match_key}' if match_key else ''}...")
+            
+            params = {}
+            if match_key:
+                params["match_key"] = match_key
+            
+            data = self._make_request("get_live_odds", params)
+            
+            if not data:
+                logger.warning("⚠️  No se obtuvieron cuotas en vivo")
+                return {}
+                
+            result = data.get("result", {})
+            
+            # Filtrar solo ATP Singles
+            atp_odds = {}
+            for match_id, match_data in result.items():
+                event_type = (match_data.get("event_type") or match_data.get("event_type_type") or "").lower()
+                
+                if event_type == "atp singles":
+                    atp_odds[match_id] = match_data
+            
+            logger.info(f"✅ Cuotas en vivo obtenidas para {len(atp_odds)} partidos ATP")
+            
+            return atp_odds
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo cuotas en vivo: {e}")
+            return {}
 
     def extract_best_odds(self, odds_data: Dict, match_key: str) -> Optional[Dict]:
         """

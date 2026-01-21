@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS matches (
     -- Estado en vivo
     event_live VARCHAR(1) DEFAULT '0',  -- '0' = no live, '1' = en vivo
     event_qualification VARCHAR(10) DEFAULT 'False',  -- Si es clasificación
+    event_game_result VARCHAR(20),  -- Score actual del juego (ej: "30-15") - LIVE
+    event_serve VARCHAR(50),  -- Quién está sacando (ej: "First Player") - LIVE
+    event_status_detail VARCHAR(100),  -- Detalle del estado (ej: "Second serve")
     
     -- Resultado (NULL si no ha terminado)
     resultado_ganador VARCHAR(200),  -- Nombre del ganador
@@ -55,6 +58,22 @@ CREATE INDEX IF NOT EXISTS idx_matches_fecha ON matches(fecha_partido);
 CREATE INDEX IF NOT EXISTS idx_matches_estado ON matches(estado);
 CREATE INDEX IF NOT EXISTS idx_matches_fecha_estado ON matches(fecha_partido, estado);
 CREATE INDEX IF NOT EXISTS idx_matches_event_key ON matches(event_key);
+
+
+-- Tabla de sets (scores estructurados por set)
+CREATE TABLE IF NOT EXISTS match_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    set_number INTEGER NOT NULL,
+    player1_score INTEGER,
+    player2_score INTEGER,
+    tiebreak_score VARCHAR(20),  -- Ej: "7-5" si hubo tiebreak
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
+    UNIQUE(match_id, set_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_match_sets_match ON match_sets(match_id);
 
 
 -- Tabla de predicciones versionadas
