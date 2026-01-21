@@ -2104,16 +2104,16 @@ async def rankings_sync_diagnostic():
     
     try:
         # Paso 1: Verificar API client
-        if not tennis_api_client:
+        if not odds_client:
             diagnostic_info["step_1_api_client"] = "FAILED: API client not initialized"
-            diagnostic_info["errors"].append("tennis_api_client is None")
+            diagnostic_info["errors"].append("odds_client is None")
             return diagnostic_info
         
         diagnostic_info["step_1_api_client"] = "OK"
         
         # Paso 2: Llamar a la API
         try:
-            rankings = tennis_api_client.get_rankings(league="ATP")
+            rankings = odds_client.get_rankings(league="ATP")
             diagnostic_info["step_2_api_call"] = "OK"
         except Exception as e:
             diagnostic_info["step_2_api_call"] = f"FAILED: {str(e)}"
