@@ -76,7 +76,11 @@ app.add_middleware(
 )
 
 # Inicializar componentes
-db = MatchDatabase("matches_v2.db")
+# Usar variable de entorno para DB path (permite volumen persistente en Railway)
+import os
+DB_PATH = os.getenv("DB_PATH", "matches_v2.db")
+logger.info(f"📁 Database path: {DB_PATH}")
+db = MatchDatabase(DB_PATH)
 predictor = None
 
 # Inicializar APITennisClient y OddsUpdateService
@@ -1151,22 +1155,29 @@ async def get_scheduler_status():
         is_running = scheduler.running
         jobs = scheduler.get_jobs()
 
-        next_run = None
-        if jobs:
-            next_run = jobs[0].next_run_time.isoformat() if jobs[0].next_run_time else None
+        jobs_info = []
+        for job in jobs:
+            job_detail = scheduler.get_job(job.id)
+            jobs_info.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": job_detail.next_run_time.isoformat() if job_detail and job_detail.next_run_time else None,
+                "trigger": str(job.trigger)
+            })
 
         stats = update_service.get_update_stats()
 
         return {
             "scheduler_running": is_running,
             "total_jobs": len(jobs),
-            "next_run": next_run,
+            "jobs": jobs_info,
             "update_interval_minutes": 15,
             **stats,
         }
     except Exception as e:
         logger.error(f"❌ Error obteniendo estado del scheduler: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.get("/admin/pending-matches", tags=["Admin"])
@@ -1354,6 +1365,47 @@ async def manual_fetch_matches(days_ahead: int = Query(7, ge=1, le=14)):
     except Exception as e:
         logger.error(f"❌ Error en fetch manual: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/sync-matches-now", tags=["Admin"])
+async def sync_matches_now():
+    """
+    Sincroniza partidos para HOY inmediatamente
+    
+    Este endpoint es útil cuando la base de datos está vacía y necesitas
+    poblarla rápidamente con los partidos de hoy. A diferencia de fetch-matches,
+    este endpoint se enfoca solo en el día actual.
+    
+    Returns:
+        Estadísticas de la sincronización
+    """
+    try:
+        from datetime import date
+        from src.automation.daily_match_fetcher import DailyMatchFetcher
+        
+        logger.info("🔄 Sincronización manual de partidos de HOY solicitada")
+        
+        today = date.today()
+        pred = get_predictor()
+        fetcher = DailyMatchFetcher(db, odds_client, pred)
+        
+        # Fetch solo para hoy
+        result = fetcher.fetch_and_store_matches(days_ahead=1)
+        
+        logger.info(f"✅ Sincronización completada: {result['matches_added']} partidos añadidos para {today}")
+        
+        return {
+            "success": True,
+            "date": today.isoformat(),
+            "matches_added": result["matches_added"],
+            "matches_updated": result["matches_updated"],
+            "message": f"Sincronizados {result['matches_added']} partidos para hoy ({today})"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error en sincronización manual: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
 
 
 # ============================================================
