@@ -1,0 +1,293 @@
+{
+  "timestamp": "2026-01-21T08:42:24.832259",
+  "tables": {
+    "matches": {
+      "total_rows": 953,
+      "sample_size": 100,
+      "fields": {
+        "id": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "event_key": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "jugador1_key": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "jugador2_key": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "tournament_key": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "fecha_partido": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "hora_inicio": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "torneo": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "tournament_season": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "ronda": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "superficie": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_nombre": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_ranking": {
+          "populated": 1,
+          "empty": 99,
+          "percentage": 1.0
+        },
+        "jugador1_logo": {
+          "populated": 91,
+          "empty": 9,
+          "percentage": 91.0
+        },
+        "jugador2_nombre": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador2_ranking": {
+          "populated": 1,
+          "empty": 99,
+          "percentage": 1.0
+        },
+        "jugador2_logo": {
+          "populated": 87,
+          "empty": 13,
+          "percentage": 87.0
+        },
+        "event_live": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "event_qualification": {
+          "populated": 99,
+          "empty": 1,
+          "percentage": 99.0
+        },
+        "resultado_ganador": {
+          "populated": 89,
+          "empty": 11,
+          "percentage": 89.0
+        },
+        "resultado_marcador": {
+          "populated": 89,
+          "empty": 11,
+          "percentage": 89.0
+        },
+        "event_final_result": {
+          "populated": 89,
+          "empty": 11,
+          "percentage": 89.0
+        },
+        "estado": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "created_at": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "updated_at": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "first_player_key": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "second_player_key": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "event_game_result": {
+          "populated": 0,
+          "empty": 100,
+          "percentage": 0.0
+        },
+        "event_serve": {
+          "populated": 0,
+          "empty": 100,
+          "percentage": 0.0
+        },
+        "event_status_detail": {
+          "populated": 0,
+          "empty": 100,
+          "percentage": 0.0
+        }
+      }
+    },
+    "predictions": {
+      "total_rows": 685,
+      "sample_size": 100,
+      "fields": {
+        "id": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "match_id": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "version": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "timestamp": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_cuota": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador2_cuota": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_probabilidad": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador2_probabilidad": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_ev": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador2_ev": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador1_edge": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "jugador2_edge": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "recomendacion": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "mejor_opcion": {
+          "populated": 82,
+          "empty": 18,
+          "percentage": 82.0
+        },
+        "confianza": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "confidence_level": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "confidence_score": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "player1_known": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "player2_known": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        },
+        "kelly_stake_jugador1": {
+          "populated": 35,
+          "empty": 65,
+          "percentage": 35.0
+        },
+        "kelly_stake_jugador2": {
+          "populated": 47,
+          "empty": 53,
+          "percentage": 47.0
+        },
+        "modelo_version": {
+          "populated": 100,
+          "empty": 0,
+          "percentage": 100.0
+        }
+      }
+    },
+    "match_pointbypoint": {
+      "total_rows": 54632
+    },
+    "match_games": {
+      "total_rows": 13822
+    }
+  },
+  "summary": {
+    "matches_by_state": {
+      "completado": 707,
+      "en_juego": 14,
+      "pendiente": 232
+    },
+    "matches_with_prediction": 684,
+    "matches_without_prediction": 269,
+    "matches_with_live_data": 485
+  }
+}

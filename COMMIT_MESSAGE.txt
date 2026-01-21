@@ -1,0 +1,75 @@
+feat: complete live data collection and elite services system
+
+## Major Features
+
+### Live Match Data Collection
+- Add LiveMatchDataService for real-time point-by-point data capture (60s sync)
+- Add MatchUpdateService for automatic state updates (startup + 5min sync)
+- Add PointByPointService for managing match points and games data
+- Add WebSocket integration for live match events
+- Add LiveEventsService for real-time score updates
+
+### Multi-Bookmaker Odds
+- Add MultiBookmakerOddsService for odds from 12+ bookmakers
+- Add odds comparison and best odds endpoints
+- Automatic sync every 5 minutes
+
+### Elite Services (Day 1 & Day 2)
+- Add RankingServiceElite for ATP/WTA rankings
+- Add TournamentService for tournament management
+- Add H2HService for head-to-head statistics
+- Add PlayerService for player data normalization
+- Add MatchStatsService for detailed match statistics
+
+### Database Enhancements
+- Add match_pointbypoint table for point-level data
+- Add match_games table for game-level data
+- Add match_odds table for multi-bookmaker odds
+- Add cleanup_old_matches for 7-day retention
+- Add player key auto-population
+
+### API Endpoints (Elite)
+- GET /matches/{id}/pointbypoint - Point-by-point data
+- GET /matches/{id}/games - Game-by-game data
+- GET /matches/{id}/breakpoints - Break point statistics
+- GET /matches/{id}/stats/detailed - Detailed statistics by set
+- GET /matches/{id}/stats/summary - Statistical summary
+- GET /matches/{id}/analysis - Complete match analysis
+- GET /matches/{id}/odds/multi - Multi-bookmaker odds
+- GET /matches/{id}/odds/best - Best available odds
+- GET /matches/{id}/odds/comparison - Odds comparison
+
+### Optimizations
+- Optimize startup sync to skip completed matches (~70% fewer API calls)
+- Reduce development fetch from 7 to 3 days (temporary)
+- Change API request logging from INFO to DEBUG
+- Add rate limiting and backoff for API calls
+
+### Scheduler Jobs
+- Live match data sync: every 60 seconds
+- Match state updates: every 5 minutes
+- Multi-bookmaker odds sync: every 5 minutes
+- New match detection: every 2 hours
+- Daily cleanup: 2:00 AM (>7 days)
+- Rankings sync: 3:00 AM daily
+- Tournament sync: Sundays 4:00 AM
+
+### Cleanup
+- Remove unused match_details_sync_service.py
+- Archive development/testing scripts
+- Remove old backups and temporary files
+- Clean up logs and environment files
+
+## Breaking Changes
+None - all changes are additive
+
+## Database Migration
+Run on first startup - tables created automatically if not exist
+
+## Environment Variables
+No new variables required - uses existing API_TENNIS_API_KEY
+
+## Notes
+- Development mode uses 3-day fetch (TODO: change to 7 in production)
+- First startup may take 2-3 minutes for state sync
+- Backfill completed: 423 matches with point-by-point data

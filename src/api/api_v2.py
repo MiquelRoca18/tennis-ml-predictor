@@ -12,6 +12,10 @@ from datetime import datetime, date, timedelta
 from typing import Optional
 import logging
 import asyncio
+import json
+import threading
+import traceback
+
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1393,7 +1397,7 @@ async def github_webhook(request: Request):
             raise HTTPException(status_code=401, detail="Invalid signature")
 
         # Parsear evento
-        import json
+
 
         event_data = json.loads(payload)
 
@@ -1609,14 +1613,14 @@ async def startup_event():
 
         # IMPORTANTE: Ejecutar en thread separado para no bloquear el servidor
         from src.services.live_events_service import LiveEventsService
-        import threading
+
         
         global live_events_service
         live_events_service = LiveEventsService(db, odds_client)
         
         def run_websocket():
             """Ejecutar WebSocket en thread separado"""
-            import asyncio
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(live_events_service.start())
@@ -2118,7 +2122,7 @@ async def rankings_sync_diagnostic():
         except Exception as e:
             diagnostic_info["step_2_api_call"] = f"FAILED: {str(e)}"
             diagnostic_info["errors"].append(f"API call error: {str(e)}")
-            import traceback
+
             diagnostic_info["traceback"] = traceback.format_exc()
             return diagnostic_info
         
@@ -2151,7 +2155,7 @@ async def rankings_sync_diagnostic():
         except Exception as e:
             diagnostic_info["step_4_player_creation"] = f"FAILED: {str(e)}"
             diagnostic_info["errors"].append(f"Player creation error: {str(e)}")
-            import traceback
+
             diagnostic_info["traceback"] = traceback.format_exc()
             return diagnostic_info
         
@@ -2172,7 +2176,7 @@ async def rankings_sync_diagnostic():
         except Exception as e:
             diagnostic_info["step_5_ranking_update"] = f"FAILED: {str(e)}"
             diagnostic_info["errors"].append(f"Ranking update error: {str(e)}")
-            import traceback
+
             diagnostic_info["traceback"] = traceback.format_exc()
             return diagnostic_info
         
@@ -2182,7 +2186,7 @@ async def rankings_sync_diagnostic():
     except Exception as e:
         diagnostic_info["overall_status"] = "FAILED"
         diagnostic_info["errors"].append(f"Unexpected error: {str(e)}")
-        import traceback
+
         diagnostic_info["traceback"] = traceback.format_exc()
         return diagnostic_info
 
