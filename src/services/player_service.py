@@ -148,8 +148,8 @@ class PlayerService:
         if league == 'ATP':
             cursor.execute("""
                 UPDATE players 
-                SET atp_ranking = ?, ranking_points = ?, 
-                    ranking_movement = ?, last_updated = CURRENT_TIMESTAMP
+                SET atp_ranking = ?, atp_points = ?, 
+                    ranking_movement = ?, last_ranking_update = CURRENT_TIMESTAMP
                 WHERE player_key = ?
             """, (ranking, points, movement, player_key))
         else:
