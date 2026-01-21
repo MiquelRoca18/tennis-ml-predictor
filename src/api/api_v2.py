@@ -1389,22 +1389,29 @@ async def sync_matches_now():
         pred = get_predictor()
         fetcher = DailyMatchFetcher(db, odds_client, pred)
         
-        # Fetch solo para hoy
+        # Fetch solo para hoy (1 día adelante)
         result = fetcher.fetch_and_store_matches(days_ahead=1)
         
-        logger.info(f"✅ Sincronización completada: {result['matches_added']} partidos añadidos para {today}")
+        # El fetcher devuelve: matches_new, matches_existing, matches_found, etc.
+        matches_added = result.get("matches_new", 0)
+        matches_found = result.get("matches_found", 0)
+        
+        logger.info(f"✅ Sincronización completada: {matches_added} partidos añadidos de {matches_found} encontrados para {today}")
         
         return {
             "success": True,
             "date": today.isoformat(),
-            "matches_added": result["matches_added"],
-            "matches_updated": result["matches_updated"],
-            "message": f"Sincronizados {result['matches_added']} partidos para hoy ({today})"
+            "matches_found": matches_found,
+            "matches_added": matches_added,
+            "matches_existing": result.get("matches_existing", 0),
+            "predictions_generated": result.get("predictions_generated", 0),
+            "message": f"Sincronizados {matches_added} partidos nuevos para hoy ({today})"
         }
         
     except Exception as e:
         logger.error(f"❌ Error en sincronización manual: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+
 
 
 
