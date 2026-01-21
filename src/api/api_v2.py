@@ -2104,20 +2104,22 @@ async def rankings_sync_diagnostic():
     
     try:
         # Paso 1: Verificar API client
-        if not api_client:
+        if not tennis_api_client:
             diagnostic_info["step_1_api_client"] = "FAILED: API client not initialized"
-            diagnostic_info["errors"].append("API client is None")
+            diagnostic_info["errors"].append("tennis_api_client is None")
             return diagnostic_info
         
         diagnostic_info["step_1_api_client"] = "OK"
         
         # Paso 2: Llamar a la API
         try:
-            rankings = api_client.get_rankings(league="ATP")
+            rankings = tennis_api_client.get_rankings(league="ATP")
             diagnostic_info["step_2_api_call"] = "OK"
         except Exception as e:
             diagnostic_info["step_2_api_call"] = f"FAILED: {str(e)}"
             diagnostic_info["errors"].append(f"API call error: {str(e)}")
+            import traceback
+            diagnostic_info["traceback"] = traceback.format_exc()
             return diagnostic_info
         
         # Paso 3: Verificar datos recibidos
@@ -2130,9 +2132,9 @@ async def rankings_sync_diagnostic():
         diagnostic_info["data_sample"] = rankings[0] if rankings else None
         
         # Paso 4: Intentar crear un jugador de prueba
-        if not player_service:
-            diagnostic_info["step_4_player_creation"] = "FAILED: player_service not initialized"
-            diagnostic_info["errors"].append("player_service is None")
+        if not ranking_service:
+            diagnostic_info["step_4_player_creation"] = "FAILED: ranking_service not initialized"
+            diagnostic_info["errors"].append("ranking_service is None")
             return diagnostic_info
         
         try:
@@ -2140,7 +2142,8 @@ async def rankings_sync_diagnostic():
             player_key = test_player.get('player_key')
             player_name = test_player.get('player')
             
-            player_service.get_or_create_player(
+            # Use ranking_service's player_service
+            ranking_service.player_service.get_or_create_player(
                 player_key=player_key,
                 player_name=player_name
             )
@@ -2148,6 +2151,8 @@ async def rankings_sync_diagnostic():
         except Exception as e:
             diagnostic_info["step_4_player_creation"] = f"FAILED: {str(e)}"
             diagnostic_info["errors"].append(f"Player creation error: {str(e)}")
+            import traceback
+            diagnostic_info["traceback"] = traceback.format_exc()
             return diagnostic_info
         
         # Paso 5: Intentar actualizar ranking
@@ -2156,7 +2161,7 @@ async def rankings_sync_diagnostic():
             points = int(test_player.get('points', 0))
             movement = test_player.get('movement', 'same')
             
-            player_service.update_ranking(
+            ranking_service.player_service.update_ranking(
                 player_key=player_key,
                 ranking=ranking,
                 points=points,
