@@ -27,26 +27,29 @@ def parse_score_to_sets(marcador: str):
     if not marcador or marcador == '-' or marcador == '':
         return sets
     
-    # Limpiar y separar por comas
-    parts = marcador.replace(' ', '').split(',')
+    # Limpiar espacios y separar por comas
+    parts = [p.strip() for p in marcador.split(',')]
     
-    for i, part in enumerate(parts, 1):
-        # Buscar patrón número-número
-        match = re.search(r'(\d+)-(\d+)', part)
-        if match:
+    set_number = 1
+    for part in parts:
+        # Buscar TODOS los patrones número-número en cada parte
+        matches = re.findall(r'(\d+)-(\d+)', part)
+        
+        for match in matches:
             try:
-                p1_score = int(match.group(1))
-                p2_score = int(match.group(2))
+                p1_score = int(match[0])
+                p2_score = int(match[1])
                 
-                # Validar que sean scores válidos de tenis
+                # Validar que sean scores válidos de tenis (0-7, permitir tiebreak)
                 if 0 <= p1_score <= 7 and 0 <= p2_score <= 7:
                     sets.append({
-                        "set": i,
+                        "set": set_number,
                         "p1": p1_score,
                         "p2": p2_score
                     })
-            except ValueError:
-                logger.warning(f"Error parseando set: {part}")
+                    set_number += 1
+            except (ValueError, IndexError):
+                logger.warning(f"Error parseando score: {match}")
     
     return sets
 

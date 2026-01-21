@@ -2087,16 +2087,62 @@ async def get_player_ranking(player_key: int):
 @app.post("/rankings/sync", tags=["Elite - Rankings"])
 async def sync_rankings():
     """
-    Sincroniza rankings ATP y WTA desde API
+    Sincroniza rankings ATP desde API y actualiza partidos
     
     Returns:
-        Número de jugadores sincronizados
+        Número de jugadores sincronizados y partidos actualizados
     """
     if not ranking_service:
         raise HTTPException(status_code=503, detail="Ranking service not available")
     
     try:
-        result = ranking_service.sync_all_rankings()
+        # Sincronizar rankings ATP (solo ATP, no WTA)
+        atp_count = ranking_service.sync_atp_rankings(limit=500)
+        
+        # Actualizar partidos con rankings
+        cursor = db.conn.cursor()
+        
+        # Actualizar jugador1_ranking
+        cursor.execute("""
+            UPDATE matches
+            SET jugador1_ranking = (
+                SELECT atp_ranking FROM players 
+                WHERE player_key = matches.jugador1_key
+            )
+            WHERE jugador1_key IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM players 
+                WHERE player_key = matches.jugador1_key
+                AND atp_ranking IS NOT NULL
+            )
+        """)
+        updated_p1 = cursor.rowcount
+        
+        # Actualizar jugador2_ranking
+        cursor.execute("""
+            UPDATE matches
+            SET jugador2_ranking = (
+                SELECT atp_ranking FROM players 
+                WHERE player_key = matches.jugador2_key
+            )
+            WHERE jugador2_key IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM players 
+                WHERE player_key = matches.jugador2_key
+                AND atp_ranking IS NOT NULL
+            )
+        """)
+        updated_p2 = cursor.rowcount
+        
+        db.conn.commit()
+        
+        return {
+            "success": True,
+            "rankings_synced": atp_count,
+            "matches_updated_p1": updated_p1,
+            "matches_updated_p2": updated_p2,
+            "message": f"Sincronizados {atp_count} rankings ATP, actualizados {updated_p1 + updated_p2} rankings en partidos"
+        }
         
         return {
             "success": True,
