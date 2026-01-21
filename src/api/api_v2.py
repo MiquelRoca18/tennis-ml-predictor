@@ -2084,6 +2084,104 @@ async def get_player_ranking(player_key: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/rankings/sync/diagnostic", tags=["Elite - Rankings"])
+async def rankings_sync_diagnostic():
+    """
+    Endpoint de diagnóstico para identificar problemas en el sync de rankings
+    
+    Returns:
+        Información detallada de cada paso del proceso
+    """
+    diagnostic_info = {
+        "step_1_api_client": "pending",
+        "step_2_api_call": "pending",
+        "step_3_data_received": "pending",
+        "step_4_player_creation": "pending",
+        "step_5_ranking_update": "pending",
+        "errors": [],
+        "data_sample": None
+    }
+    
+    try:
+        # Paso 1: Verificar API client
+        if not api_client:
+            diagnostic_info["step_1_api_client"] = "FAILED: API client not initialized"
+            diagnostic_info["errors"].append("API client is None")
+            return diagnostic_info
+        
+        diagnostic_info["step_1_api_client"] = "OK"
+        
+        # Paso 2: Llamar a la API
+        try:
+            rankings = api_client.get_rankings(league="ATP")
+            diagnostic_info["step_2_api_call"] = "OK"
+        except Exception as e:
+            diagnostic_info["step_2_api_call"] = f"FAILED: {str(e)}"
+            diagnostic_info["errors"].append(f"API call error: {str(e)}")
+            return diagnostic_info
+        
+        # Paso 3: Verificar datos recibidos
+        if not rankings:
+            diagnostic_info["step_3_data_received"] = "FAILED: No rankings returned"
+            diagnostic_info["errors"].append("API returned empty list")
+            return diagnostic_info
+        
+        diagnostic_info["step_3_data_received"] = f"OK: {len(rankings)} rankings received"
+        diagnostic_info["data_sample"] = rankings[0] if rankings else None
+        
+        # Paso 4: Intentar crear un jugador de prueba
+        if not player_service:
+            diagnostic_info["step_4_player_creation"] = "FAILED: player_service not initialized"
+            diagnostic_info["errors"].append("player_service is None")
+            return diagnostic_info
+        
+        try:
+            test_player = rankings[0]
+            player_key = test_player.get('player_key')
+            player_name = test_player.get('player')
+            
+            player_service.get_or_create_player(
+                player_key=player_key,
+                player_name=player_name
+            )
+            diagnostic_info["step_4_player_creation"] = f"OK: Created/found player {player_name}"
+        except Exception as e:
+            diagnostic_info["step_4_player_creation"] = f"FAILED: {str(e)}"
+            diagnostic_info["errors"].append(f"Player creation error: {str(e)}")
+            return diagnostic_info
+        
+        # Paso 5: Intentar actualizar ranking
+        try:
+            ranking = int(test_player.get('place', 0))
+            points = int(test_player.get('points', 0))
+            movement = test_player.get('movement', 'same')
+            
+            player_service.update_ranking(
+                player_key=player_key,
+                ranking=ranking,
+                points=points,
+                movement=movement,
+                league='ATP'
+            )
+            diagnostic_info["step_5_ranking_update"] = f"OK: Updated ranking to {ranking} with {points} points"
+        except Exception as e:
+            diagnostic_info["step_5_ranking_update"] = f"FAILED: {str(e)}"
+            diagnostic_info["errors"].append(f"Ranking update error: {str(e)}")
+            import traceback
+            diagnostic_info["traceback"] = traceback.format_exc()
+            return diagnostic_info
+        
+        diagnostic_info["overall_status"] = "SUCCESS"
+        return diagnostic_info
+        
+    except Exception as e:
+        diagnostic_info["overall_status"] = "FAILED"
+        diagnostic_info["errors"].append(f"Unexpected error: {str(e)}")
+        import traceback
+        diagnostic_info["traceback"] = traceback.format_exc()
+        return diagnostic_info
+
+
 @app.post("/rankings/sync", tags=["Elite - Rankings"])
 async def sync_rankings():
     """
