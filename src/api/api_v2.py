@@ -1670,24 +1670,25 @@ async def startup_event():
 
 
 
+        # DISABLED: LiveEventsService requires websocket_client which was removed
         # IMPORTANTE: Ejecutar en thread separado para no bloquear el servidor
-        from src.services.live_events_service import LiveEventsService
+        # from src.services.live_events_service import LiveEventsService
 
         
-        global live_events_service
-        live_events_service = LiveEventsService(db, odds_client)
+        # global live_events_service
+        # live_events_service = LiveEventsService(db, odds_client)
         
-        def run_websocket():
-            """Ejecutar WebSocket en thread separado"""
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(live_events_service.start())
+        # def run_websocket():
+        #     """Ejecutar WebSocket en thread separado"""
+        #     loop = asyncio.new_event_loop()
+        #     asyncio.set_event_loop(loop)
+        #     loop.run_until_complete(live_events_service.start())
         
-        # Iniciar en background thread
-        ws_thread = threading.Thread(target=run_websocket, daemon=True)
-        ws_thread.start()
-        logger.info("✅ WebSocket de live results iniciado en background (tiempo real)")
+        # # Iniciar en background thread
+        # ws_thread = threading.Thread(target=run_websocket, daemon=True)
+        # ws_thread.start()
+        # logger.info("✅ WebSocket de live results iniciado en background (tiempo real)")
+        logger.info("ℹ️  WebSocket live events disabled (websocket_client removed)")
 
         # Job 3: Verificar commits en TML-Database (cada hora)
         def check_github_commits():
