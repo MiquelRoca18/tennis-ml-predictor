@@ -74,7 +74,7 @@ class H2HService:
     
     def sync_h2h_from_api(self, player1_key: int, player2_key: int) -> int:
         """
-        Sincroniza H2H desde API y guarda en DB
+        Sincroniza H2H desde API y guarda en DB (solo ATP Singles)
         
         Args:
             player1_key: ID del jugador 1
@@ -84,17 +84,15 @@ class H2HService:
             Número de partidos sincronizados
         """
         try:
-            # Obtener H2H de la API
-            data = self.api_client._make_request("get_H2H", {
-                "first_player_key": player1_key,
-                "second_player_key": player2_key
-            })
+            logger.info(f"🔄 Sincronizando H2H: {player1_key} vs {player2_key}...")
             
-            if not data or not data.get("result"):
+            # Usar nuevo método get_h2h() (ya filtra ATP Singles)
+            result = self.api_client.get_h2h(str(player1_key), str(player2_key))
+            
+            if not result or not result.get("H2H"):
                 logger.warning(f"No se obtuvieron datos H2H de la API")
                 return 0
             
-            result = data["result"]
             h2h_matches = result.get("H2H", [])
             
             cursor = self.conn.cursor()
@@ -125,7 +123,7 @@ class H2HService:
                 count += 1
             
             self.conn.commit()
-            logger.info(f"✅ Sincronizados {count} partidos H2H")
+            logger.info(f"✅ Sincronizados {count} partidos H2H ATP Singles")
             return count
             
         except Exception as e:

@@ -30,20 +30,22 @@ class RankingServiceElite:
         Sincroniza rankings ATP desde API
         
         Args:
-            limit: Número de jugadores a sincronizar
+            limit: Número máximo de rankings a sincronizar
             
         Returns:
-            Número de jugadores actualizados
+            Número de rankings sincronizados
         """
         try:
-            # Obtener rankings de la API
-            data = self.api_client._make_request("get_standings", {"event_type": "ATP"})
+            logger.info(f"🔄 Sincronizando rankings ATP (top {limit})...")
             
-            if not data or not data.get("result"):
+            # Usar nuevo método get_rankings()
+            rankings = self.api_client.get_rankings(league="ATP")
+            
+            if not rankings:
                 logger.warning("No se obtuvieron rankings ATP de la API")
                 return 0
             
-            rankings = data["result"][:limit]
+            rankings = rankings[:limit] # Apply limit after fetching
             count = 0
             
             for entry in rankings:
@@ -77,73 +79,16 @@ class RankingServiceElite:
             logger.error(f"Error sincronizando rankings ATP: {e}")
             return 0
     
-    def sync_wta_rankings(self, limit: int = 100) -> int:
-        """
-        Sincroniza rankings WTA desde API
-        
-        Args:
-            limit: Número de jugadoras a sincronizar
-            
-        Returns:
-            Número de jugadoras actualizadas
-        """
-        try:
-            # Obtener rankings de la API
-            data = self.api_client._make_request("get_standings", {"event_type": "WTA"})
-            
-            if not data or not data.get("result"):
-                logger.warning("No se obtuvieron rankings WTA de la API")
-                return 0
-            
-            rankings = data["result"][:limit]
-            count = 0
-            
-            for entry in rankings:
-                player_key = entry.get('player_key')
-                player_name = entry.get('player')
-                ranking = int(entry.get('place', 0))
-                points = int(entry.get('points', 0))
-                movement = entry.get('movement', 'same')
-                
-                # Crear o actualizar jugadora
-                self.player_service.get_or_create_player(
-                    player_key=player_key,
-                    player_name=player_name
-                )
-                
-                # Actualizar ranking
-                self.player_service.update_ranking(
-                    player_key=player_key,
-                    ranking=ranking,
-                    points=points,
-                    movement=movement,
-                    league='WTA'
-                )
-                
-                count += 1
-            
-            logger.info(f"✅ Sincronizados {count} rankings WTA")
-            return count
-            
-        except Exception as e:
-            logger.error(f"Error sincronizando rankings WTA: {e}")
-            return 0
+    # WTA SUPPORT REMOVED - ATP Singles only
+    # def sync_wta_rankings(self, limit: int = 100) -> int:
+    #     """WTA not supported - ATP Singles only"""
+    #     logger.warning("⚠️  WTA rankings not supported - ATP Singles only")
+    #     return 0
     
-    def sync_all_rankings(self) -> Dict[str, int]:
-        """
-        Sincroniza rankings ATP y WTA
-        
-        Returns:
-            Dict con contadores de cada liga
-        """
-        atp_count = self.sync_atp_rankings()
-        wta_count = self.sync_wta_rankings()
-        
-        return {
-            'atp': atp_count,
-            'wta': wta_count,
-            'total': atp_count + wta_count
-        }
+    # def sync_all_rankings(self) -> Dict[str, int]:
+    #     """Deprecated - use sync_atp_rankings() directly"""
+    #     atp_count = self.sync_atp_rankings()
+    #     return {'atp': atp_count, 'wta': 0, 'total': atp_count}
     
     def get_top_players(self, league: str = 'ATP', limit: int = 100) -> List[Dict]:
         """

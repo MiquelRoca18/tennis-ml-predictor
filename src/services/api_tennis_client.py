@@ -198,30 +198,168 @@ class APITennisClient:
                 "tournament": match.get("tournament_name", "Unknown"),
                 "tournament_season": match.get("tournament_season"),
                 "round": match.get("tournament_round", "Unknown"),
-                "surface": None,  # API-Tennis no proporciona superficie directamente
+                "surface": match.get("surface", "Hard"),
                 
-                # Jugadores
+                # Información de jugadores
                 "player1_name": match.get("event_first_player", "Unknown"),
-                "player1_logo": match.get("event_first_player_logo"),  # URL del logo
+                "player1_logo": match.get("event_first_player_logo"),
                 "player2_name": match.get("event_second_player", "Unknown"),
-                "player2_logo": match.get("event_second_player_logo"),  # URL del logo
+                "player2_logo": match.get("event_second_player_logo"),
                 
-                # Estado
-                "status": match.get("event_status", "upcoming"),
-                "event_type": match.get("event_type_type", "Unknown"),
+                # Estado del partido
+                "status": match.get("event_status", ""),
                 "event_live": match.get("event_live", "0"),
                 "event_qualification": match.get("event_qualification", "False"),
                 
-                # Resultado (si está disponible)
+                # Resultados (si disponibles)
                 "event_final_result": match.get("event_final_result", "-"),
                 "event_winner": match.get("event_winner"),
+                
+                # Cuotas (si disponibles)
+                "player1_odds": None,  # Se obtienen con get_match_odds
+                "player2_odds": None,
             }
-
+            
             return match_info
-
+            
         except Exception as e:
             logger.error(f"❌ Error extrayendo info del partido: {e}")
             return None
+
+    def get_rankings(self, league: str = "ATP") -> List[Dict]:
+        """
+        Obtiene rankings ATP oficiales
+        
+        Args:
+            league: "ATP" (WTA no soportado)
+            
+        Returns:
+            Lista de jugadores con ranking, puntos, país
+        """
+        if league.upper() != "ATP":
+            logger.warning(f"⚠️  Solo se soporta ATP, ignorando: {league}")
+            return []
+            
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return []
+            
+        try:
+            logger.info("📊 Consultando rankings ATP...")
+            
+            params = {"event_type": "ATP"}
+            data = self._make_request("get_standings", params)
+            
+            if not data:
+                logger.warning("⚠️  No se obtuvieron rankings ATP de la API")
+                return []
+                
+            rankings = data.get("result", [])
+            logger.info(f"✅ {len(rankings)} rankings ATP obtenidos")
+            
+            return rankings
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo rankings: {e}")
+            return []
+
+    def get_h2h(self, player1_key: str, player2_key: str) -> Dict:
+        """
+        Obtiene historial Head to Head entre 2 jugadores
+        
+        Args:
+            player1_key: ID del jugador 1
+            player2_key: ID del jugador 2
+            
+        Returns:
+            Dict con:
+            - H2H: Partidos entre ellos
+            - firstPlayerResults: Últimos partidos del J1
+            - secondPlayerResults: Últimos partidos del J2
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
+            
+        try:
+            logger.info(f"📊 Consultando H2H: {player1_key} vs {player2_key}...")
+            
+            params = {
+                "first_player_key": player1_key,
+                "second_player_key": player2_key
+            }
+            
+            data = self._make_request("get_H2H", params)
+            
+            if not data:
+                logger.warning(f"⚠️  No hay datos H2H para {player1_key} vs {player2_key}")
+                return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
+                
+            result = data.get("result", {})
+            
+            # Filtrar solo ATP Singles en todos los resultados
+            if "H2H" in result:
+                result["H2H"] = [
+                    m for m in result["H2H"]
+                    if m.get("event_type_type", "").lower() == "atp singles"
+                ]
+            
+            if "firstPlayerResults" in result:
+                result["firstPlayerResults"] = [
+                    m for m in result["firstPlayerResults"]
+                    if m.get("event_type_type", "").lower() == "atp singles"
+                ][:10]  # Últimos 10
+                
+            if "secondPlayerResults" in result:
+                result["secondPlayerResults"] = [
+                    m for m in result["secondPlayerResults"]
+                    if m.get("event_type_type", "").lower() == "atp singles"
+                ][:10]  # Últimos 10
+            
+            h2h_count = len(result.get("H2H", []))
+            logger.info(f"✅ H2H obtenido: {h2h_count} enfrentamientos previos")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo H2H: {e}")
+            return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
+
+    def get_livescore(self) -> List[Dict]:
+        """
+        Obtiene partidos ATP Singles en vivo
+        
+        Returns:
+            Lista de partidos en vivo con pointbypoint
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return []
+            
+        try:
+            logger.info("🔴 Consultando partidos en vivo...")
+            
+            data = self._make_request("get_livescore", {})
+            
+            if not data:
+                logger.warning("⚠️  No se obtuvieron partidos en vivo")
+                return []
+                
+            matches = data.get("result", [])
+            
+            # Filtrar solo ATP Singles
+            atp_matches = [
+                m for m in matches
+                if (m.get("event_type") or m.get("event_type_type") or "").lower() == "atp singles"
+            ]
+            
+            logger.info(f"✅ {len(atp_matches)} partidos ATP en vivo (de {len(matches)} totales)")
+            
+            return atp_matches
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo livescore: {e}")
+            return []
 
     def extract_best_odds(self, odds_data: Dict, match_key: str) -> Optional[Dict]:
         """

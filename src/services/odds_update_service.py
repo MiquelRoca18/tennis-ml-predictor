@@ -145,24 +145,28 @@ class OddsUpdateService:
             partidos_wta_filtrados = 0
 
             for match in matches_api:
-                # FILTRO WTA Y DOBLES: Solo procesar partidos ATP individuales
-                event_type = match.get("event_type", "").lower()
+                # FILTRO ATP SINGLES: Solo procesar partidos ATP individuales
+                event_type = (match.get("event_type") or match.get("event_type_type") or "").lower()
                 tournament_name = match.get("tournament", "")
                 
-                # Si no es ATP, ignorar (contar si es WTA para estadísticas)
-                if "wta" in event_type or "wta" in tournament_name.lower():
-                    partidos_wta_filtrados += 1
+                # VALIDACIÓN POSITIVA: Debe ser ATP Singles
+                if event_type != "atp singles":
+                    # Contar WTA para estadísticas
+                    if "wta" in event_type or "wta" in tournament_name.lower():
+                        partidos_wta_filtrados += 1
+                    logger.debug(f"⏭️  Ignorando tipo no-ATP: {event_type}")
                     continue
 
-                # Ignorar dobles
+                # BACKUP: Ignorar dobles por si acaso
                 if "doubles" in event_type or "doubles" in tournament_name.lower():
+                    logger.debug(f"⏭️  Ignorando dobles: {tournament_name}")
                     continue
 
                 # Extraer fecha del partido (API-Tennis usa event_date y event_time)
                 try:
                     fecha_partido = datetime.strptime(match["event_date"], "%Y-%m-%d").date()
-                except:
-                    logger.warning(f"⚠️  Fecha inválida para partido: {match}")
+                except (ValueError, KeyError, TypeError) as e:
+                    logger.warning(f"⚠️  Error parseando fecha para match {match.get('event_key')}: {e}")
                     continue
 
                 # Verificar si ya existe usando el método de la base de datos

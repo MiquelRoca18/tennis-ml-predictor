@@ -237,15 +237,21 @@ class DailyMatchFetcher:
         Returns:
             Dict with processing result
         """
-        # ===== FILTROS: Solo ATP individuales =====
+        # ===== FILTROS: Solo ATP Singles =====
         
-        # 1. Filtrar WTA (verificar múltiples campos)
+        # 0. VALIDACIÓN POSITIVA: Debe ser ATP Singles
+        event_type = (match_data.get("event_type") or match_data.get("event_type_type") or "").upper()
+        
+        if event_type != "ATP SINGLES":
+            logger.debug(f"⏭️  Ignorando tipo no-ATP Singles: {event_type}")
+            return {"created": False, "match_info": None, "prediction_generated": False}
+        
+        # 1. BACKUP: Filtrar WTA (verificar múltiples campos)
         league = match_data.get("league", "").upper()
-        event_type = match_data.get("event_type", "").upper()
         tournament = match_data.get("tournament", "")
         tournament_lower = tournament.lower()
         
-        # Detectar WTA por múltiples indicadores
+        # Detectar WTA por múltiples indicadores (backup por si event_type falla)
         is_wta = (
             "WTA" in league or
             "WTA" in event_type or
@@ -261,10 +267,10 @@ class DailyMatchFetcher:
         )
         
         if is_wta:
-            logger.debug(f"⏭️  Ignorando partido WTA: {tournament}")
+            logger.debug(f"⏭️  Ignorando partido WTA (backup filter): {tournament}")
             return {"created": False, "match_info": None, "prediction_generated": False}
         
-        # 2. Filtrar dobles (buscar "/" o "Doubles" en nombres)
+        # 2. BACKUP: Filtrar dobles (buscar "/" o "Doubles" en nombres)
         player1_name = match_data.get("player1_name", "Unknown")
         player2_name = match_data.get("player2_name", "Unknown")
         
