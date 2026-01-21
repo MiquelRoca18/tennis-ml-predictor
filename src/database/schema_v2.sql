@@ -76,6 +76,66 @@ CREATE TABLE IF NOT EXISTS match_sets (
 CREATE INDEX IF NOT EXISTS idx_match_sets_match ON match_sets(match_id);
 
 
+-- Tabla de jugadores (para rankings y datos de jugador)
+CREATE TABLE IF NOT EXISTS players (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_key VARCHAR(50) UNIQUE NOT NULL,
+    player_name VARCHAR(200) NOT NULL,
+    
+    -- Rankings
+    atp_ranking INTEGER,
+    atp_points INTEGER,
+    wta_ranking INTEGER,
+    wta_points INTEGER,
+    
+    -- Metadata de ranking
+    ranking_movement VARCHAR(20),  -- 'up', 'down', 'same'
+    last_ranking_update TIMESTAMP,
+    
+    -- Información adicional
+    player_logo TEXT,
+    country VARCHAR(100),
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_players_key ON players(player_key);
+CREATE INDEX IF NOT EXISTS idx_players_atp_ranking ON players(atp_ranking);
+CREATE INDEX IF NOT EXISTS idx_players_wta_ranking ON players(wta_ranking);
+
+
+-- Tabla de historial head to head
+CREATE TABLE IF NOT EXISTS head_to_head (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    
+    -- Versionado
+    version INTEGER NOT NULL,
+    
+    -- Jugadores
+    player1_id INTEGER NOT NULL,
+    player2_id INTEGER NOT NULL,
+    
+    -- Estadísticas H2H
+    player1_wins INTEGER NOT NULL DEFAULT 0,
+    player2_wins INTEGER NOT NULL DEFAULT 0,
+    total_matches INTEGER NOT NULL DEFAULT 0,
+    
+    -- Metadata
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
+    FOREIGN KEY (player1_id) REFERENCES players(id),
+    FOREIGN KEY (player2_id) REFERENCES players(id),
+    UNIQUE(match_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_h2h_match ON head_to_head(match_id);
+CREATE INDEX IF NOT EXISTS idx_h2h_players ON head_to_head(player1_id, player2_id);
+
+
 -- Tabla de predicciones versionadas
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
