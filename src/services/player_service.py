@@ -155,8 +155,8 @@ class PlayerService:
         else:
             cursor.execute("""
                 UPDATE players
-                SET atp_ranking = ?,
-                    atp_points = ?,
+                SET wta_ranking = ?,
+                    wta_points = ?,
                     ranking_movement = ?,
                     last_ranking_update = CURRENT_TIMESTAMP
                 WHERE player_key = ?
