@@ -681,60 +681,104 @@ class MatchDatabase:
         Returns:
             ID de la predicción creada
         """
-        cursor = self.conn.cursor()
-
         # Obtener la última versión
-        cursor.execute(
+        max_version_row = self._fetchone(
             """
             SELECT COALESCE(MAX(version), 0) as max_version
             FROM predictions
-            WHERE match_id = ?
+            WHERE match_id = :match_id
         """,
-            (match_id,),
+            {"match_id": match_id},
         )
-
-        max_version = cursor.fetchone()["max_version"]
+        
+        max_version = max_version_row["max_version"] if max_version_row else 0
         new_version = max_version + 1
 
         # Insertar nueva predicción
-        cursor.execute(
+        if self.is_postgres:
+            query = """
+                INSERT INTO predictions (
+                    match_id, version,
+                    jugador1_cuota, jugador2_cuota,
+                    jugador1_probabilidad, jugador2_probabilidad,
+                    jugador1_ev, jugador2_ev,
+                    jugador1_edge, jugador2_edge,
+                    recomendacion, mejor_opcion, confianza,
+                    kelly_stake_jugador1, kelly_stake_jugador2,
+                    confidence_level, confidence_score, player1_known, player2_known
+                ) VALUES (
+                    :match_id, :version,
+                    :jugador1_cuota, :jugador2_cuota,
+                    :jugador1_probabilidad, :jugador2_probabilidad,
+                    :jugador1_ev, :jugador2_ev,
+                    :jugador1_edge, :jugador2_edge,
+                    :recomendacion, :mejor_opcion, :confianza,
+                    :kelly_stake_jugador1, :kelly_stake_jugador2,
+                    :confidence_level, :confidence_score, :player1_known, :player2_known
+                ) RETURNING id
             """
-            INSERT INTO predictions (
-                match_id, version,
-                jugador1_cuota, jugador2_cuota,
-                jugador1_probabilidad, jugador2_probabilidad,
-                jugador1_ev, jugador2_ev,
-                jugador1_edge, jugador2_edge,
-                recomendacion, mejor_opcion, confianza,
-                kelly_stake_jugador1, kelly_stake_jugador2,
-                confidence_level, confidence_score, player1_known, player2_known
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                match_id,
-                new_version,
-                jugador1_cuota,
-                jugador2_cuota,
-                jugador1_probabilidad,
-                jugador2_probabilidad,
-                jugador1_ev,
-                jugador2_ev,
-                jugador1_edge,
-                jugador2_edge,
-                recomendacion,
-                mejor_opcion,
-                confianza,
-                kelly_stake_jugador1,
-                kelly_stake_jugador2,
-                confidence_level,
-                confidence_score,
-                1 if player1_known else 0,
-                1 if player2_known else 0,
-            ),
-        )
-
-        self.conn.commit()
-        prediction_id = cursor.lastrowid
+            params = {
+                "match_id": match_id,
+                "version": new_version,
+                "jugador1_cuota": jugador1_cuota,
+                "jugador2_cuota": jugador2_cuota,
+                "jugador1_probabilidad": jugador1_probabilidad,
+                "jugador2_probabilidad": jugador2_probabilidad,
+                "jugador1_ev": jugador1_ev,
+                "jugador2_ev": jugador2_ev,
+                "jugador1_edge": jugador1_edge,
+                "jugador2_edge": jugador2_edge,
+                "recomendacion": recomendacion,
+                "mejor_opcion": mejor_opcion,
+                "confianza": confianza,
+                "kelly_stake_jugador1": kelly_stake_jugador1,
+                "kelly_stake_jugador2": kelly_stake_jugador2,
+                "confidence_level": confidence_level,
+                "confidence_score": confidence_score,
+                "player1_known": player1_known,
+                "player2_known": player2_known,
+            }
+            result = self._execute(query, params)
+            prediction_id = result.fetchone()[0]
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO predictions (
+                    match_id, version,
+                    jugador1_cuota, jugador2_cuota,
+                    jugador1_probabilidad, jugador2_probabilidad,
+                    jugador1_ev, jugador2_ev,
+                    jugador1_edge, jugador2_edge,
+                    recomendacion, mejor_opcion, confianza,
+                    kelly_stake_jugador1, kelly_stake_jugador2,
+                    confidence_level, confidence_score, player1_known, player2_known
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    match_id,
+                    new_version,
+                    jugador1_cuota,
+                    jugador2_cuota,
+                    jugador1_probabilidad,
+                    jugador2_probabilidad,
+                    jugador1_ev,
+                    jugador2_ev,
+                    jugador1_edge,
+                    jugador2_edge,
+                    recomendacion,
+                    mejor_opcion,
+                    confianza,
+                    kelly_stake_jugador1,
+                    kelly_stake_jugador2,
+                    confidence_level,
+                    confidence_score,
+                    1 if player1_known else 0,
+                    1 if player2_known else 0,
+                ),
+            )
+            self.conn.commit()
+            prediction_id = cursor.lastrowid
         
         # Log con información de confianza
         confidence_msg = f" (Confianza: {confidence_level})" if confidence_level else ""
