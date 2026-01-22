@@ -448,10 +448,7 @@ class MatchDatabase:
         Returns:
             Dict con datos del partido o None si no se encuentra
         """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM matches WHERE event_key = ?", (event_key,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        return self._fetchone("SELECT * FROM matches WHERE event_key = :event_key", {"event_key": event_key})
 
     def get_recent_matches(self, days: int = 7) -> List[Dict]:
         """
@@ -465,19 +462,16 @@ class MatchDatabase:
         """
         from datetime import date, timedelta
         
-        cursor = self.conn.cursor()
         fecha_inicio = date.today() - timedelta(days=days)
         
-        cursor.execute(
+        return self._fetchall(
             """
             SELECT * FROM matches 
-            WHERE fecha_partido >= ? 
+            WHERE fecha_partido >= :fecha_inicio
             ORDER BY fecha_partido DESC, hora_inicio DESC
             """,
-            (str(fecha_inicio),)
+            {"fecha_inicio": str(fecha_inicio)},
         )
-        
-        return [dict(row) for row in cursor.fetchall()]
 
     def delete_match(self, match_id: int) -> bool:
         """
