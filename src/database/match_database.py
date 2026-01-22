@@ -152,6 +152,63 @@ class MatchDatabase:
 
 
     # ============================================================
+    # DATABASE ABSTRACTION LAYER
+    # ============================================================
+    
+    def _execute(self, query: str, params: tuple = None):
+        """Execute a query (works for both SQLite and PostgreSQL)"""
+        if self.is_postgres:
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params or {})
+                conn.commit()
+                return result
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute(query, params or ())
+            self.conn.commit()
+            return cursor
+    
+    def _fetchone(self, query: str, params: tuple = None) -> Optional[Dict]:
+        """Fetch one row (works for both SQLite and PostgreSQL)"""
+        if self.is_postgres:
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params or {})
+                row = result.fetchone()
+                if row:
+                    return dict(row._mapping)
+                return None
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute(query, params or ())
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+    
+    def _fetchall(self, query: str, params: tuple = None) -> List[Dict]:
+        """Fetch all rows (works for both SQLite and PostgreSQL)"""
+        if self.is_postgres:
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params or {})
+                return [dict(row._mapping) for row in result.fetchall()]
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute(query, params or ())
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def _get_lastrowid(self, result) -> int:
+        """Get last inserted row ID (works for both SQLite and PostgreSQL)"""
+        if self.is_postgres:
+            # For PostgreSQL with SERIAL, we need to use RETURNING id
+            # This is handled in the query itself
+            return result.fetchone()[0] if result else None
+        else:
+            return result.lastrowid
+
+    # ============================================================
     # MÉTODOS DE PARTIDOS (MATCHES)
     # ============================================================
 
@@ -188,58 +245,96 @@ class MatchDatabase:
         Returns:
             ID del partido creado
         """
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        if self.is_postgres:
+            # PostgreSQL: Use RETURNING id
+            query = """
+                INSERT INTO matches (
+                    fecha_partido, hora_inicio, torneo, ronda, superficie,
+                    jugador1_nombre, jugador1_ranking, jugador1_logo,
+                    jugador2_nombre, jugador2_ranking, jugador2_logo,
+                    event_key, jugador1_key, jugador2_key,
+                    tournament_key, tournament_season,
+                    event_live, event_qualification,
+                    estado
+                ) VALUES (
+                    :fecha_partido, :hora_inicio, :torneo, :ronda, :superficie,
+                    :jugador1_nombre, :jugador1_ranking, :jugador1_logo,
+                    :jugador2_nombre, :jugador2_ranking, :jugador2_logo,
+                    :event_key, :jugador1_key, :jugador2_key,
+                    :tournament_key, :tournament_season,
+                    :event_live, :event_qualification,
+                    :estado
+                ) RETURNING id
             """
-            INSERT INTO matches (
-                fecha_partido, hora_inicio, torneo, ronda, superficie,
-                jugador1_nombre, jugador1_ranking, jugador1_logo,
-                jugador2_nombre, jugador2_ranking, jugador2_logo,
-                event_key, jugador1_key, jugador2_key,
-                tournament_key, tournament_season,
-                event_live, event_qualification,
-                estado
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                fecha_partido,
-                hora_inicio,
-                torneo,
-                ronda,
-                superficie,
-                jugador1_nombre,
-                jugador1_ranking,
-                jugador1_logo,
-                jugador2_nombre,
-                jugador2_ranking,
-                jugador2_logo,
-                event_key,
-                jugador1_key,
-                jugador2_key,
-                tournament_key,
-                tournament_season,
-                event_live,
-                event_qualification,
-                estado,
-            ),
-        )
-
-        self.conn.commit()
-        match_id = cursor.lastrowid
+            params = {
+                "fecha_partido": fecha_partido,
+                "hora_inicio": hora_inicio,
+                "torneo": torneo,
+                "ronda": ronda,
+                "superficie": superficie,
+                "jugador1_nombre": jugador1_nombre,
+                "jugador1_ranking": jugador1_ranking,
+                "jugador1_logo": jugador1_logo,
+                "jugador2_nombre": jugador2_nombre,
+                "jugador2_ranking": jugador2_ranking,
+                "jugador2_logo": jugador2_logo,
+                "event_key": event_key,
+                "jugador1_key": jugador1_key,
+                "jugador2_key": jugador2_key,
+                "tournament_key": tournament_key,
+                "tournament_season": tournament_season,
+                "event_live": event_live,
+                "event_qualification": event_qualification,
+                "estado": estado,
+            }
+            result = self._execute(query, params)
+            match_id = result.fetchone()[0]
+        else:
+            # SQLite: Use lastrowid
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO matches (
+                    fecha_partido, hora_inicio, torneo, ronda, superficie,
+                    jugador1_nombre, jugador1_ranking, jugador1_logo,
+                    jugador2_nombre, jugador2_ranking, jugador2_logo,
+                    event_key, jugador1_key, jugador2_key,
+                    tournament_key, tournament_season,
+                    event_live, event_qualification,
+                    estado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    fecha_partido,
+                    hora_inicio,
+                    torneo,
+                    ronda,
+                    superficie,
+                    jugador1_nombre,
+                    jugador1_ranking,
+                    jugador1_logo,
+                    jugador2_nombre,
+                    jugador2_ranking,
+                    jugador2_logo,
+                    event_key,
+                    jugador1_key,
+                    jugador2_key,
+                    tournament_key,
+                    tournament_season,
+                    event_live,
+                    event_qualification,
+                    estado,
+                ),
+            )
+            self.conn.commit()
+            match_id = cursor.lastrowid
 
         logger.info(f"✅ Partido creado: {jugador1_nombre} vs {jugador2_nombre} (ID: {match_id})")
         return match_id
 
     def get_match(self, match_id: int) -> Optional[Dict]:
         """Obtiene un partido por ID"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM matches WHERE id = ?", (match_id,))
-        row = cursor.fetchone()
-
-        if row:
-            return dict(row)
-        return None
+        return self._fetchone("SELECT * FROM matches WHERE id = :id", {"id": match_id})
 
     def get_matches_by_date(self, fecha: date) -> List[Dict]:
         """
@@ -248,17 +343,15 @@ class MatchDatabase:
         Returns:
             Lista de partidos con sus predicciones y resultados
         """
-        cursor = self.conn.cursor()
-        cursor.execute(
+        matches = self._fetchall(
             """
             SELECT * FROM matches_with_latest_prediction
-            WHERE fecha_partido = ?
+            WHERE fecha_partido = :fecha
             ORDER BY hora_inicio ASC, id ASC
         """,
-            (fecha,),
+            {"fecha": fecha},
         )
 
-        matches = [dict(row) for row in cursor.fetchall()]
         logger.info(f"📊 Encontrados {len(matches)} partidos para {fecha}")
         return matches
 
@@ -271,22 +364,23 @@ class MatchDatabase:
         Returns:
             True si se actualizó correctamente
         """
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        result = self._execute(
             """
             UPDATE matches
-            SET resultado_ganador = ?,
-                resultado_marcador = ?,
+            SET resultado_ganador = :ganador,
+                resultado_marcador = :marcador,
                 estado = 'completado'
-            WHERE id = ?
+            WHERE id = :match_id
         """,
-            (ganador, marcador, match_id),
+            {"ganador": ganador, "marcador": marcador, "match_id": match_id},
         )
 
-        self.conn.commit()
+        if self.is_postgres:
+            success = result.rowcount > 0
+        else:
+            success = result.rowcount > 0
 
-        if cursor.rowcount > 0:
+        if success:
             logger.info(f"✅ Resultado actualizado para partido {match_id}: Ganador {ganador}")
             return True
 
@@ -441,23 +535,24 @@ class MatchDatabase:
         Returns:
             True si el partido ya existe
         """
-        cursor = self.conn.cursor()
-
         # Buscar en ambas direcciones (J1 vs J2 o J2 vs J1)
-        cursor.execute(
+        result = self._fetchone(
             """
             SELECT id FROM matches
-            WHERE fecha_partido = ?
+            WHERE fecha_partido = :fecha
             AND (
-                (jugador1_nombre = ? AND jugador2_nombre = ?)
+                (jugador1_nombre = :j1 AND jugador2_nombre = :j2)
                 OR
-                (jugador1_nombre = ? AND jugador2_nombre = ?)
+                (jugador1_nombre = :j2 AND jugador2_nombre = :j1)
             )
         """,
-            (fecha_partido, jugador1_nombre, jugador2_nombre, jugador2_nombre, jugador1_nombre),
+            {
+                "fecha": fecha_partido,
+                "j1": jugador1_nombre,
+                "j2": jugador2_nombre,
+            },
         )
 
-        result = cursor.fetchone()
         exists = result is not None
 
         if exists:
