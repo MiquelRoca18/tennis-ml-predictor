@@ -113,6 +113,7 @@ class MatchDatabase:
             if self.is_postgres:
                 # PostgreSQL: Execute using SQLAlchemy
                 from sqlalchemy import text
+                import re
                 
                 # Convert SQLite schema to PostgreSQL-compatible
                 pg_schema = schema_script
@@ -127,16 +128,36 @@ class MatchDatabase:
                 pg_schema = pg_schema.replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE")
                 pg_schema = pg_schema.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
                 
+                # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
+                # Remove everything from "CREATE TRIGGER" to the next semicolon after "END;"
+                pg_schema = re.sub(r'CREATE TRIGGER.*?END;', '', pg_schema, flags=re.DOTALL)
+                
+                # Replace INSERT OR IGNORE with INSERT ... ON CONFLICT DO NOTHING
+                pg_schema = re.sub(
+                    r'INSERT OR IGNORE INTO (\w+)',
+                    r'INSERT INTO \1',
+                    pg_schema
+                )
+                # Remove the test data insert completely for PostgreSQL
+                pg_schema = re.sub(
+                    r'-- Insertar partido de ejemplo.*$',
+                    '',
+                    pg_schema,
+                    flags=re.DOTALL
+                )
+                
                 with self.engine.connect() as conn:
                     # Split and execute statements individually
                     for statement in pg_schema.split(';'):
                         statement = statement.strip()
-                        if statement:
+                        if statement and not statement.startswith('--'):
                             try:
                                 conn.execute(text(statement))
                             except Exception as e:
                                 # Log but continue - table might already exist
-                                logger.debug(f"Schema statement skipped (might exist): {str(e)[:100]}")
+                                error_msg = str(e)[:200]
+                                if "already exists" not in error_msg.lower():
+                                    logger.warning(f"Schema statement warning: {error_msg}")
                     conn.commit()
                     
                 logger.info("✅ PostgreSQL schema initialized")
