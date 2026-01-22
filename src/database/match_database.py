@@ -4,12 +4,15 @@ Match Database Manager - Tennis ML Predictor v2.0
 
 Gestión de base de datos para partidos con predicciones versionadas,
 tracking de apuestas y estadísticas.
+
+Supports both SQLite (local development) and PostgreSQL (Railway production).
 """
 
 import sqlite3
+import os
 from pathlib import Path
 from datetime import date, timedelta
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,56 +21,123 @@ logger = logging.getLogger(__name__)
 class MatchDatabase:
     """
     Gestor de base de datos para partidos de tenis con predicciones y apuestas
+    
+    Automatically detects DATABASE_URL environment variable and uses PostgreSQL if available,
+    otherwise falls back to SQLite for local development.
     """
 
     def __init__(self, db_path: str = "matches_v2.db"):
         """
         Inicializa la conexión a la base de datos
+        
+        Checks for DATABASE_URL environment variable (Railway PostgreSQL).
+        If found, uses PostgreSQL. Otherwise uses SQLite.
 
         Args:
-            db_path: Ruta al archivo de base de datos SQLite
+            db_path: Ruta al archivo de base de datos SQLite (usado solo si no hay DATABASE_URL)
         """
         self.db_path = Path(db_path)
         self.conn = None
-        self._connect()
+        self.is_postgres = False
+        self.engine = None
+        
+        # Check for PostgreSQL URL (Railway)
+        database_url = os.getenv("DATABASE_URL")
+        
+        if database_url:
+            # PostgreSQL mode (Railway production)
+            self._init_postgres(database_url)
+        else:
+            # SQLite mode (local development)
+            self._init_sqlite()
+        
         self._initialize_schema()
-        logger.info(f"✅ MatchDatabase inicializada: {self.db_path}")
+        
+        db_type = "PostgreSQL" if self.is_postgres else f"SQLite ({self.db_path})"
+        logger.info(f"✅ MatchDatabase inicializada: {db_type}")
 
-    def _connect(self):
-        """Establece conexión con la base de datos"""
+    def _init_postgres(self, database_url: str):
+        """Initialize PostgreSQL connection"""
+        try:
+            from sqlalchemy import create_engine, text
+            from sqlalchemy.pool import NullPool
+            
+            # Fix Railway's postgres:// to postgresql://
+            if database_url.startswith("postgres://"):
+                database_url = database_url.replace("postgres://", "postgresql://", 1)
+            
+            logger.info(f"🐘 Connecting to PostgreSQL...")
+            
+            self.engine = create_engine(
+                database_url,
+                poolclass=NullPool,  # Railway manages connections
+                echo=False
+            )
+            
+            # Test connection
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            
+            self.is_postgres = True
+            logger.info("✅ PostgreSQL connection established")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to PostgreSQL: {e}")
+            logger.info("⚠️  Falling back to SQLite...")
+            self._init_sqlite()
+
+    def _init_sqlite(self):
+        """Initialize SQLite connection"""
         self.conn = sqlite3.connect(
             self.db_path,
             detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-            check_same_thread=False,  # Permitir uso en múltiples threads
-            timeout=30.0  # Aumentar timeout a 30s para evitar "database is locked"
+            check_same_thread=False,
+            timeout=30.0
         )
-        # Activar WAL mode para mejor concurrencia
         self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.row_factory = sqlite3.Row  # Permite acceso por nombre de columna
+        self.conn.row_factory = sqlite3.Row
+        self.is_postgres = False
 
     def _initialize_schema(self):
         """Crea las tablas si no existen"""
-        # Ejecutar siempre el script de esquema (usa CREATE TABLE IF NOT EXISTS)
-        # Esto asegura que si agregamos tablas nuevas (como match_pointbypoint), se creen.
-        
         try:
-            # Intentar ruta relativa al modulo
             schema_path = Path(__file__).parent / "schema_v2.sql"
             
-            if schema_path.exists():
-                with open(schema_path, "r") as f:
-                    schema_script = f.read()
-                    self.conn.executescript(schema_script)
-                    self.conn.commit()
-            else:
+            if not schema_path.exists():
                 # Fallback para ruta absoluta (Docker/prod)
-                with open("/app/src/database/schema_v2.sql", "r") as f:
-                    schema_script = f.read()
-                    self.conn.executescript(schema_script)
-                    self.conn.commit()
+                schema_path = Path("/app/src/database/schema_v2.sql")
+            
+            with open(schema_path, "r") as f:
+                schema_script = f.read()
+            
+            if self.is_postgres:
+                # PostgreSQL: Execute using SQLAlchemy
+                from sqlalchemy import text
+                
+                # Convert SQLite schema to PostgreSQL-compatible
+                # Replace AUTOINCREMENT with SERIAL, etc.
+                pg_schema = schema_script.replace("AUTOINCREMENT", "")
+                pg_schema = pg_schema.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+                
+                with self.engine.connect() as conn:
+                    # Split and execute statements individually
+                    for statement in pg_schema.split(';'):
+                        statement = statement.strip()
+                        if statement:
+                            conn.execute(text(statement))
+                    conn.commit()
+                    
+                logger.info("✅ PostgreSQL schema initialized")
+            else:
+                # SQLite: Execute using sqlite3
+                self.conn.executescript(schema_script)
+                self.conn.commit()
+                logger.info("✅ SQLite schema initialized")
                 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
+            # Don't fail completely, tables might already exist
+
 
     # ============================================================
     # MÉTODOS DE PARTIDOS (MATCHES)
