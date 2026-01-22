@@ -599,40 +599,32 @@ class MatchDatabase:
         Returns:
             Número de partidos eliminados
         """
-                WHERE match_id IN ({','.join('?' * len(match_ids))})
-            """,
-                match_ids,
+        from datetime import date, timedelta
+
+        cutoff_date = date.today() - timedelta(days=days_to_keep)
+
+        # Contar partidos a eliminar
+        count_result = self._fetchone(
+            """
+            SELECT COUNT(*) as count FROM matches
+            WHERE fecha_partido < :cutoff_date
+        """,
+            {"cutoff_date": str(cutoff_date)},
+        )
+
+        count = count_result["count"] if count_result else 0
+
+        if count > 0:
+            # Eliminar partidos antiguos
+            self._execute(
+                "DELETE FROM matches WHERE fecha_partido < :cutoff_date",
+                {"cutoff_date": str(cutoff_date)},
             )
 
-            # Eliminar predicciones
-            cursor.execute(
-                f"""
-                DELETE FROM predictions 
-                WHERE match_id IN ({','.join('?' * len(match_ids))})
-            """,
-                match_ids,
-            )
-
-            # Eliminar partidos
-            cursor.execute(
-                f"""
-                DELETE FROM matches 
-                WHERE id IN ({','.join('?' * len(match_ids))})
-            """,
-                match_ids,
-            )
-
-            self.conn.commit()
-            deleted_count = len(match_ids)
-
-            logger.info(
-                f"✅ {deleted_count} partidos antiguos eliminados (anteriores a {cutoff_date})"
-            )
-            return deleted_count
-
-        except Exception as e:
-            self.conn.rollback()
-            logger.error(f"❌ Error limpiando partidos antiguos: {e}")
+            logger.info(f"🗑️  Eliminados {count} partidos anteriores a {cutoff_date}")
+            return count
+        else:
+            logger.info(f"✅ No hay partidos anteriores a {cutoff_date} para eliminar")
             return 0
 
 
