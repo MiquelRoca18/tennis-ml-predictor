@@ -363,7 +363,7 @@ async def get_match_details(match_id: int):
             try:
                 # Consultar API
                 params = {"event_key": event_key}
-                api_data = odds_client._make_request("get_fixtures", params)
+                api_data = api_client._make_request("get_fixtures", params)
                 
                 if api_data and api_data.get("result"):
                     api_match = api_data["result"][0] if isinstance(api_data["result"], list) else api_data["result"]
@@ -463,7 +463,7 @@ async def get_match_analysis(match_id: int):
         
         # Consultar API
         params = {"event_key": event_key}
-        api_data = odds_client._make_request("get_fixtures", params)
+        api_data = api_client._make_request("get_fixtures", params)
         
         if not api_data or not api_data.get("result"):
             raise HTTPException(
@@ -1134,7 +1134,7 @@ async def manual_update_odds():
     """
     try:
         logger.info("🔧 Actualización manual de cuotas solicitada")
-        result = update_service.update_all_pending_matches()
+        result = match_update_service.update_all_pending_matches()
         return result
     except Exception as e:
         logger.error(f"❌ Error en actualización manual: {e}", exc_info=True)
@@ -1163,7 +1163,7 @@ async def get_scheduler_status():
                 "trigger": str(job.trigger)
             })
 
-        stats = update_service.get_update_stats()
+        stats = match_update_service.get_update_stats()
 
         return {
             "scheduler_running": is_running,
@@ -1187,7 +1187,7 @@ async def get_pending_matches():
         Lista de partidos pendientes de actualización
     """
     try:
-        pending = update_service.get_pending_matches()
+        pending = match_update_service.get_pending_matches()
         return {"total": len(pending), "partidos": pending}
     except Exception as e:
         logger.error(f"❌ Error obteniendo partidos pendientes: {e}")
@@ -1207,7 +1207,7 @@ async def detect_new_matches_manual():
     """
     try:
         logger.info("🔧 Detección manual de partidos nuevos solicitada")
-        result = update_service.detect_new_matches()
+        result = match_update_service.detect_new_matches()
         return result
     except Exception as e:
         logger.error(f"❌ Error en detección manual: {e}", exc_info=True)
@@ -1349,7 +1349,7 @@ async def manual_fetch_matches(days_ahead: int = Query(7, ge=1, le=14)):
         from src.automation.daily_match_fetcher import DailyMatchFetcher
 
         pred = get_predictor()
-        fetcher = DailyMatchFetcher(db, odds_client, pred)
+        fetcher = DailyMatchFetcher(db, api_client, pred)
 
         # Fetch matches
         stats = fetcher.fetch_and_store_matches(days_ahead=days_ahead)
@@ -1385,7 +1385,7 @@ async def sync_matches_now():
         
         today = date.today()
         pred = get_predictor()
-        fetcher = DailyMatchFetcher(db, odds_client, pred)
+        fetcher = DailyMatchFetcher(db, api_client, pred)
         
         # Fetch solo para hoy (1 día adelante)
         result = fetcher.fetch_and_store_matches(days_ahead=1)
@@ -1533,7 +1533,7 @@ async def startup_event():
         from src.services.match_update_service import MatchUpdateService
         
         logger.info("\n🔄 Actualizando estados de partidos existentes...")
-        update_service_startup = MatchUpdateService(db, odds_client)
+        update_service_startup = MatchUpdateService(db, api_client)
         
         # DESARROLLO: Reducido a 3 días para minimizar API usage
         # TODO: En producción cambiar a days=7 (el servidor no se reinicia frecuentemente)
@@ -1557,7 +1557,7 @@ async def startup_event():
         logger.info("\n📥 Iniciando fetch histórico (últimos 3 días + próximos 3 días)...")
         
         pred = get_predictor()
-        fetcher = DailyMatchFetcher(db, odds_client, pred)
+        fetcher = DailyMatchFetcher(db, api_client, pred)
         
         total_new = 0
         total_found = 0
@@ -1597,7 +1597,7 @@ async def startup_event():
     try:
         # Job 1: Actualizar cuotas y detectar partidos nuevos (cada 5 min)
         scheduler.add_job(
-            func=update_service.update_all_pending_matches,
+            func=match_update_service.update_all_pending_matches,
             trigger=IntervalTrigger(minutes=5),  # ✅ Reducido de 15 a 5 minutos
             id="update_odds_job",
             name="Actualización automática de cuotas",
@@ -1607,7 +1607,7 @@ async def startup_event():
         # Job 1.5: Actualizar estados de partidos existentes (cada 5 min)
         if match_update_service:
             scheduler.add_job(
-                func=lambda: match_update_service.update_recent_matches(days=7),
+                func=lambda: match_match_update_service.update_recent_matches(days=7),
                 trigger=IntervalTrigger(minutes=5),
                 id="update_match_status_job",
                 name="Actualización de estados de partidos",
@@ -1646,7 +1646,7 @@ async def startup_event():
                 try:
                     from src.services.live_match_data_service import LiveMatchDataService
                     
-                    live_service = LiveMatchDataService(db.conn, odds_client, pbp_service)
+                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
                     result = live_service.sync_live_matches()
                     
                     if result.get("success") and result.get("matches_live", 0) > 0:
@@ -1674,7 +1674,7 @@ async def startup_event():
 
         
         # global live_events_service
-        # live_events_service = LiveEventsService(db, odds_client)
+        # live_events_service = LiveEventsService(db, api_client)
         
         # def run_websocket():
         #     """Ejecutar WebSocket en thread separado"""
@@ -1724,7 +1724,7 @@ async def startup_event():
 
                 logger.info("🌅 Iniciando fetch diario de partidos...")
                 pred = get_predictor()
-                fetcher = DailyMatchFetcher(db, odds_client, pred)
+                fetcher = DailyMatchFetcher(db, api_client, pred)
                 stats = fetcher.fetch_and_store_matches(days_ahead=7)
 
                 logger.info(f"✅ Fetch diario completado:")
@@ -1753,7 +1753,7 @@ async def startup_event():
 
                 logger.info("🔍 Detectando partidos nuevos (próximos 7 días)...")
                 pred = get_predictor()
-                fetcher = DailyMatchFetcher(db, odds_client, pred)
+                fetcher = DailyMatchFetcher(db, api_client, pred)
                 stats = fetcher.fetch_and_store_matches(days_ahead=7)
 
                 if stats['matches_new'] > 0:
@@ -2166,16 +2166,16 @@ async def rankings_sync_diagnostic():
     
     try:
         # Paso 1: Verificar API client
-        if not odds_client:
+        if not api_client:
             diagnostic_info["step_1_api_client"] = "FAILED: API client not initialized"
-            diagnostic_info["errors"].append("odds_client is None")
+            diagnostic_info["errors"].append("api_client is None")
             return diagnostic_info
         
         diagnostic_info["step_1_api_client"] = "OK"
         
         # Paso 2: Llamar a la API
         try:
-            rankings = odds_client.get_rankings(league="ATP")
+            rankings = api_client.get_rankings(league="ATP")
             diagnostic_info["step_2_api_call"] = "OK"
         except Exception as e:
             diagnostic_info["step_2_api_call"] = f"FAILED: {str(e)}"
