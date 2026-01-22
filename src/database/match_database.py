@@ -931,18 +931,19 @@ class MatchDatabase:
         Returns:
             Dict con estadísticas completas
         """
-        cursor = self.conn.cursor()
-
         # Filtro de fecha
         if days:
+            from datetime import timedelta
             fecha_inicio = date.today() - timedelta(days=days)
-            date_filter = f"AND DATE(b.timestamp_apuesta) >= '{fecha_inicio}'"
+            date_filter = "AND DATE(b.timestamp_apuesta) >= :fecha_inicio"
+            params = {"fecha_inicio": str(fecha_inicio)}
         else:
             fecha_inicio = None
             date_filter = ""
+            params = {}
 
         # Estadísticas de apuestas
-        cursor.execute(
+        stats_row = self._fetchone(
             f"""
             SELECT 
                 COUNT(*) as total,
@@ -953,16 +954,17 @@ class MatchDatabase:
             FROM bets b
             WHERE estado = 'completada'
             {date_filter}
-        """
+        """,
+            params,
         )
 
-        stats = dict(cursor.fetchone())
+        stats = stats_row if stats_row else {}
 
         # Calcular métricas derivadas
-        total = stats["total"] or 0
-        ganadas = stats["ganadas"] or 0
-        stake_total = stats["stake_total"] or 0
-        ganancia_neta = stats["ganancia_neta"] or 0
+        total = stats.get("total", 0) or 0
+        ganadas = stats.get("ganadas", 0) or 0
+        stake_total = stats.get("stake_total", 0) or 0
+        ganancia_neta = stats.get("ganancia_neta", 0) or 0
 
         win_rate = ganadas / total if total > 0 else 0.0
         roi = ganancia_neta / stake_total if stake_total > 0 else 0.0
@@ -975,7 +977,7 @@ class MatchDatabase:
             "apuestas": {
                 "total": total,
                 "ganadas": ganadas,
-                "perdidas": stats["perdidas"] or 0,
+                "perdidas": stats.get("perdidas", 0) or 0,
                 "win_rate": round(win_rate, 3),
             },
             "financiero": {
@@ -998,20 +1000,17 @@ class MatchDatabase:
         Returns:
             Lista de estadísticas por día
         """
-        cursor = self.conn.cursor()
-
+        from datetime import timedelta
         fecha_inicio = date.today() - timedelta(days=days)
 
-        cursor.execute(
+        return self._fetchall(
             """
             SELECT * FROM daily_stats
-            WHERE fecha >= ?
+            WHERE fecha >= :fecha_inicio
             ORDER BY fecha DESC
         """,
-            (fecha_inicio,),
+            {"fecha_inicio": str(fecha_inicio)},
         )
-
-        return [dict(row) for row in cursor.fetchall()]
 
     # ============================================================
     # MÉTODOS DE CUOTAS (ODDS HISTORY)
