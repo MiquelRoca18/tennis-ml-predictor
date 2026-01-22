@@ -389,14 +389,12 @@ class MatchDatabase:
 
     def get_live_matches(self) -> List[Dict]:
         """Obtiene partidos que están en vivo"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
+        return self._fetchall("""
             SELECT * FROM matches 
             WHERE event_live = '1' 
             AND estado IN ('pendiente', 'en_juego')
             AND event_key IS NOT NULL
-        """)
-        return [dict(row) for row in cursor.fetchall()]
+        """, {})
 
     def update_match_live_data(
         self,
@@ -567,17 +565,15 @@ class MatchDatabase:
         Returns:
             Lista de partidos con predicciones
         """
-        cursor = self.conn.cursor()
-        cursor.execute(
+        matches = self._fetchall(
             """
             SELECT * FROM matches_with_latest_prediction
-            WHERE fecha_partido BETWEEN ? AND ?
+            WHERE fecha_partido BETWEEN :start_date AND :end_date
             ORDER BY fecha_partido ASC, hora_inicio ASC, id ASC
         """,
-            (start_date, end_date),
+            {"start_date": start_date, "end_date": end_date},
         )
 
-        matches = [dict(row) for row in cursor.fetchall()]
         logger.info(
             f"📊 Encontrados {len(matches)} partidos entre {start_date} y {end_date}"
         )
@@ -747,35 +743,26 @@ class MatchDatabase:
 
     def get_latest_prediction(self, match_id: int) -> Optional[Dict]:
         """Obtiene la última predicción de un partido"""
-        cursor = self.conn.cursor()
-        cursor.execute(
+        return self._fetchone(
             """
             SELECT * FROM predictions
-            WHERE match_id = ?
+            WHERE match_id = :match_id
             ORDER BY version DESC
             LIMIT 1
         """,
-            (match_id,),
+            {"match_id": match_id},
         )
-
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
 
     def get_prediction_history(self, match_id: int) -> List[Dict]:
         """Obtiene todas las versiones de predicción de un partido"""
-        cursor = self.conn.cursor()
-        cursor.execute(
+        return self._fetchall(
             """
             SELECT * FROM predictions
-            WHERE match_id = ?
+            WHERE match_id = :match_id
             ORDER BY version ASC
         """,
-            (match_id,),
+            {"match_id": match_id},
         )
-
-        return [dict(row) for row in cursor.fetchall()]
 
     # ============================================================
     # MÉTODOS DE APUESTAS (BETS)
