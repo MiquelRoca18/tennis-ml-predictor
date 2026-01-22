@@ -589,39 +589,16 @@ class MatchDatabase:
         )
         return matches
 
-    def cleanup_old_matches(self, days_old: int = 30) -> int:
+    def cleanup_old_matches(self, days_to_keep: int = 30) -> int:
         """
-        Elimina partidos más antiguos de N días
+        Elimina partidos antiguos (más de X días)
 
         Args:
-            days_old: Número de días (partidos anteriores a esta fecha se eliminan)
+            days_to_keep: Días de historial a mantener (default: 30)
 
         Returns:
             Número de partidos eliminados
         """
-        cursor = self.conn.cursor()
-        cutoff_date = date.today() - timedelta(days=days_old)
-
-        try:
-            # Obtener IDs de partidos a eliminar
-            cursor.execute(
-                """
-                SELECT id FROM matches
-                WHERE fecha_partido < ? AND estado = 'completado'
-            """,
-                (cutoff_date,),
-            )
-
-            match_ids = [row["id"] for row in cursor.fetchall()]
-
-            if not match_ids:
-                logger.info(f"ℹ️  No hay partidos antiguos para eliminar (>{days_old} días)")
-                return 0
-
-            # Eliminar apuestas
-            cursor.execute(
-                f"""
-                DELETE FROM bets 
                 WHERE match_id IN ({','.join('?' * len(match_ids))})
             """,
                 match_ids,
