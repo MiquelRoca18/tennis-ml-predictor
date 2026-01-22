@@ -296,6 +296,8 @@ class MatchDatabase:
         """
         if self.is_postgres:
             # PostgreSQL: Use RETURNING id
+            from sqlalchemy import text
+            
             query = """
                 INSERT INTO matches (
                     fecha_partido, hora_inicio, torneo, ronda, superficie,
@@ -336,8 +338,12 @@ class MatchDatabase:
                 "event_qualification": event_qualification,
                 "estado": estado,
             }
-            result = self._execute(query, params)
-            match_id = result.fetchone()[0]
+            
+            # CRITICAL FIX: Fetch ID within the connection context
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params)
+                match_id = result.fetchone()[0]  # Get ID before connection closes
+                conn.commit()
         else:
             # SQLite: Use lastrowid
             cursor = self.conn.cursor()
