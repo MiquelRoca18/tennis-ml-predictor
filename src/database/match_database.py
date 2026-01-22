@@ -562,6 +562,9 @@ class MatchDatabase:
         Returns:
             True si el partido ya existe
         """
+        # DEBUG: Log the query parameters
+        logger.info(f"🔍 match_exists() called: {jugador1_nombre} vs {jugador2_nombre} on {fecha_partido}")
+        
         # Buscar en ambas direcciones (J1 vs J2 o J2 vs J1)
         result = self._fetchone(
             """
@@ -581,11 +584,12 @@ class MatchDatabase:
         )
 
         exists = result is not None
-
+        
+        # DEBUG: Log the result
         if exists:
-            logger.debug(
-                f"ℹ️  Partido ya existe: {jugador1_nombre} vs {jugador2_nombre} ({fecha_partido})"
-            )
+            logger.info(f"✅ Partido EXISTE en DB: {jugador1_nombre} vs {jugador2_nombre} (ID: {result.get('id')})")
+        else:
+            logger.info(f"❌ Partido NO existe en DB: {jugador1_nombre} vs {jugador2_nombre}")
 
         return exists
 
