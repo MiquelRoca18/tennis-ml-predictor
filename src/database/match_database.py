@@ -435,18 +435,16 @@ class MatchDatabase:
         event_final_result: str = None
     ):
         """Actualiza datos en vivo de un partido"""
-        cursor = self.conn.cursor()
-        
         updates = []
-        params = []
+        params = {"match_id": match_id}
         
         if scores is not None:
-            updates.append("resultado_marcador = ?")
-            params.append(str(scores))
+            updates.append("resultado_marcador = :scores")
+            params["scores"] = str(scores)
         
         if event_live is not None:
-            updates.append("event_live = ?")
-            params.append(event_live)
+            updates.append("event_live = :event_live")
+            params["event_live"] = event_live
         
         if event_status is not None:
             # Mapear estado de API a nuestro estado
@@ -456,14 +454,12 @@ class MatchDatabase:
                 updates.append("estado = 'en_juego'")
         
         if event_final_result is not None:
-            updates.append("event_final_result = ?")
-            params.append(event_final_result)
+            updates.append("event_final_result = :event_final_result")
+            params["event_final_result"] = event_final_result
         
         if updates:
-            params.append(match_id)
-            query = f"UPDATE matches SET {', '.join(updates)} WHERE id = ?"
-            cursor.execute(query, params)
-            self.conn.commit()
+            query = f"UPDATE matches SET {', '.join(updates)} WHERE id = :match_id"
+            self._execute(query, params)
             logger.debug(f"Actualizado partido en vivo {match_id}")
 
     def get_match_by_event_key(self, event_key: str) -> Optional[Dict]:
@@ -503,40 +499,11 @@ class MatchDatabase:
 
     def delete_match(self, match_id: int) -> bool:
         """
-        Elimina un partido y todas sus predicciones y apuestas asociadas
-
-        Args:
-            match_id: ID del partido a eliminar
+        Elimina un partido y todas sus predicciones/apuestas asociadas
 
         Returns:
             True si se eliminó correctamente
         """
-        cursor = self.conn.cursor()
-
-        try:
-            # Eliminar apuestas asociadas
-            cursor.execute("DELETE FROM bets WHERE match_id = ?", (match_id,))
-            bets_deleted = cursor.rowcount
-
-            # Eliminar predicciones asociadas
-            cursor.execute("DELETE FROM predictions WHERE match_id = ?", (match_id,))
-            predictions_deleted = cursor.rowcount
-
-            # Eliminar partido
-            cursor.execute("DELETE FROM matches WHERE id = ?", (match_id,))
-            match_deleted = cursor.rowcount
-
-            self.conn.commit()
-
-            if match_deleted > 0:
-                logger.info(
-                    f"✅ Partido {match_id} eliminado "
-                    f"({predictions_deleted} predicciones, {bets_deleted} apuestas)"
-                )
-                return True
-            else:
-                logger.warning(f"⚠️  Partido {match_id} no encontrado")
-                return False
 
         except Exception as e:
             self.conn.rollback()
