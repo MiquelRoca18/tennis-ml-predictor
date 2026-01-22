@@ -128,6 +128,10 @@ class MatchDatabase:
                 pg_schema = pg_schema.replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE")
                 pg_schema = pg_schema.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
                 
+                # Fix VIEW syntax: PostgreSQL doesn't support IF NOT EXISTS for CREATE VIEW
+                # Use CREATE OR REPLACE VIEW instead
+                pg_schema = pg_schema.replace("CREATE VIEW IF NOT EXISTS", "CREATE OR REPLACE VIEW")
+                
                 # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
                 pg_schema = re.sub(r'CREATE TRIGGER.*?END;', '', pg_schema, flags=re.DOTALL)
                 
@@ -157,6 +161,9 @@ class MatchDatabase:
                             if statement.upper().startswith('CREATE TABLE'):
                                 table_name = statement.split()[5] if len(statement.split()) > 5 else "unknown"
                                 logger.info(f"✅ Creating table: {table_name}")
+                            elif statement.upper().startswith('CREATE OR REPLACE VIEW'):
+                                view_name = statement.split()[4] if len(statement.split()) > 4 else "unknown"
+                                logger.info(f"✅ Creating view: {view_name}")
                             
                             conn.execute(text(statement))
                             conn.commit()
