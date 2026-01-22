@@ -83,26 +83,23 @@ logger.info(f"📁 Database path: {DB_PATH}")
 db = MatchDatabase(DB_PATH)
 predictor = None
 
-# Inicializar APITennisClient y OddsUpdateService
-try:
-    odds_client = APITennisClient()
-    update_service = OddsUpdateService(db, odds_client)
-    logger.info("✅ OddsUpdateService inicializado con API-Tennis")
-except Exception as e:
-    logger.warning(f"⚠️  OddsUpdateService inicializado SIN API-Tennis: {e}")
-    update_service = OddsUpdateService(db, None)
+# Inicializar APITennisClient y servicios
+api_client = APITennisClient()
 
-# Inicializar MatchUpdateService para actualizar estados
+# Servicios Day 1
+odds_service = OddsUpdateService(db, api_client)
+logger.info("✅ OddsUpdateService inicializado con API-Tennis")
+
 from src.services.match_update_service import MatchUpdateService
 
 try:
-    match_update_service = MatchUpdateService(db, odds_client)
+    match_update_service = MatchUpdateService(db, api_client)
     logger.info("✅ MatchUpdateService inicializado")
 except Exception as e:
-    logger.warning(f"⚠️  MatchUpdateService no disponible: {e}")
+    logger.error(f"❌ Error inicializando MatchUpdateService: {e}")
     match_update_service = None
 
-# Inicializar Elite Services
+# Elite Services (Day 2)
 from src.services.player_service import PlayerService
 from src.services.h2h_service import H2HService
 from src.services.ranking_service_elite import RankingServiceElite
@@ -111,15 +108,16 @@ from src.services.multi_odds_service import MultiBookmakerOddsService
 from src.services.pointbypoint_service import PointByPointService
 
 try:
-    player_service = PlayerService(db.conn)
-    h2h_service = H2HService(db.conn, odds_client)
-    ranking_service = RankingServiceElite(db.conn, odds_client, player_service)
-    tournament_service = TournamentService(db.conn, odds_client)
-    multi_odds_service = MultiBookmakerOddsService(db.conn, odds_client)
-    pbp_service = PointByPointService(db.conn)
+    player_service = PlayerService(db)
+    # Note: Other services still use db.conn - will be migrated later
+    h2h_service = H2HService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
+    ranking_service = RankingServiceElite(db.conn, api_client, player_service) if hasattr(db, 'conn') and db.conn else None
+    tournament_service = TournamentService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
+    multi_odds_service = MultiBookmakerOddsService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
+    pbp_service = PointByPointService(db.conn) if hasattr(db, 'conn') and db.conn else None
     logger.info("✅ Elite Services inicializados (Day 1 + Day 2)")
 except Exception as e:
-    logger.warning(f"⚠️  Elite Services no disponibles: {e}")
+    logger.warning(f"⚠️  Elite Services parcialmente inicializados: {e}")
     player_service = None
     h2h_service = None
     ranking_service = None
