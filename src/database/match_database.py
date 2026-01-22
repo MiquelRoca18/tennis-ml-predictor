@@ -194,34 +194,46 @@ class MatchDatabase:
     
     def _execute(self, query: str, params: tuple = None):
         """Execute a query (works for both SQLite and PostgreSQL)"""
-        if self.is_postgres:
-            from sqlalchemy import text
-            with self.engine.connect() as conn:
-                result = conn.execute(text(query), params or {})
-                conn.commit()
-                return result
-        else:
-            cursor = self.conn.cursor()
-            cursor.execute(query, params or ())
-            self.conn.commit()
-            return cursor
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    result = conn.execute(text(query), params or {})
+                    conn.commit()
+                    return result
+            else:
+                cursor = self.conn.cursor()
+                cursor.execute(query, params or ())
+                self.conn.commit()
+                return cursor
+        except Exception as e:
+            logger.error(f"❌ Error in _execute: {e}")
+            logger.error(f"   Query: {query[:200]}...")
+            logger.error(f"   Params: {params}")
+            raise  # Re-raise para que el llamador pueda manejar
     
     def _fetchone(self, query: str, params: tuple = None) -> Optional[Dict]:
         """Fetch one row (works for both SQLite and PostgreSQL)"""
-        if self.is_postgres:
-            from sqlalchemy import text
-            with self.engine.connect() as conn:
-                result = conn.execute(text(query), params or {})
-                row = result.fetchone()
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    result = conn.execute(text(query), params or {})
+                    row = result.fetchone()
+                    if row:
+                        return dict(row._mapping)
+                    return None
+            else:
+                cursor = self.conn.cursor()
+                cursor.execute(query, params or ())
+                row = cursor.fetchone()
                 if row:
-                    return dict(row._mapping)
+                    return dict(row)
                 return None
-        else:
-            cursor = self.conn.cursor()
-            cursor.execute(query, params or ())
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
+        except Exception as e:
+            logger.error(f"❌ Error in _fetchone: {e}")
+            logger.error(f"   Query: {query[:200]}...")
+            logger.error(f"   Params: {params}")
             return None
     
     def _fetchall(self, query: str, params: tuple = None) -> List[Dict]:
