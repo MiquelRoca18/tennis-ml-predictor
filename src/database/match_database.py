@@ -129,33 +129,34 @@ class MatchDatabase:
                 pg_schema = pg_schema.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
                 
                 # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
-                # Remove everything from "CREATE TRIGGER" to the next semicolon after "END;"
                 pg_schema = re.sub(r'CREATE TRIGGER.*?END;', '', pg_schema, flags=re.DOTALL)
                 
-                # Replace INSERT OR IGNORE with INSERT ... ON CONFLICT DO NOTHING
-                pg_schema = re.sub(
-                    r'INSERT OR IGNORE INTO (\w+)',
-                    r'INSERT INTO \1',
-                    pg_schema
-                )
                 # Remove the test data insert completely for PostgreSQL
-                pg_schema = re.sub(
-                    r'-- Insertar partido de ejemplo.*$',
-                    '',
-                    pg_schema,
-                    flags=re.DOTALL
-                )
+                pg_schema = re.sub(r'-- Insertar partido de ejemplo.*$', '', pg_schema, flags=re.DOTALL)
                 
-                # Split and execute statements individually
-                statements = [s.strip() for s in pg_schema.split(';') if s.strip() and not s.strip().startswith('--')]
+                # Split statements
+                raw_statements = pg_schema.split(';')
                 
+                # Clean and filter statements
+                statements = []
+                for stmt in raw_statements:
+                    # Remove comment lines (lines starting with --)
+                    lines = [line for line in stmt.split('\n') if not line.strip().startswith('--')]
+                    cleaned = '\n'.join(lines).strip()
+                    
+                    if cleaned:  # Only keep non-empty statements
+                        statements.append(cleaned)
+                
+                logger.info(f"📊 Processing {len(statements)} SQL statements for PostgreSQL")
+                
+                # Execute each statement in its own transaction
                 for i, statement in enumerate(statements):
                     try:
                         with self.engine.connect() as conn:
                             # Log CREATE TABLE statements for debugging
                             if statement.upper().startswith('CREATE TABLE'):
                                 table_name = statement.split()[5] if len(statement.split()) > 5 else "unknown"
-                                logger.info(f"Creating table: {table_name}")
+                                logger.info(f"✅ Creating table: {table_name}")
                             
                             conn.execute(text(statement))
                             conn.commit()
@@ -164,8 +165,9 @@ class MatchDatabase:
                         if "already exists" in error_msg.lower():
                             logger.debug(f"Table/index already exists (statement {i+1})")
                         else:
-                            logger.error(f"❌ Schema statement {i+1} failed: {error_msg}")
-                            logger.error(f"Statement preview: {statement[:200]}")
+                            stmt_preview = statement[:100].replace('\n', ' ')
+                            logger.error(f"❌ Statement {i+1} failed: {error_msg}")
+                            logger.error(f"   Preview: {stmt_preview}...")
                     
                 logger.info("✅ PostgreSQL schema initialized")
             else:
