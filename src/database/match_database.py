@@ -805,36 +805,55 @@ class MatchDatabase:
         Returns:
             ID de la apuesta creada
         """
-        cursor = self.conn.cursor()
-
         # Verificar si ya existe una apuesta activa para este partido
-        cursor.execute(
+        existing_bet = self._fetchone(
             """
             SELECT id FROM bets
-            WHERE match_id = ? AND estado = 'activa'
+            WHERE match_id = :match_id AND estado = 'activa'
         """,
-            (match_id,),
+            {"match_id": match_id},
         )
 
-        existing_bet = cursor.fetchone()
         if existing_bet:
             logger.warning(f"⚠️  Ya existe una apuesta activa para el partido {match_id}")
             return existing_bet["id"]
 
         # Crear nueva apuesta
-        cursor.execute(
+        if self.is_postgres:
+            query = """
+                INSERT INTO bets (
+                    match_id, prediction_id,
+                    jugador_apostado, cuota_apostada, stake,
+                    estado
+                ) VALUES (
+                    :match_id, :prediction_id,
+                    :jugador_apostado, :cuota_apostada, :stake,
+                    'activa'
+                ) RETURNING id
             """
-            INSERT INTO bets (
-                match_id, prediction_id,
-                jugador_apostado, cuota_apostada, stake,
-                estado
-            ) VALUES (?, ?, ?, ?, ?, 'activa')
-        """,
-            (match_id, prediction_id, jugador_apostado, cuota_apostada, stake),
-        )
-
-        self.conn.commit()
-        bet_id = cursor.lastrowid
+            params = {
+                "match_id": match_id,
+                "prediction_id": prediction_id,
+                "jugador_apostado": jugador_apostado,
+                "cuota_apostada": cuota_apostada,
+                "stake": stake,
+            }
+            result = self._execute(query, params)
+            bet_id = result.fetchone()[0]
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO bets (
+                    match_id, prediction_id,
+                    jugador_apostado, cuota_apostada, stake,
+                    estado
+                ) VALUES (?, ?, ?, ?, ?, 'activa')
+            """,
+                (match_id, prediction_id, jugador_apostado, cuota_apostada, stake),
+            )
+            self.conn.commit()
+            bet_id = cursor.lastrowid
 
         logger.info(
             f"✅ Apuesta registrada: {jugador_apostado} @ {cuota_apostada} (Stake: {stake}€)"
@@ -848,27 +867,23 @@ class MatchDatabase:
         Returns:
             True si se actualizó correctamente
         """
-        cursor = self.conn.cursor()
-
         # Obtener la apuesta activa
-        cursor.execute(
+        bet = self._fetchone(
             """
             SELECT * FROM bets
-            WHERE match_id = ? AND estado = 'activa'
+            WHERE match_id = :match_id AND estado = 'activa'
         """,
-            (match_id,),
+            {"match_id": match_id},
         )
 
-        bet = cursor.fetchone()
         if not bet:
             logger.warning(f"⚠️  No hay apuesta activa para el partido {match_id}")
             return False
 
         # Calcular resultado
-        bet_dict = dict(bet)
-        jugador_apostado = bet_dict["jugador_apostado"]
-        cuota = bet_dict["cuota_apostada"]
-        stake = bet_dict["stake"]
+        jugador_apostado = bet["jugador_apostado"]
+        cuota = bet["cuota_apostada"]
+        stake = bet["stake"]
 
         if jugador_apostado == ganador:
             # Apuesta ganada
@@ -882,19 +897,22 @@ class MatchDatabase:
             roi = -1.0
 
         # Actualizar apuesta
-        cursor.execute(
+        self._execute(
             """
             UPDATE bets
-            SET resultado = ?,
-                ganancia = ?,
-                roi = ?,
+            SET resultado = :resultado,
+                ganancia = :ganancia,
+                roi = :roi,
                 estado = 'completada'
-            WHERE id = ?
+            WHERE id = :bet_id
         """,
-            (resultado, ganancia, roi, bet_dict["id"]),
+            {
+                "resultado": resultado,
+                "ganancia": ganancia,
+                "roi": roi,
+                "bet_id": bet["id"],
+            },
         )
-
-        self.conn.commit()
 
         logger.info(f"✅ Apuesta actualizada: {resultado.upper()} (Ganancia: {ganancia:+.2f}€)")
         return True
