@@ -146,19 +146,26 @@ class MatchDatabase:
                     flags=re.DOTALL
                 )
                 
-                with self.engine.connect() as conn:
-                    # Split and execute statements individually
-                    for statement in pg_schema.split(';'):
-                        statement = statement.strip()
-                        if statement and not statement.startswith('--'):
-                            try:
-                                conn.execute(text(statement))
-                            except Exception as e:
-                                # Log but continue - table might already exist
-                                error_msg = str(e)[:200]
-                                if "already exists" not in error_msg.lower():
-                                    logger.warning(f"Schema statement warning: {error_msg}")
-                    conn.commit()
+                # Split and execute statements individually
+                statements = [s.strip() for s in pg_schema.split(';') if s.strip() and not s.strip().startswith('--')]
+                
+                for i, statement in enumerate(statements):
+                    try:
+                        with self.engine.connect() as conn:
+                            # Log CREATE TABLE statements for debugging
+                            if statement.upper().startswith('CREATE TABLE'):
+                                table_name = statement.split()[5] if len(statement.split()) > 5 else "unknown"
+                                logger.info(f"Creating table: {table_name}")
+                            
+                            conn.execute(text(statement))
+                            conn.commit()
+                    except Exception as e:
+                        error_msg = str(e)[:300]
+                        if "already exists" in error_msg.lower():
+                            logger.debug(f"Table/index already exists (statement {i+1})")
+                        else:
+                            logger.error(f"❌ Schema statement {i+1} failed: {error_msg}")
+                            logger.error(f"Statement preview: {statement[:200]}")
                     
                 logger.info("✅ PostgreSQL schema initialized")
             else:
