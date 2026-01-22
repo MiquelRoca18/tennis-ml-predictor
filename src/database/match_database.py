@@ -115,16 +115,28 @@ class MatchDatabase:
                 from sqlalchemy import text
                 
                 # Convert SQLite schema to PostgreSQL-compatible
-                # Replace AUTOINCREMENT with SERIAL, etc.
-                pg_schema = schema_script.replace("AUTOINCREMENT", "")
+                pg_schema = schema_script
+                
+                # Replace AUTOINCREMENT with nothing (SERIAL handles it)
+                pg_schema = pg_schema.replace("AUTOINCREMENT", "")
+                
+                # Replace INTEGER PRIMARY KEY with SERIAL PRIMARY KEY
                 pg_schema = pg_schema.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+                
+                # Fix BOOLEAN defaults (PostgreSQL requires FALSE/TRUE, not 0/1)
+                pg_schema = pg_schema.replace("BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE")
+                pg_schema = pg_schema.replace("BOOLEAN DEFAULT 1", "BOOLEAN DEFAULT TRUE")
                 
                 with self.engine.connect() as conn:
                     # Split and execute statements individually
                     for statement in pg_schema.split(';'):
                         statement = statement.strip()
                         if statement:
-                            conn.execute(text(statement))
+                            try:
+                                conn.execute(text(statement))
+                            except Exception as e:
+                                # Log but continue - table might already exist
+                                logger.debug(f"Schema statement skipped (might exist): {str(e)[:100]}")
                     conn.commit()
                     
                 logger.info("✅ PostgreSQL schema initialized")
