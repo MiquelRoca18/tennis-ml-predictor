@@ -504,9 +504,22 @@ class MatchDatabase:
         Returns:
             True si se eliminó correctamente
         """
+        try:
+            # Las foreign keys con ON DELETE CASCADE se encargan de eliminar
+            # predicciones y apuestas automáticamente
+            self._execute("DELETE FROM bets WHERE match_id = :match_id", {"match_id": match_id})
+            logger.debug(f"Eliminadas apuestas del partido {match_id}")
+
+            self._execute("DELETE FROM predictions WHERE match_id = :match_id", {"match_id": match_id})
+            logger.debug(f"Eliminadas predicciones del partido {match_id}")
+
+            self._execute("DELETE FROM matches WHERE id = :match_id", {"match_id": match_id})
+            logger.debug(f"Eliminado partido {match_id}")
+
+            logger.info(f"✅ Partido {match_id} eliminado completamente")
+            return True
 
         except Exception as e:
-            self.conn.rollback()
             logger.error(f"❌ Error eliminando partido {match_id}: {e}")
             return False
 
