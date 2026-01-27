@@ -16,45 +16,94 @@ import json
 import threading
 import traceback
 
+# Configurar logging temprano para diagnóstico
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+_startup_logger = logging.getLogger("startup")
+_startup_logger.info("🚀 Iniciando imports de módulos...")
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+try:
+    from fastapi import FastAPI, HTTPException, Query, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    _startup_logger.info("✅ FastAPI importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando FastAPI: {e}")
+    raise
 
 # Añadir src al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.api.models_v2 import (
-    MatchCreateRequest,
-    MatchResultRequest,
-    MatchResponse,
-    MatchesDateResponse,
-    Superficie,
-    EstadoPartido,
-    JugadorInfo,
-    PredictionVersion,
-    MatchResult,
-    MatchDetails,
-    MatchAnalysis,
-    MatchStatsBasic,
-    MatchStatsAdvanced,
-    SetScore,
-)
-from src.database.match_database import MatchDatabase
-from src.prediction.predictor_calibrado import PredictorCalibrado
-from src.config.settings import Config
-from src.services.odds_update_service import OddsUpdateService
-from src.services.api_tennis_client import APITennisClient
-from src.services.match_stats_service import MatchStatsService
+try:
+    from src.api.models_v2 import (
+        MatchCreateRequest,
+        MatchResultRequest,
+        MatchResponse,
+        MatchesDateResponse,
+        Superficie,
+        EstadoPartido,
+        JugadorInfo,
+        PredictionVersion,
+        MatchResult,
+        MatchDetails,
+        MatchAnalysis,
+        MatchStatsBasic,
+        MatchStatsAdvanced,
+        SetScore,
+    )
+    _startup_logger.info("✅ models_v2 importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando models_v2: {e}")
+    raise
+
+try:
+    from src.database.match_database import MatchDatabase
+    _startup_logger.info("✅ MatchDatabase importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando MatchDatabase: {e}")
+    raise
+
+try:
+    from src.prediction.predictor_calibrado import PredictorCalibrado
+    _startup_logger.info("✅ PredictorCalibrado importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando PredictorCalibrado: {e}")
+    raise
+
+try:
+    from src.config.settings import Config
+    _startup_logger.info("✅ Config importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando Config: {e}")
+    raise
+
+try:
+    from src.services.odds_update_service import OddsUpdateService
+    _startup_logger.info("✅ OddsUpdateService importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando OddsUpdateService: {e}")
+    raise
+
+try:
+    from src.services.api_tennis_client import APITennisClient
+    _startup_logger.info("✅ APITennisClient importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando APITennisClient: {e}")
+    raise
+
+try:
+    from src.services.match_stats_service import MatchStatsService
+    _startup_logger.info("✅ MatchStatsService importado")
+except Exception as e:
+    _startup_logger.error(f"❌ Error importando MatchStatsService: {e}")
+    raise
 
 # APScheduler para actualizaciones automáticas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+_startup_logger.info("✅ Todos los módulos importados correctamente")
 logger = logging.getLogger(__name__)
 
 # Crear aplicación FastAPI

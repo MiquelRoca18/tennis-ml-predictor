@@ -11,7 +11,7 @@
 #   docker run -p 8000:8000 -v $(pwd)/modelos:/app/modelos tennis-ml-api
 
 # Stage 1: Builder
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
