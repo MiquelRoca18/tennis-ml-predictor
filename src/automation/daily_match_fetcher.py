@@ -34,7 +34,7 @@ class DailyMatchFetcher:
         self,
         db: MatchDatabase,
         api_client: APITennisClient,
-        predictor: PredictorCalibrado,
+        predictor: Optional[PredictorCalibrado] = None,
     ):
         """
         Initialize the daily match fetcher
@@ -42,14 +42,17 @@ class DailyMatchFetcher:
         Args:
             db: Database instance
             api_client: Tennis API client
-            predictor: ML predictor instance
+            predictor: ML predictor instance (opcional - sin él solo se guardan partidos sin predicciones)
         """
         self.db = db
         self.api_client = api_client
         self.predictor = predictor
         self.surface_mapper = TournamentSurfaceMapper()
 
-        logger.info("✅ DailyMatchFetcher initialized")
+        if predictor:
+            logger.info("✅ DailyMatchFetcher initialized (con predictor)")
+        else:
+            logger.warning("⚠️  DailyMatchFetcher initialized SIN predictor - partidos se guardarán sin predicciones")
 
     def fetch_and_store_matches(self, days_ahead: int = 7) -> Dict:
         """
@@ -421,6 +424,11 @@ class DailyMatchFetcher:
         Returns:
             True if prediction was generated successfully
         """
+        # Si no hay predictor, no podemos generar predicciones
+        if self.predictor is None:
+            logger.debug(f"ℹ️  Skipping prediction for match {match_id} (no predictor available)")
+            return False
+            
         try:
             # Generate prediction using ML model
             resultado_pred = self.predictor.predecir_partido(

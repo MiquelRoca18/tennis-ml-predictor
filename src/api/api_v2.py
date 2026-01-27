@@ -141,8 +141,12 @@ github_monitor = GitHubPollingMonitor(repo_owner="Tennismylife", repo_name="TML-
 scheduler = BackgroundScheduler()
 
 
-def get_predictor():
-    """Lazy loading del predictor"""
+def get_predictor(raise_on_error: bool = True):
+    """Lazy loading del predictor
+    
+    Args:
+        raise_on_error: Si True, lanza excepción si no se puede cargar. Si False, retorna None.
+    """
     global predictor
     if predictor is None:
         try:
@@ -150,7 +154,9 @@ def get_predictor():
             logger.info(f"✅ Predictor cargado desde {Config.MODEL_PATH}")
         except Exception as e:
             logger.error(f"❌ Error cargando predictor: {e}")
-            raise HTTPException(status_code=500, detail=f"Error cargando modelo: {e}")
+            if raise_on_error:
+                raise HTTPException(status_code=500, detail=f"Error cargando modelo: {e}")
+            return None
     return predictor
 
 
@@ -1713,7 +1719,11 @@ async def startup_event():
         # TODO: En producción cambiar a 7 días
         logger.info("\n📥 Iniciando fetch histórico (últimos 3 días + próximos 3 días)...")
         
-        pred = get_predictor()
+        # Intentar cargar predictor sin fallar si no existe (permite fetch sin predicciones)
+        pred = get_predictor(raise_on_error=False)
+        if pred is None:
+            logger.warning("⚠️  Predictor no disponible - se guardarán partidos SIN predicciones")
+        
         fetcher = DailyMatchFetcher(db, api_client, pred)
         
         total_new = 0
@@ -1764,7 +1774,7 @@ async def startup_event():
         # Job 1.5: Actualizar estados de partidos existentes (cada 5 min)
         if match_update_service:
             scheduler.add_job(
-                func=lambda: match_match_update_service.update_recent_matches(days=7),
+                func=lambda: match_update_service.update_recent_matches(days=7),
                 trigger=IntervalTrigger(minutes=5),
                 id="update_match_status_job",
                 name="Actualización de estados de partidos",

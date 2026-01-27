@@ -197,13 +197,13 @@ class MatchDatabase:
                         SUM(CASE WHEN b.resultado = 'ganada' THEN 1 ELSE 0 END) as ganadas,
                         SUM(CASE WHEN b.resultado = 'perdida' THEN 1 ELSE 0 END) as perdidas,
                         ROUND(
-                            (SUM(CASE WHEN b.resultado = 'ganada' THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)),
+                            (SUM(CASE WHEN b.resultado = 'ganada' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))::NUMERIC,
                             3
                         ) as win_rate,
-                        SUM(b.stake) as stake_total,
-                        SUM(b.ganancia) as ganancia_total,
+                        COALESCE(SUM(b.stake), 0) as stake_total,
+                        COALESCE(SUM(b.ganancia), 0) as ganancia_total,
                         ROUND(
-                            (SUM(b.ganancia)::NUMERIC / NULLIF(SUM(b.stake), 0)),
+                            (COALESCE(SUM(b.ganancia), 0) * 1.0 / NULLIF(SUM(b.stake), 0))::NUMERIC,
                             3
                         ) as roi
                     FROM bets b
