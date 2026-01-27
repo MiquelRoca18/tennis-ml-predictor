@@ -37,7 +37,7 @@ class MatchUpdateService:
         """
         self.db = db
         self.api_client = api_client
-        self.player_service = PlayerService(db.conn)
+        self.player_service = PlayerService(db)
         logger.info("✅ MatchUpdateService initialized with PlayerService")
 
     def update_recent_matches(self, days: int = 7) -> Dict:
@@ -250,12 +250,7 @@ class MatchUpdateService:
                 
                 # Actualizar hora si cambió
                 if "hora_inicio" in update_data:
-                    cursor = self.db.conn.cursor()
-                    cursor.execute(
-                        "UPDATE matches SET hora_inicio = ? WHERE id = ?",
-                        (update_data["hora_inicio"], match_id)
-                    )
-                    self.db.conn.commit()
+                    self.db.update_match_hora_inicio(match_id, update_data["hora_inicio"])
                 
                 # Si hay ganador, actualizar también ese campo
                 if update_data.get("resultado_ganador"):
@@ -315,12 +310,7 @@ class MatchUpdateService:
             ganador: Nombre del ganador
         """
         try:
-            cursor = self.db.conn.cursor()
-            cursor.execute(
-                "UPDATE matches SET resultado_ganador = ? WHERE id = ?",
-                (ganador, match_id)
-            )
-            self.db.conn.commit()
+            self.db.update_match_ganador(match_id, ganador)
         except Exception as e:
             logger.error(f"Error actualizando ganador: {e}")
 
@@ -529,13 +519,7 @@ if __name__ == "__main__":
             
             # Actualizar en DB si tenemos ambos keys
             if player1_key and player2_key:
-                cursor = self.db.conn.cursor()
-                cursor.execute("""
-                    UPDATE matches
-                    SET first_player_key = ?, second_player_key = ?
-                    WHERE id = ?
-                """, (player1_key, player2_key, match_id))
-                self.db.conn.commit()
+                self.db.update_match_player_keys(match_id, player1_key, player2_key)
                 logger.debug(f"✅ Player keys poblados para match {match_id}")
         
         except Exception as e:
@@ -558,11 +542,7 @@ if __name__ == "__main__":
             result = data["result"]
             
             # Verificar si ya tenemos estos datos guardados
-            cursor = self.db.conn.cursor()
-            existing = cursor.execute(
-                "SELECT COUNT(*) FROM match_games WHERE match_id = ?",
-                (match_id,)
-            ).fetchone()[0]
+            existing = self.db.check_match_games_exist(match_id)
             
             if existing > 0:
                 logger.debug(f"Estadísticas detalladas ya guardadas para match {match_id}")
@@ -572,25 +552,8 @@ if __name__ == "__main__":
             if "games" in result and result["games"]:
                 games_saved = 0
                 for game in result["games"]:
-                    try:
-                        cursor.execute("""
-                            INSERT INTO match_games (
-                                match_id, set_number, game_number,
-                                server, winner, score_games, was_break
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            match_id,
-                            game.get("set_number", ""),
-                            game.get("number_game", ""),
-                            game.get("player_served", ""),
-                            game.get("serve_winner", ""),
-                            game.get("score", ""),
-                            1 if game.get("serve_lost") else 0
-                        ))
+                    if self.db.save_match_game(match_id, game):
                         games_saved += 1
-                    except Exception as e:
-                        logger.debug(f"Error guardando juego: {e}")
                 
                 if games_saved > 0:
                     logger.info(f"✅ Guardados {games_saved} juegos para match {match_id}")
@@ -600,33 +563,14 @@ if __name__ == "__main__":
                 points_saved = 0
                 for game in result["games"]:
                     if "points" in game and game["points"]:
+                        set_number = game.get("set_number", "")
+                        game_number = game.get("number_game", "")
                         for point in game["points"]:
-                            try:
-                                cursor.execute("""
-                                    INSERT INTO match_pointbypoint (
-                                        match_id, set_number, game_number, point_number,
-                                        server, score, is_break_point, is_set_point, is_match_point
-                                    )
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
-                                    match_id,
-                                    game.get("set_number", ""),
-                                    game.get("number_game", ""),
-                                    point.get("number_point", ""),
-                                    game.get("player_served", ""),
-                                    point.get("score", ""),
-                                    1 if point.get("break_point") else 0,
-                                    1 if point.get("set_point") else 0,
-                                    1 if point.get("match_point") else 0
-                                ))
+                            if self.db.save_match_point(match_id, set_number, game_number, point):
                                 points_saved += 1
-                            except Exception as e:
-                                logger.debug(f"Error guardando punto: {e}")
                 
                 if points_saved > 0:
                     logger.info(f"✅ Guardados {points_saved} puntos para match {match_id}")
-            
-            self.db.conn.commit()
             
         except Exception as e:
             logger.debug(f"Error guardando estadísticas detalladas: {e}")

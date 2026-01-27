@@ -45,7 +45,17 @@ class Config:
     EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT", "")
 
     # ==================== DATABASE ====================
+    # PostgreSQL (Railway) - detectado automáticamente por DATABASE_URL
+    DATABASE_URL = os.getenv("DATABASE_URL", "")
+    
+    # SQLite fallback (local development)
     DB_PATH = os.getenv("DB_PATH", "apuestas_tracker.db")
+    MATCHES_DB_PATH = os.getenv("MATCHES_DB_PATH", "matches_v2.db")
+    
+    @classmethod
+    def is_postgres(cls) -> bool:
+        """Detecta si estamos usando PostgreSQL"""
+        return bool(cls.DATABASE_URL)
 
     # ==================== MODELO ====================
     MODEL_PATH = os.getenv("MODEL_PATH", "modelos/random_forest_calibrado.pkl")
@@ -175,7 +185,16 @@ class Config:
             )
 
         print(f"\n💾 Base de Datos:")
-        print(f"   Path: {cls.DB_PATH}")
+        print(f"   Tipo: {'PostgreSQL (Railway)' if cls.is_postgres() else 'SQLite (Local)'}")
+        if cls.is_postgres():
+            # Mostrar solo host, no credenciales
+            db_url = cls.DATABASE_URL
+            if "@" in db_url:
+                host_part = db_url.split("@")[-1].split("/")[0]
+                print(f"   Host: {host_part}")
+        else:
+            print(f"   DB Path: {cls.DB_PATH}")
+            print(f"   Matches DB: {cls.MATCHES_DB_PATH}")
 
         print(f"\n🤖 Modelo:")
         print(f"   Path: {cls.MODEL_PATH}")

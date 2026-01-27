@@ -46,16 +46,13 @@ class FeatureGeneratorService:
 
     def _cargar_datos_historicos(self):
         """
-        Carga datos históricos desde la Base de Datos SQLite.
+        Carga datos históricos desde la Base de Datos (PostgreSQL o SQLite).
         Transforma las columnas al formato esperado por los calculadores (legacy CSV format).
         """
-        import sqlite3
+        import os
         
         try:
             logger.info("📂 Cargando datos históricos desde Base de Datos...")
-            
-            # Conectar a DB
-            conn = sqlite3.connect("matches_v2.db")
             
             # Query: Seleccionar solo partidos completados
             query = """
@@ -73,12 +70,18 @@ class FeatureGeneratorService:
             ORDER BY fecha_partido ASC
             """
             
-            df_db = pd.read_sql_query(query, conn)
-            conn.close()
+            # Check for PostgreSQL (Railway)
+            database_url = os.getenv("DATABASE_URL")
+            
+            if database_url:
+                # PostgreSQL mode
+                df_db = self._load_from_postgres(database_url, query)
+            else:
+                # SQLite mode
+                df_db = self._load_from_sqlite(query)
             
             if df_db.empty:
                 logger.warning("⚠️  La base de datos está vacía o no tiene partidos completados.")
-                # Si está vacía, intentamos cargar CSV como fallback (para primera ejecución si falla import)
                 logger.info("🔄 Intentando fallback a CSVs...")
                 return self._cargar_datos_historicos_csv_fallback()
 
@@ -129,6 +132,35 @@ class FeatureGeneratorService:
             logger.error(f"❌ Error cargando datos de DB: {e}")
             logger.info("🔄 Intentando fallback a CSVs...")
             return self._cargar_datos_historicos_csv_fallback()
+
+    def _load_from_postgres(self, database_url: str, query: str) -> pd.DataFrame:
+        """Carga datos desde PostgreSQL"""
+        from sqlalchemy import create_engine, text
+        
+        # Fix Railway's postgres:// to postgresql://
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        
+        logger.info("🐘 Conectando a PostgreSQL para datos históricos...")
+        engine = create_engine(database_url)
+        
+        with engine.connect() as conn:
+            df = pd.read_sql_query(query, conn)
+        
+        logger.info(f"✅ Datos cargados desde PostgreSQL: {len(df)} partidos")
+        return df
+
+    def _load_from_sqlite(self, query: str) -> pd.DataFrame:
+        """Carga datos desde SQLite"""
+        import sqlite3
+        
+        logger.info("📂 Conectando a SQLite para datos históricos...")
+        conn = sqlite3.connect("matches_v2.db")
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        logger.info(f"✅ Datos cargados desde SQLite: {len(df)} partidos")
+        return df
 
     def _cargar_datos_historicos_csv_fallback(self):
         """Método original de carga CSV (Backup)"""

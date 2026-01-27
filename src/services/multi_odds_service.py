@@ -343,14 +343,13 @@ class MultiBookmakerOddsService:
 
 if __name__ == "__main__":
     # Test básico
-    import sqlite3
     from src.services.api_tennis_client import APITennisClient
+    from src.database.match_database import MatchDatabase
     
-    conn = sqlite3.connect("matches_v2.db")
-    conn.row_factory = sqlite3.Row
+    # Usar MatchDatabase que detecta automáticamente PostgreSQL o SQLite
+    db = MatchDatabase("matches_v2.db")
     api_client = APITennisClient()
     
-    service = MultiBookmakerOddsService(conn, api_client)
+    service = MultiBookmakerOddsService(db, api_client)
     print("✅ MultiBookmakerOddsService test completed")
-    
-    conn.close()
+    print(f"Using PostgreSQL: {db.is_postgres}")

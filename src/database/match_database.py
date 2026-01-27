@@ -1063,51 +1063,47 @@ class MatchDatabase:
             True si se guardó correctamente
         """
         try:
-            cursor = self.conn.cursor()
-            
             # Guardar cuotas de jugador 1
             for odds_info in top3_player1:
-                cursor.execute(
+                self._execute(
                     """
                     INSERT INTO odds_history (
                         match_id, jugador1_cuota, jugador2_cuota,
                         bookmaker, is_best
-                    ) VALUES (?, ?, ?, ?, ?)
-                """,
-                    (
-                        match_id,
-                        odds_info["odds"],
-                        0.0,  # Placeholder para jugador2
-                        odds_info["bookmaker"],
-                        1 if odds_info["is_best"] else 0,
-                    ),
+                    ) VALUES (:match_id, :j1_cuota, :j2_cuota, :bookmaker, :is_best)
+                    """,
+                    {
+                        "match_id": match_id,
+                        "j1_cuota": odds_info["odds"],
+                        "j2_cuota": 0.0,  # Placeholder para jugador2
+                        "bookmaker": odds_info["bookmaker"],
+                        "is_best": odds_info["is_best"],
+                    },
                 )
             
             # Guardar cuotas de jugador 2
             for odds_info in top3_player2:
-                cursor.execute(
+                self._execute(
                     """
                     INSERT INTO odds_history (
                         match_id, jugador1_cuota, jugador2_cuota,
                         bookmaker, is_best
-                    ) VALUES (?, ?, ?, ?, ?)
-                """,
-                    (
-                        match_id,
-                        0.0,  # Placeholder para jugador1
-                        odds_info["odds"],
-                        odds_info["bookmaker"],
-                        1 if odds_info["is_best"] else 0,
-                    ),
+                    ) VALUES (:match_id, :j1_cuota, :j2_cuota, :bookmaker, :is_best)
+                    """,
+                    {
+                        "match_id": match_id,
+                        "j1_cuota": 0.0,  # Placeholder para jugador1
+                        "j2_cuota": odds_info["odds"],
+                        "bookmaker": odds_info["bookmaker"],
+                        "is_best": odds_info["is_best"],
+                    },
                 )
             
-            self.conn.commit()
             logger.info(f"✅ Top 3 cuotas guardadas para partido {match_id}")
             return True
             
         except Exception as e:
             logger.error(f"❌ Error guardando top 3 cuotas: {e}")
-            self.conn.rollback()
             return False
 
     def get_top3_odds(self, match_id: int) -> Dict:
@@ -1120,18 +1116,16 @@ class MatchDatabase:
         Returns:
             Dict con top3_player1 y top3_player2
         """
-        cursor = self.conn.cursor()
-        
         # Obtener cuotas de jugador 1 (donde jugador1_cuota > 0)
-        cursor.execute(
+        rows_p1 = self._fetchall(
             """
             SELECT bookmaker, jugador1_cuota as odds, is_best
             FROM odds_history
-            WHERE match_id = ? AND jugador1_cuota > 0
+            WHERE match_id = :match_id AND jugador1_cuota > 0
             ORDER BY jugador1_cuota DESC
             LIMIT 3
-        """,
-            (match_id,),
+            """,
+            {"match_id": match_id},
         )
         
         top3_player1 = [
@@ -1140,19 +1134,19 @@ class MatchDatabase:
                 "odds": row["odds"],
                 "is_best": bool(row["is_best"]),
             }
-            for row in cursor.fetchall()
+            for row in rows_p1
         ]
         
         # Obtener cuotas de jugador 2 (donde jugador2_cuota > 0)
-        cursor.execute(
+        rows_p2 = self._fetchall(
             """
             SELECT bookmaker, jugador2_cuota as odds, is_best
             FROM odds_history
-            WHERE match_id = ? AND jugador2_cuota > 0
+            WHERE match_id = :match_id AND jugador2_cuota > 0
             ORDER BY jugador2_cuota DESC
             LIMIT 3
-        """,
-            (match_id,),
+            """,
+            {"match_id": match_id},
         )
         
         top3_player2 = [
@@ -1161,7 +1155,7 @@ class MatchDatabase:
                 "odds": row["odds"],
                 "is_best": bool(row["is_best"]),
             }
-            for row in cursor.fetchall()
+            for row in rows_p2
         ]
         
         return {

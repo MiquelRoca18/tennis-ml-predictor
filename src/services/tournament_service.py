@@ -1,9 +1,12 @@
 """
 Tournament Service - Elite Tennis Analytics
 Gestiona catálogo de torneos y sincronización con API
+
+Soporta SQLite y PostgreSQL.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -16,12 +19,23 @@ class TournamentService:
     def __init__(self, db_connection, api_client):
         """
         Args:
-            db_connection: Conexión a la base de datos
+            db_connection: Conexión a la base de datos (sqlite3.Connection o MatchDatabase)
             api_client: Cliente de API-Tennis
         """
         self.conn = db_connection
         self.api_client = api_client
-        logger.info("✅ TournamentService initialized")
+        
+        # Detectar si es PostgreSQL
+        self.is_postgres = os.getenv("DATABASE_URL") is not None
+        
+        # Si es MatchDatabase, usar su engine
+        if hasattr(db_connection, 'is_postgres'):
+            self.is_postgres = db_connection.is_postgres
+            self.db = db_connection
+        else:
+            self.db = None
+            
+        logger.info(f"✅ TournamentService initialized (PostgreSQL: {self.is_postgres})")
     
     def sync_tournaments(self) -> int:
         """
@@ -39,25 +53,48 @@ class TournamentService:
                 return 0
             
             tournaments = data["result"]
-            cursor = self.conn.cursor()
             count = 0
             
             for tournament in tournaments:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO tournaments (
-                        tournament_key, tournament_name, 
-                        event_type_key, event_type_type
-                    )
-                    VALUES (?, ?, ?, ?)
-                """, (
-                    tournament.get('tournament_key'),
-                    tournament.get('tournament_name'),
-                    tournament.get('event_type_key'),
-                    tournament.get('event_type_type')
-                ))
+                params = {
+                    "tournament_key": tournament.get('tournament_key'),
+                    "tournament_name": tournament.get('tournament_name'),
+                    "event_type_key": tournament.get('event_type_key'),
+                    "event_type_type": tournament.get('event_type_type')
+                }
+                
+                if self.db:
+                    # PostgreSQL - usar ON CONFLICT
+                    self.db._execute("""
+                        INSERT INTO tournaments (
+                            tournament_key, tournament_name, 
+                            event_type_key, event_type_type
+                        )
+                        VALUES (:tournament_key, :tournament_name, 
+                                :event_type_key, :event_type_type)
+                        ON CONFLICT (tournament_key) DO UPDATE SET
+                            tournament_name = EXCLUDED.tournament_name,
+                            event_type_key = EXCLUDED.event_type_key,
+                            event_type_type = EXCLUDED.event_type_type
+                    """, params)
+                else:
+                    # SQLite
+                    cursor = self.conn.cursor()
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO tournaments (
+                            tournament_key, tournament_name, 
+                            event_type_key, event_type_type
+                        )
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        tournament.get('tournament_key'),
+                        tournament.get('tournament_name'),
+                        tournament.get('event_type_key'),
+                        tournament.get('event_type_type')
+                    ))
+                    self.conn.commit()
                 count += 1
             
-            self.conn.commit()
             logger.info(f"✅ Sincronizados {count} torneos")
             return count
             
@@ -75,13 +112,17 @@ class TournamentService:
         Returns:
             Dict con datos del torneo o None
         """
-        cursor = self.conn.cursor()
-        
-        tournament = cursor.execute("""
-            SELECT * FROM tournaments WHERE tournament_key = ?
-        """, (tournament_key,)).fetchone()
-        
-        return dict(tournament) if tournament else None
+        if self.db:
+            return self.db._fetchone(
+                "SELECT * FROM tournaments WHERE tournament_key = :key",
+                {"key": tournament_key}
+            )
+        else:
+            cursor = self.conn.cursor()
+            tournament = cursor.execute("""
+                SELECT * FROM tournaments WHERE tournament_key = ?
+            """, (tournament_key,)).fetchone()
+            return dict(tournament) if tournament else None
     
     def get_tournament_matches(self, tournament_key: int, 
                                season: int = None) -> List[Dict]:
@@ -95,22 +136,34 @@ class TournamentService:
         Returns:
             Lista de partidos
         """
-        cursor = self.conn.cursor()
-        
-        if season:
-            matches = cursor.execute("""
-                SELECT * FROM matches 
-                WHERE tournament_key = ? AND tournament_season = ?
-                ORDER BY fecha_partido DESC
-            """, (str(tournament_key), str(season))).fetchall()
+        if self.db:
+            if season:
+                return self.db._fetchall("""
+                    SELECT * FROM matches 
+                    WHERE tournament_key = :key AND tournament_season = :season
+                    ORDER BY fecha_partido DESC
+                """, {"key": str(tournament_key), "season": str(season)})
+            else:
+                return self.db._fetchall("""
+                    SELECT * FROM matches 
+                    WHERE tournament_key = :key
+                    ORDER BY fecha_partido DESC
+                """, {"key": str(tournament_key)})
         else:
-            matches = cursor.execute("""
-                SELECT * FROM matches 
-                WHERE tournament_key = ?
-                ORDER BY fecha_partido DESC
-            """, (str(tournament_key),)).fetchall()
-        
-        return [dict(m) for m in matches]
+            cursor = self.conn.cursor()
+            if season:
+                matches = cursor.execute("""
+                    SELECT * FROM matches 
+                    WHERE tournament_key = ? AND tournament_season = ?
+                    ORDER BY fecha_partido DESC
+                """, (str(tournament_key), str(season))).fetchall()
+            else:
+                matches = cursor.execute("""
+                    SELECT * FROM matches 
+                    WHERE tournament_key = ?
+                    ORDER BY fecha_partido DESC
+                """, (str(tournament_key),)).fetchall()
+            return [dict(m) for m in matches]
     
     def get_all_tournaments(self, event_type: str = None) -> List[Dict]:
         """
@@ -122,36 +175,46 @@ class TournamentService:
         Returns:
             Lista de torneos
         """
-        cursor = self.conn.cursor()
-        
-        if event_type:
-            tournaments = cursor.execute("""
-                SELECT * FROM tournaments 
-                WHERE event_type_type = ?
-                ORDER BY tournament_name
-            """, (event_type,)).fetchall()
+        if self.db:
+            if event_type:
+                return self.db._fetchall("""
+                    SELECT * FROM tournaments 
+                    WHERE event_type_type = :event_type
+                    ORDER BY tournament_name
+                """, {"event_type": event_type})
+            else:
+                return self.db._fetchall("""
+                    SELECT * FROM tournaments 
+                    ORDER BY tournament_name
+                """, {})
         else:
-            tournaments = cursor.execute("""
-                SELECT * FROM tournaments 
-                ORDER BY tournament_name
-            """).fetchall()
-        
-        return [dict(t) for t in tournaments]
+            cursor = self.conn.cursor()
+            if event_type:
+                tournaments = cursor.execute("""
+                    SELECT * FROM tournaments 
+                    WHERE event_type_type = ?
+                    ORDER BY tournament_name
+                """, (event_type,)).fetchall()
+            else:
+                tournaments = cursor.execute("""
+                    SELECT * FROM tournaments 
+                    ORDER BY tournament_name
+                """).fetchall()
+            return [dict(t) for t in tournaments]
 
 
 if __name__ == "__main__":
     # Test básico
-    import sqlite3
     from src.services.api_tennis_client import APITennisClient
+    from src.database.match_database import MatchDatabase
     
-    conn = sqlite3.connect("matches_v2.db")
-    conn.row_factory = sqlite3.Row
+    # Usar MatchDatabase que detecta automáticamente PostgreSQL o SQLite
+    db = MatchDatabase("matches_v2.db")
     api_client = APITennisClient()
     
-    service = TournamentService(conn, api_client)
+    service = TournamentService(db, api_client)
     
     # Sincronizar torneos
     count = service.sync_tournaments()
     print(f"Torneos sincronizados: {count}")
-    
-    conn.close()
+    print(f"Using PostgreSQL: {service.is_postgres}")

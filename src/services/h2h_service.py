@@ -1,9 +1,12 @@
 """
 H2H Service - Elite Tennis Analytics
 Gestiona histórico head-to-head entre jugadores
+
+Soporta SQLite y PostgreSQL.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -16,12 +19,23 @@ class H2HService:
     def __init__(self, db_connection, api_client):
         """
         Args:
-            db_connection: Conexión a la base de datos
+            db_connection: Conexión a la base de datos (sqlite3.Connection o MatchDatabase)
             api_client: Cliente de API-Tennis
         """
         self.conn = db_connection
         self.api_client = api_client
-        logger.info("✅ H2HService initialized")
+        
+        # Detectar si es PostgreSQL
+        self.is_postgres = os.getenv("DATABASE_URL") is not None
+        
+        # Si es MatchDatabase, usar su engine
+        if hasattr(db_connection, 'is_postgres'):
+            self.is_postgres = db_connection.is_postgres
+            self.db = db_connection
+        else:
+            self.db = None
+            
+        logger.info(f"✅ H2HService initialized (PostgreSQL: {self.is_postgres})")
     
     def get_h2h(self, player1_key: int, player2_key: int) -> Dict:
         """
@@ -34,15 +48,23 @@ class H2HService:
         Returns:
             Dict con datos H2H completos
         """
-        cursor = self.conn.cursor()
-        
-        # Obtener partidos históricos
-        matches = cursor.execute("""
-            SELECT * FROM head_to_head
-            WHERE (player1_key = ? AND player2_key = ?)
-               OR (player1_key = ? AND player2_key = ?)
-            ORDER BY match_date DESC
-        """, (player1_key, player2_key, player2_key, player1_key)).fetchall()
+        if self.db:
+            # Usar MatchDatabase
+            matches = self.db._fetchall("""
+                SELECT * FROM head_to_head
+                WHERE (player1_key = :p1 AND player2_key = :p2)
+                   OR (player1_key = :p2_alt AND player2_key = :p1_alt)
+                ORDER BY match_date DESC
+            """, {"p1": player1_key, "p2": player2_key, "p2_alt": player2_key, "p1_alt": player1_key})
+        else:
+            cursor = self.conn.cursor()
+            matches = cursor.execute("""
+                SELECT * FROM head_to_head
+                WHERE (player1_key = ? AND player2_key = ?)
+                   OR (player1_key = ? AND player2_key = ?)
+                ORDER BY match_date DESC
+            """, (player1_key, player2_key, player2_key, player1_key)).fetchall()
+            matches = [dict(m) for m in matches]
         
         # Calcular estadísticas
         total_matches = len(matches)
@@ -68,7 +90,7 @@ class H2HService:
             'total_matches': total_matches,
             'player1_wins': player1_wins,
             'player2_wins': player2_wins,
-            'last_matches': [dict(m) for m in matches[:10]],
+            'last_matches': matches[:10],
             'by_surface': surfaces
         }
     
@@ -94,35 +116,55 @@ class H2HService:
                 return 0
             
             h2h_matches = result.get("H2H", [])
-            
-            cursor = self.conn.cursor()
             count = 0
             
             for match in h2h_matches:
                 # Determinar ganador
                 winner_key = player1_key if match.get('event_winner') == 'First Player' else player2_key
                 
-                # Guardar en tabla head_to_head
-                cursor.execute("""
-                    INSERT OR IGNORE INTO head_to_head (
-                        player1_key, player2_key, match_id,
-                        match_date, winner_key, tournament_name,
-                        surface, final_result
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    player1_key,
-                    player2_key,
-                    match.get('event_key'),
-                    match.get('event_date'),
-                    winner_key,
-                    match.get('tournament_name'),
-                    'Hard',  # La API no siempre devuelve superficie en H2H
-                    match.get('event_final_result')
-                ))
+                params = {
+                    "player1_key": player1_key,
+                    "player2_key": player2_key,
+                    "match_id": match.get('event_key'),
+                    "match_date": match.get('event_date'),
+                    "winner_key": winner_key,
+                    "tournament_name": match.get('tournament_name'),
+                    "surface": 'Hard',  # La API no siempre devuelve superficie en H2H
+                    "final_result": match.get('event_final_result')
+                }
+                
+                if self.db:
+                    # PostgreSQL - usar ON CONFLICT
+                    self.db._execute("""
+                        INSERT INTO head_to_head (
+                            player1_key, player2_key, match_id,
+                            match_date, winner_key, tournament_name,
+                            surface, final_result
+                        )
+                        VALUES (:player1_key, :player2_key, :match_id,
+                                :match_date, :winner_key, :tournament_name,
+                                :surface, :final_result)
+                        ON CONFLICT (player1_key, player2_key, match_id) DO NOTHING
+                    """, params)
+                else:
+                    # SQLite
+                    cursor = self.conn.cursor()
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO head_to_head (
+                            player1_key, player2_key, match_id,
+                            match_date, winner_key, tournament_name,
+                            surface, final_result
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        player1_key, player2_key, match.get('event_key'),
+                        match.get('event_date'), winner_key,
+                        match.get('tournament_name'), 'Hard',
+                        match.get('event_final_result')
+                    ))
+                    self.conn.commit()
                 count += 1
             
-            self.conn.commit()
             logger.info(f"✅ Sincronizados {count} partidos H2H ATP Singles")
             return count
             
@@ -223,16 +265,16 @@ class H2HService:
 
 if __name__ == "__main__":
     # Test básico
-    import sqlite3
+    import os
     from src.services.api_tennis_client import APITennisClient
+    from src.database.match_database import MatchDatabase
     
-    conn = sqlite3.connect("matches_v2.db")
-    conn.row_factory = sqlite3.Row
+    # Usar MatchDatabase que detecta automáticamente PostgreSQL o SQLite
+    db = MatchDatabase("matches_v2.db")
     api_client = APITennisClient()
     
-    service = H2HService(conn, api_client)
+    service = H2HService(db, api_client)
     
     # Test con jugadores de ejemplo
     print("H2HService test completed")
-    
-    conn.close()
+    print(f"Using PostgreSQL: {service.is_postgres}")

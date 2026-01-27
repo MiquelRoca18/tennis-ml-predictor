@@ -363,20 +363,19 @@ class LiveMatchDataService:
 
 if __name__ == "__main__":
     # Test básico
-    import sqlite3
     from src.services.api_tennis_client import APITennisClient
     from src.services.pointbypoint_service import PointByPointService
+    from src.database.match_database import MatchDatabase
     
-    conn = sqlite3.connect("matches_v2.db")
-    conn.row_factory = sqlite3.Row
+    # Usar MatchDatabase que detecta automáticamente PostgreSQL o SQLite
+    db = MatchDatabase("matches_v2.db")
     
     api_client = APITennisClient()
-    pbp_service = PointByPointService(conn)
+    pbp_service = PointByPointService(db)
     
-    service = LiveMatchDataService(conn, api_client, pbp_service)
+    service = LiveMatchDataService(db, api_client, pbp_service)
     
     # Sincronizar partidos en vivo
     result = service.sync_live_matches()
     print(f"\n✅ Test result: {result}")
-    
-    conn.close()
+    print(f"Using PostgreSQL: {db.is_postgres}")
