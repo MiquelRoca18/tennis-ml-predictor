@@ -133,17 +133,14 @@ class MatchDatabase:
                 pg_schema = pg_schema.replace("CREATE VIEW IF NOT EXISTS", "CREATE OR REPLACE VIEW")
                 
                 # Fix ROUND with FLOAT/REAL: PostgreSQL needs NUMERIC for ROUND with precision
-                # ROUND(CAST(... AS FLOAT) / ..., 3) -> ROUND(CAST(... AS NUMERIC) / ..., 3)
-                pg_schema = pg_schema.replace("AS FLOAT)", "AS NUMERIC)")
+                # The safest way is to remove the entire daily_stats view and recreate it properly
                 
-                # Fix ROUND without explicit cast: wrap SUM results in CAST to NUMERIC
-                # ROUND(SUM(b.ganancia) / SUM(b.stake), 3) -> ROUND(CAST(SUM(b.ganancia) / SUM(b.stake) AS NUMERIC), 3)
-                import re
-                # Pattern to find ROUND(expression, precision) where expression doesn't have CAST
+                # Remove the problematic daily_stats view definition
                 pg_schema = re.sub(
-                    r'ROUND\(SUM\(b\.ganancia\) / SUM\(b\.stake\), (\d+)\)',
-                    r'ROUND(CAST(SUM(b.ganancia) AS NUMERIC) / NULLIF(SUM(b.stake), 0), \1)',
-                    pg_schema
+                    r'CREATE OR REPLACE VIEW daily_stats AS.*?ORDER BY fecha DESC;',
+                    '',
+                    pg_schema,
+                    flags=re.DOTALL
                 )
                 
                 # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
@@ -190,6 +187,38 @@ class MatchDatabase:
                             logger.error(f"❌ Statement {i+1} failed: {error_msg}")
                             logger.error(f"   Preview: {stmt_preview}...")
                     
+                # Create daily_stats view separately with proper PostgreSQL syntax
+                try:
+                    daily_stats_view = """
+                    CREATE OR REPLACE VIEW daily_stats AS
+                    SELECT 
+                        DATE(b.timestamp_apuesta) as fecha,
+                        COUNT(*) as total_apuestas,
+                        SUM(CASE WHEN b.resultado = 'ganada' THEN 1 ELSE 0 END) as ganadas,
+                        SUM(CASE WHEN b.resultado = 'perdida' THEN 1 ELSE 0 END) as perdidas,
+                        ROUND(
+                            (SUM(CASE WHEN b.resultado = 'ganada' THEN 1 ELSE 0 END)::NUMERIC / NULLIF(COUNT(*), 0)),
+                            3
+                        ) as win_rate,
+                        SUM(b.stake) as stake_total,
+                        SUM(b.ganancia) as ganancia_total,
+                        ROUND(
+                            (SUM(b.ganancia)::NUMERIC / NULLIF(SUM(b.stake), 0)),
+                            3
+                        ) as roi
+                    FROM bets b
+                    WHERE b.estado = 'completada'
+                    GROUP BY DATE(b.timestamp_apuesta)
+                    ORDER BY fecha DESC
+                    """
+                    with self.engine.connect() as conn:
+                        conn.execute(text(daily_stats_view))
+                        conn.commit()
+                    logger.info("✅ Creating view: daily_stats (PostgreSQL optimized)")
+                except Exception as e:
+                    if "already exists" not in str(e).lower():
+                        logger.error(f"Error creating daily_stats view: {e}")
+                
                 logger.info("✅ PostgreSQL schema initialized")
             else:
                 # SQLite: Execute using sqlite3

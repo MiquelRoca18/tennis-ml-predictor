@@ -34,7 +34,11 @@ class APITennisClient:
         """Inicializa el cliente"""
         self.api_key = os.getenv("API_TENNIS_API_KEY", "")
         if not self.api_key:
-            logger.warning("⚠️  API_TENNIS_API_KEY no configurada")
+            logger.warning("⚠️  API_TENNIS_API_KEY no configurada - la API no funcionará")
+        else:
+            # Log parcial de la key por seguridad (primeros 8 chars)
+            key_preview = self.api_key[:8] + "..." if len(self.api_key) > 8 else "***"
+            logger.info(f"🔑 API_TENNIS_API_KEY configurada: {key_preview} (longitud: {len(self.api_key)})")
 
         # URL base correcta según documentación
         self.base_url = "https://api.api-tennis.com/tennis/"
