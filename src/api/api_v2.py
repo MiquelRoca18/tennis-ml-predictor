@@ -705,11 +705,10 @@ async def update_match_result(match_id: int, request: MatchResultRequest):
         }
 
         if bet_updated:
-            cursor = db.conn.cursor()
-            cursor.execute(
-                "SELECT * FROM bets WHERE match_id = ? AND estado = 'completada'", (match_id,)
+            bet = db._fetchone(
+                "SELECT * FROM bets WHERE match_id = :match_id AND estado = 'completada'",
+                {"match_id": match_id}
             )
-            bet = cursor.fetchone()
 
             if bet:
                 response["apuesta"] = {
@@ -858,15 +857,13 @@ async def refresh_match_odds(match_id: int, jugador1_cuota: float, jugador2_cuot
         nueva_recomendacion_info = None
 
         # Verificar si ya existe una apuesta registrada
-        cursor = db.conn.cursor()
-        cursor.execute(
+        bet_existente = db._fetchone(
             """
             SELECT * FROM bets 
-            WHERE match_id = ? AND estado = 'activa'
-        """,
-            (match_id,),
+            WHERE match_id = :match_id AND estado = 'activa'
+            """,
+            {"match_id": match_id},
         )
-        bet_existente = cursor.fetchone()
 
         if bet_existente:
             # Ya hay una apuesta registrada - NO la modificamos
@@ -1669,8 +1666,10 @@ async def startup_event():
     try:
         from src.database.match_database import MatchDatabase
         db_check = MatchDatabase()
-        cursor = db_check.conn.cursor()
-        count = cursor.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        
+        # Usar método compatible PostgreSQL/SQLite
+        result = db_check._fetchone("SELECT COUNT(*) as count FROM matches", {})
+        count = result["count"] if result else 0
         
         if count < 100:
             logger.warning(f"⚠️  Base de datos casi vacía ({count} partidos). Iniciando importación de históricos...")
@@ -2422,11 +2421,9 @@ async def sync_rankings():
         # Sincronizar rankings ATP (solo ATP, no WTA)
         atp_count = ranking_service.sync_atp_rankings(limit=500)
         
-        # Actualizar partidos con rankings
-        cursor = db.conn.cursor()
-        
+        # Actualizar partidos con rankings (usando métodos compatibles PostgreSQL/SQLite)
         # Actualizar jugador1_ranking
-        cursor.execute("""
+        db._execute("""
             UPDATE matches
             SET jugador1_ranking = (
                 SELECT atp_ranking FROM players 
@@ -2438,11 +2435,10 @@ async def sync_rankings():
                 WHERE player_key = matches.jugador1_key
                 AND atp_ranking IS NOT NULL
             )
-        """)
-        updated_p1 = cursor.rowcount
+        """, {})
         
         # Actualizar jugador2_ranking
-        cursor.execute("""
+        db._execute("""
             UPDATE matches
             SET jugador2_ranking = (
                 SELECT atp_ranking FROM players 
@@ -2454,24 +2450,12 @@ async def sync_rankings():
                 WHERE player_key = matches.jugador2_key
                 AND atp_ranking IS NOT NULL
             )
-        """)
-        updated_p2 = cursor.rowcount
-        
-        db.conn.commit()
+        """, {})
         
         return {
             "success": True,
             "rankings_synced": atp_count,
-            "matches_updated_p1": updated_p1,
-            "matches_updated_p2": updated_p2,
-            "message": f"Sincronizados {atp_count} rankings ATP, actualizados {updated_p1 + updated_p2} rankings en partidos"
-        }
-        
-        return {
-            "success": True,
-            "atp_synced": result['atp'],
-            "wta_synced": result['wta'],
-            "total_synced": result['total']
+            "message": f"Sincronizados {atp_count} rankings ATP"
         }
         
     except Exception as e:

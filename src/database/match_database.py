@@ -132,6 +132,10 @@ class MatchDatabase:
                 # Use CREATE OR REPLACE VIEW instead
                 pg_schema = pg_schema.replace("CREATE VIEW IF NOT EXISTS", "CREATE OR REPLACE VIEW")
                 
+                # Fix ROUND with FLOAT: PostgreSQL needs NUMERIC for ROUND with precision
+                # ROUND(CAST(... AS FLOAT) / ..., 3) -> ROUND(CAST(... AS NUMERIC) / ..., 3)
+                pg_schema = pg_schema.replace("AS FLOAT)", "AS NUMERIC)")
+                
                 # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
                 pg_schema = re.sub(r'CREATE TRIGGER.*?END;', '', pg_schema, flags=re.DOTALL)
                 
