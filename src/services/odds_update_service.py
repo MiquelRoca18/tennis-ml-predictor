@@ -146,20 +146,45 @@ class OddsUpdateService:
 
             for match in matches_api:
                 # FILTRO ATP SINGLES: Solo procesar partidos ATP individuales
-                event_type = (match.get("event_type") or match.get("event_type_type") or "").lower()
+                event_type = (match.get("event_type") or match.get("event_type_type") or "").upper()
+                league = (match.get("league") or "").upper()
                 tournament_name = match.get("tournament", "")
+                tournament_lower = tournament_name.lower()
                 
-                # VALIDACIÓN POSITIVA: Debe ser ATP Singles
-                if event_type != "atp singles":
-                    # Contar WTA para estadísticas
-                    if "wta" in event_type or "wta" in tournament_name.lower():
-                        partidos_wta_filtrados += 1
+                # Detectar tipo de partido (flexible, como en daily_match_fetcher)
+                is_atp = "ATP" in event_type or "ATP" in league
+                is_doubles = "DOUBLES" in event_type or "DOUBLE" in event_type
+                
+                # Detectar WTA por múltiples indicadores
+                is_wta = (
+                    "WTA" in event_type or
+                    "WTA" in league or
+                    "WTA" in tournament_name.upper() or
+                    "WOMEN" in event_type or
+                    "LADIES" in event_type
+                )
+                
+                # Filtrar WTA (femenino)
+                if is_wta:
+                    partidos_wta_filtrados += 1
+                    logger.debug(f"⏭️  Ignorando partido WTA: {tournament_name}")
+                    continue
+                
+                # Filtrar si no es ATP
+                if not is_atp:
                     logger.debug(f"⏭️  Ignorando tipo no-ATP: {event_type}")
                     continue
 
-                # BACKUP: Ignorar dobles por si acaso
-                if "doubles" in event_type or "doubles" in tournament_name.lower():
+                # Filtrar dobles
+                if is_doubles or "doubles" in tournament_lower:
                     logger.debug(f"⏭️  Ignorando dobles: {tournament_name}")
+                    continue
+                
+                # Filtrar dobles por nombres de jugadores (contienen "/")
+                player1_name = match.get("player1_name", "")
+                player2_name = match.get("player2_name", "")
+                if "/" in player1_name or "/" in player2_name:
+                    logger.debug(f"⏭️  Ignorando dobles: {player1_name} vs {player2_name}")
                     continue
 
                 # Extraer fecha del partido (API-Tennis usa event_date y event_time)
