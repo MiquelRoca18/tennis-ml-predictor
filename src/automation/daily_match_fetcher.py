@@ -79,6 +79,7 @@ class DailyMatchFetcher:
             "matches_found": 0,
             "matches_new": 0,
             "matches_existing": 0,
+            "matches_filtered": 0,  # Partidos filtrados por tipo (WTA, dobles, etc.)
             "matches_created": [],
             "predictions_generated": 0,
             "api_calls_made": 0,
@@ -98,6 +99,11 @@ class DailyMatchFetcher:
                 return stats
 
             logger.info(f"✅ Found {len(matches_raw)} matches from API")
+            
+            # DEBUG: Log first match structure to see available fields
+            if matches_raw:
+                first_match = matches_raw[0]
+                logger.info(f"🔍 DEBUG - First match fields: event_type={first_match.get('event_type')}, league={first_match.get('league')}, player1={first_match.get('player1_name')}, player2={first_match.get('player2_name')}")
 
             # 2. Process each match
             for match_data in matches_raw:
@@ -109,6 +115,8 @@ class DailyMatchFetcher:
                         stats["matches_created"].append(result["match_info"])
                         if result["prediction_generated"]:
                             stats["predictions_generated"] += 1
+                    elif result.get("filtered"):
+                        stats["matches_filtered"] += 1
                     else:
                         stats["matches_existing"] += 1
 
@@ -123,6 +131,7 @@ class DailyMatchFetcher:
             logger.info(f"   Matches found: {stats['matches_found']}")
             logger.info(f"   New matches created: {stats['matches_new']}")
             logger.info(f"   Already existing: {stats['matches_existing']}")
+            logger.info(f"   Filtered (WTA/doubles/etc): {stats['matches_filtered']}")
             logger.info(f"   Predictions generated: {stats['predictions_generated']}")
             logger.info(f"   API calls made: {stats['api_calls_made']}")
             logger.info(f"   Errors: {len(stats['errors'])}")
@@ -242,12 +251,25 @@ class DailyMatchFetcher:
         """
         # ===== FILTROS: Solo ATP Singles =====
         
-        # 0. VALIDACIÓN POSITIVA: Debe ser ATP Singles
+        # 0. VALIDACIÓN: Detectar tipo de evento
         event_type = (match_data.get("event_type") or match_data.get("event_type_type") or "").upper()
+        league = (match_data.get("league") or "").upper()
         
-        if event_type != "ATP SINGLES":
-            logger.debug(f"⏭️  Ignorando tipo no-ATP Singles: {event_type}")
-            return {"created": False, "match_info": None, "prediction_generated": False}
+        # Aceptar si es ATP Singles (exacto o parcial)
+        is_atp = "ATP" in event_type or "ATP" in league
+        is_singles = "SINGLES" in event_type or "SINGLE" in event_type
+        is_doubles = "DOUBLES" in event_type or "DOUBLE" in event_type
+        
+        # Si tenemos event_type, usarlo para filtrar
+        if event_type:
+            # Aceptar: "ATP SINGLES", "ATP Singles", etc.
+            # Rechazar: "WTA SINGLES", "ATP DOUBLES", etc.
+            if not is_atp or is_doubles:
+                logger.debug(f"⏭️  Ignorando tipo no-ATP-Singles: {event_type}")
+                return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
+        else:
+            # Si no hay event_type, continuamos y dejamos que los filtros de backup actúen
+            logger.debug(f"⚠️  Sin event_type, aplicando filtros de backup")
         
         # 1. BACKUP: Filtrar WTA (verificar múltiples campos)
         league = match_data.get("league", "").upper()
@@ -273,7 +295,7 @@ class DailyMatchFetcher:
         
         if is_wta:
             logger.debug(f"⏭️  Ignorando partido WTA (backup filter): {tournament}")
-            return {"created": False, "match_info": None, "prediction_generated": False}
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
         
         # 2. BACKUP: Filtrar dobles (buscar "/" o "Doubles" en nombres)
         player1_name = match_data.get("player1_name", "Unknown")
@@ -281,11 +303,11 @@ class DailyMatchFetcher:
         
         if "/" in player1_name or "/" in player2_name:
             logger.debug(f"⏭️  Ignorando partido de dobles: {player1_name} vs {player2_name}")
-            return {"created": False, "match_info": None, "prediction_generated": False}
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
         
         if "Doubles" in tournament or "doubles" in tournament:
             logger.debug(f"⏭️  Ignorando torneo de dobles: {tournament}")
-            return {"created": False, "match_info": None, "prediction_generated": False}
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
         
         # ===== Continuar con procesamiento normal =====
         
@@ -301,7 +323,7 @@ class DailyMatchFetcher:
         # Check if match already exists
         if self.db.match_exists(player1_name, player2_name, match_date):
             logger.debug(f"ℹ️  Match already exists: {player1_name} vs {player2_name}")
-            return {"created": False, "match_info": None, "prediction_generated": False}
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": False}
 
         # Determine surface
         surface = self.surface_mapper.get_surface(tournament)

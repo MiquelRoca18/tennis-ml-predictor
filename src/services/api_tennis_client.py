@@ -196,6 +196,10 @@ class APITennisClient:
                 "player2_key": match.get("second_player_key"),
                 "tournament_key": match.get("tournament_key"),
                 
+                # Tipo de evento (ATP Singles, WTA Singles, etc.) - CRUCIAL para filtrado
+                "event_type": match.get("event_type_type", ""),
+                "league": match.get("league_name", ""),
+                
                 # Información básica
                 "date": match.get("event_date"),
                 "time": match.get("event_time"),
