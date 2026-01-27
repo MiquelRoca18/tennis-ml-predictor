@@ -368,18 +368,6 @@ END;
 
 
 -- ============================================================
--- DATOS DE EJEMPLO (para testing)
+-- NOTA: No se insertan datos de ejemplo
+-- Los partidos se sincronizan desde la API de Tennis
 -- ============================================================
-
--- Insertar partido de ejemplo
-INSERT OR IGNORE INTO matches (
-    fecha_partido, hora_inicio, torneo, ronda, superficie,
-    jugador1_nombre, jugador1_ranking,
-    jugador2_nombre, jugador2_ranking,
-    estado
-) VALUES (
-    DATE('now'), '14:00', 'Australian Open', 'Cuartos de Final', 'Hard',
-    'Alcaraz', 3,
-    'Sinner', 4,
-    'pendiente'
-);

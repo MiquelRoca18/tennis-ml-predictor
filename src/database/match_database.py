@@ -704,6 +704,16 @@ class MatchDatabase:
     # MÉTODOS DE PREDICCIONES
     # ============================================================
 
+    @staticmethod
+    def _to_python_type(value):
+        """Convierte tipos numpy a tipos nativos de Python para compatibilidad con PostgreSQL"""
+        if value is None:
+            return None
+        # Convertir numpy types a Python types
+        if hasattr(value, 'item'):  # numpy scalar
+            return value.item()
+        return value
+
     def add_prediction(
         self,
         match_id: int,
@@ -732,6 +742,18 @@ class MatchDatabase:
         Returns:
             ID de la predicción creada
         """
+        # Convertir tipos numpy a tipos nativos de Python
+        jugador1_cuota = self._to_python_type(jugador1_cuota)
+        jugador2_cuota = self._to_python_type(jugador2_cuota)
+        jugador1_probabilidad = self._to_python_type(jugador1_probabilidad)
+        jugador2_probabilidad = self._to_python_type(jugador2_probabilidad)
+        jugador1_ev = self._to_python_type(jugador1_ev)
+        jugador2_ev = self._to_python_type(jugador2_ev)
+        jugador1_edge = self._to_python_type(jugador1_edge)
+        jugador2_edge = self._to_python_type(jugador2_edge)
+        kelly_stake_jugador1 = self._to_python_type(kelly_stake_jugador1)
+        kelly_stake_jugador2 = self._to_python_type(kelly_stake_jugador2)
+        confidence_score = self._to_python_type(confidence_score)
         # Obtener la última versión
         max_version_row = self._fetchone(
             """
