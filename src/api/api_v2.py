@@ -113,13 +113,28 @@ from src.services.pointbypoint_service import PointByPointService
 
 try:
     player_service = PlayerService(db)
-    # Note: Other services still use db.conn - will be migrated later
-    h2h_service = H2HService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
-    ranking_service = RankingServiceElite(db.conn, api_client, player_service) if hasattr(db, 'conn') and db.conn else None
-    tournament_service = TournamentService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
-    multi_odds_service = MultiBookmakerOddsService(db.conn, api_client) if hasattr(db, 'conn') and db.conn else None
-    pbp_service = PointByPointService(db.conn) if hasattr(db, 'conn') and db.conn else None
-    logger.info("✅ Elite Services inicializados (Day 1 + Day 2)")
+    
+    # Para servicios que necesitan conexión directa:
+    # - En SQLite: usar db.conn
+    # - En PostgreSQL: usar db (MatchDatabase) que tiene métodos de acceso
+    def get_db_connection():
+        """Obtiene la conexión adecuada según el tipo de DB"""
+        if db.is_postgres:
+            return db  # MatchDatabase maneja las conexiones internamente
+        else:
+            return db.conn  # SQLite usa conexión directa
+    
+    db_connection = get_db_connection()
+    
+    h2h_service = H2HService(db_connection, api_client) if db_connection else None
+    ranking_service = RankingServiceElite(db_connection, api_client, player_service) if db_connection else None
+    tournament_service = TournamentService(db_connection, api_client) if db_connection else None
+    multi_odds_service = MultiBookmakerOddsService(db_connection, api_client) if db_connection else None
+    
+    # PointByPointService puede recibir db o db.conn - prefiere db para PostgreSQL
+    pbp_service = PointByPointService(db)
+    
+    logger.info(f"✅ Elite Services inicializados (PostgreSQL: {db.is_postgres})")
 except Exception as e:
     logger.warning(f"⚠️  Elite Services parcialmente inicializados: {e}")
     player_service = None
@@ -2955,11 +2970,18 @@ async def get_point_by_point(match_id: int, set_number: Optional[str] = None):
     try:
         points = pbp_service.get_point_by_point(match_id, set_number)
         
+        # Si no hay datos locales, intentar obtenerlos de la API
+        if not points:
+            logger.info(f"📡 No hay puntos locales para partido {match_id}, obteniendo de API...")
+            if _fetch_and_store_match_stats(match_id):
+                points = pbp_service.get_point_by_point(match_id, set_number)
+        
         return {
             "match_id": match_id,
             "set_number": set_number,
             "total_points": len(points),
-            "points": points
+            "points": points,
+            "has_data": len(points) > 0
         }
         
     except Exception as e:
@@ -2970,7 +2992,8 @@ async def get_point_by_point(match_id: int, set_number: Optional[str] = None):
 @app.get("/matches/{match_id}/games", tags=["Elite - Point by Point"])
 async def get_match_games(match_id: int):
     """
-    Obtiene juegos de un partido
+    Obtiene juegos de un partido.
+    Si no hay datos locales, intenta obtenerlos de la API Tennis.
     
     Args:
         match_id: ID del partido
@@ -2984,10 +3007,17 @@ async def get_match_games(match_id: int):
     try:
         games = pbp_service.get_games(match_id)
         
+        # Si no hay datos locales, intentar obtenerlos de la API
+        if not games:
+            logger.info(f"📡 No hay juegos locales para partido {match_id}, obteniendo de API...")
+            if _fetch_and_store_match_stats(match_id):
+                games = pbp_service.get_games(match_id)
+        
         return {
             "match_id": match_id,
             "total_games": len(games),
-            "games": games
+            "games": games,
+            "has_data": len(games) > 0
         }
         
     except Exception as e:
@@ -3089,10 +3119,138 @@ async def get_match_detailed_stats(match_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _fetch_and_store_match_stats(match_id: int) -> bool:
+    """
+    Obtiene datos de juegos y puntos de la API Tennis si no existen localmente.
+    
+    Args:
+        match_id: ID del partido
+        
+    Returns:
+        True si se obtuvieron/guardaron datos, False si no
+    """
+    try:
+        # Obtener el partido para conseguir event_key
+        match = db.get_match(match_id)
+        if not match or not match.get("event_key"):
+            logger.debug(f"Partido {match_id} no tiene event_key")
+            return False
+        
+        event_key = match["event_key"]
+        match_date = match.get("fecha_partido")
+        
+        if not match_date:
+            return False
+        
+        # Formatear fecha
+        if hasattr(match_date, 'strftime'):
+            date_str = match_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(match_date)
+        
+        # Obtener datos de la API
+        logger.info(f"🔍 Obteniendo datos de API Tennis para partido {match_id} (event_key: {event_key})")
+        
+        params = {
+            "date_start": date_str,
+            "date_stop": date_str,
+            "match_key": event_key
+        }
+        data = api_client._make_request("get_fixtures", params)
+        
+        if not data or not data.get("result"):
+            logger.debug(f"No se encontraron datos en API para partido {match_id}")
+            return False
+        
+        # Buscar el partido específico
+        results = data["result"]
+        api_match = None
+        
+        if isinstance(results, list):
+            for m in results:
+                if str(m.get("event_key")) == str(event_key):
+                    api_match = m
+                    break
+        else:
+            api_match = results
+        
+        if not api_match:
+            return False
+        
+        # Guardar scores por set
+        scores = api_match.get("scores", [])
+        if scores:
+            sets_data = []
+            for score in scores:
+                sets_data.append({
+                    "set_number": int(score.get("score_set", 0)),
+                    "player1_score": int(score.get("score_first", 0)),
+                    "player2_score": int(score.get("score_second", 0)),
+                    "tiebreak_score": None
+                })
+            db.save_match_sets(match_id, sets_data)
+            logger.info(f"✅ Guardados {len(sets_data)} sets para partido {match_id}")
+        
+        # Guardar juegos y puntos desde pointbypoint
+        pointbypoint = api_match.get("pointbypoint", [])
+        if pointbypoint and pbp_service:
+            games_saved = 0
+            points_saved = 0
+            
+            for game in pointbypoint:
+                # Guardar juego
+                game_data = {
+                    "set_number": game.get("set_number", "Set 1"),
+                    "game_number": int(game.get("number_game", 0)),
+                    "server": game.get("player_served", "First Player"),
+                    "winner": game.get("serve_winner", "First Player"),
+                    "score_games": game.get("score", "0-0"),
+                    "score_sets": "0-0",
+                    "was_break": bool(game.get("serve_lost"))
+                }
+                
+                try:
+                    pbp_service.store_games(match_id, [game_data])
+                    games_saved += 1
+                except:
+                    pass
+                
+                # Guardar puntos del juego
+                points = game.get("points", [])
+                for point in points:
+                    point_data = {
+                        "set_number": game.get("set_number", "Set 1"),
+                        "game_number": int(game.get("number_game", 0)),
+                        "point_number": int(point.get("number_point", 0)),
+                        "server": game.get("player_served", "First Player"),
+                        "score": point.get("score", "0-0"),
+                        "is_break_point": bool(point.get("break_point")),
+                        "is_set_point": bool(point.get("set_point")),
+                        "is_match_point": bool(point.get("match_point"))
+                    }
+                    
+                    try:
+                        pbp_service.store_point_by_point(match_id, [point_data])
+                        points_saved += 1
+                    except:
+                        pass
+            
+            if games_saved > 0 or points_saved > 0:
+                logger.info(f"✅ Guardados {games_saved} juegos y {points_saved} puntos para partido {match_id}")
+                return True
+        
+        return bool(scores)
+        
+    except Exception as e:
+        logger.error(f"Error obteniendo datos de API para partido {match_id}: {e}")
+        return False
+
+
 @app.get("/matches/{match_id}/stats/summary", tags=["Elite - Match Statistics"])
 async def get_match_stats_summary(match_id: int):
     """
-    Obtiene un resumen de estadísticas calculadas del partido
+    Obtiene un resumen de estadísticas calculadas del partido.
+    Si no hay datos locales, intenta obtenerlos de la API Tennis.
     """
     if not pbp_service:
         raise HTTPException(status_code=503, detail="PointByPoint service not available")
@@ -3101,7 +3259,15 @@ async def get_match_stats_summary(match_id: int):
         games = pbp_service.get_games(match_id)
         points = pbp_service.get_point_by_point(match_id)
         
-        if not games or not points:
+        # Si no hay datos locales, intentar obtenerlos de la API
+        if not games and not points:
+            logger.info(f"📡 No hay datos locales para partido {match_id}, obteniendo de API...")
+            if _fetch_and_store_match_stats(match_id):
+                # Reintentar obtener los datos
+                games = pbp_service.get_games(match_id)
+                points = pbp_service.get_point_by_point(match_id)
+        
+        if not games and not points:
             return {
                 "match_id": match_id,
                 "has_data": False,
