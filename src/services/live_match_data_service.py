@@ -336,12 +336,7 @@ class LiveMatchDataService:
             event_serve = live_match.get("event_serve")  # ✅ FIX: Capturar quién saca
             
             # Determinar estado del partido
-            if event_status == "Finished":
-                estado = "completado"
-            elif event_status:
-                estado = "en_juego"
-            else:
-                estado = "pendiente"
+            estado = self._determine_match_status(event_status, event_final_result)
             
             # Actualizar en DB
             cursor.execute("""
@@ -359,6 +354,39 @@ class LiveMatchDataService:
             
         except Exception as e:
             logger.error(f"Error actualizando estado del partido {match_id}: {e}")
+
+    def _determine_match_status(self, event_status: str, event_final_result: str) -> str:
+        """
+        Determina el estado del partido basándose en los datos de la API.
+        
+        Maneja todos los casos especiales: Finished, Walk Over, Retired, etc.
+        """
+        event_status_lower = (event_status or "").lower()
+        
+        # Estados que indican que el partido terminó
+        finished_keywords = [
+            "finished", "ended", "completed", "final",
+            "walk over", "walkover", "w.o.", "wo", "w/o",
+            "retired", "ret", "retirement",
+            "defaulted", "def", "default",
+            "cancelled", "canceled", "postponed", "suspended",
+            "awarded"  # Partido otorgado a un jugador
+        ]
+        
+        for keyword in finished_keywords:
+            if keyword in event_status_lower:
+                return "completado"
+        
+        # Si tiene resultado final válido (no "-"), está completado
+        if event_final_result and event_final_result != "-" and " - " in event_final_result:
+            # Verificar que parece un resultado válido (ej: "2 - 1", "3 - 0")
+            return "completado"
+        
+        # Si tiene algún status pero no es de finalizado, está en juego
+        if event_status and event_status_lower not in ["", "not started", "scheduled"]:
+            return "en_juego"
+        
+        return "pendiente"
 
 
 if __name__ == "__main__":

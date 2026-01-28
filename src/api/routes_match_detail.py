@@ -667,7 +667,7 @@ def _detect_surface_from_match(match_data: dict) -> str:
     grass_keywords = [
         "wimbledon", "queens", "queen's", "halle", "stuttgart grass",
         "eastbourne", "s-hertogenbosch", "'s-hertogenbosch", "mallorca",
-        "newport"
+        "newport", "london"  # Queen's Club London (grass) - ATP Finals usa otro nombre
     ]
     
     for keyword in clay_keywords:

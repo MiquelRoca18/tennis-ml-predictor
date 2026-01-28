@@ -239,6 +239,44 @@ class DailyMatchFetcher:
             stats["errors"].append(error_msg)
             return stats
 
+    def _determine_match_status(
+        self, event_live: str, event_final_result: str, event_status: str
+    ) -> str:
+        """
+        Determina el estado del partido basándose en los datos de la API.
+        
+        Maneja todos los casos especiales: Finished, Walk Over, Retired, etc.
+        """
+        # PRIORIDAD 1: Si está en vivo
+        if event_live == "1":
+            return "en_juego"
+        
+        event_status_lower = (event_status or "").lower()
+        
+        # PRIORIDAD 2: Estados que indican que el partido terminó
+        finished_keywords = [
+            "finished", "ended", "completed", "final",
+            "walk over", "walkover", "w.o.", "wo", "w/o",
+            "retired", "ret", "retirement",
+            "defaulted", "def", "default",
+            "cancelled", "canceled", "postponed", "suspended",
+            "awarded"
+        ]
+        
+        for keyword in finished_keywords:
+            if keyword in event_status_lower:
+                return "completado"
+        
+        # PRIORIDAD 3: Si tiene resultado final válido
+        if event_final_result and event_final_result != "-":
+            return "completado"
+        
+        # PRIORIDAD 4: Si tiene algún status no vacío (podría estar en juego)
+        if event_status and event_status_lower not in ["", "not started", "scheduled"]:
+            return "en_juego"
+        
+        return "pendiente"
+
     def _process_match(self, match_data: Dict) -> Dict:
         """
         Processes a single match: checks if exists, creates if new, generates prediction
@@ -340,18 +378,7 @@ class DailyMatchFetcher:
         event_status = match_data.get("status", "")
         
         # Lógica de determinación de estado - PRIORIDAD: live > completado > pendiente
-        if event_live == "1":
-            # Si está en vivo, SIEMPRE es "en_juego" aunque tenga resultado parcial
-            estado_inicial = "en_juego"
-        elif event_final_result and event_final_result != "-":
-            # Si tiene resultado final y NO está en vivo, está completado
-            estado_inicial = "completado"
-        elif event_status and event_status.lower() in ["finished", "ended", "completed"]:
-            # Si el status indica finalizado
-            estado_inicial = "completado"
-        else:
-            # Por defecto, pendiente
-            estado_inicial = "pendiente"
+        estado_inicial = self._determine_match_status(event_live, event_final_result, event_status)
 
         # Create match in database (SIEMPRE, con o sin cuotas)
         try:
