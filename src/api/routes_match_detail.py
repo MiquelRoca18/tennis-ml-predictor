@@ -79,64 +79,24 @@ def get_api_client():
 async def get_match_full(match_id: int):
     """
     Obtiene todos los datos de un partido en una sola llamada.
+    
+    OPTIMIZADO: Solo lee de la BD para respuesta rápida (<100ms).
+    Los datos se sincronizan en background por los schedulers.
     """
-    logger.info(f"🎾 GET /v2/matches/{match_id}/full - Iniciando")
-    
-    try:
-        db = get_db()
-        logger.info(f"✅ DB obtenida: {type(db)}")
-    except Exception as e:
-        logger.error(f"❌ Error obteniendo DB: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error DB: {str(e)}")
-    
-    try:
-        api_client = get_api_client()
-        logger.info(f"✅ API Client obtenido: {type(api_client)}")
-    except Exception as e:
-        logger.error(f"❌ Error obteniendo API Client: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error API Client: {str(e)}")
+    db = get_db()
     
     try:
         # 1. Obtener partido de la BD (usando vista con predicciones)
-        logger.info(f"📥 Obteniendo partido {match_id} de BD...")
-        # Usar la vista que incluye predicciones
         match = db._fetchone(
             "SELECT * FROM matches_with_latest_prediction WHERE id = :id",
             {"id": match_id}
         )
         if not match:
-            # Fallback a tabla matches si no está en la vista
             match = db.get_match(match_id)
         if not match:
-            logger.warning(f"⚠️ Partido {match_id} no encontrado")
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Log de campos disponibles para debug
-        logger.info(f"✅ Partido encontrado: {match.get('jugador1_nombre')} vs {match.get('jugador2_nombre')}")
-        logger.info(f"📋 Campos disponibles: {list(match.keys())[:15]}...")
-        
-        # 2. Obtener datos adicionales de la API Tennis si hay event_key
-        api_data = None
-        event_key = match.get("event_key")
-        logger.info(f"📡 Event key: {event_key}")
-        
-        if event_key:
-            try:
-                params = {"match_key": event_key}
-                response = api_client._make_request("get_fixtures", params)
-                
-                if response and response.get("result"):
-                    results = response["result"]
-                    if isinstance(results, list) and results:
-                        api_data = results[0]
-                    elif isinstance(results, dict):
-                        api_data = results
-                    logger.info(f"✅ Datos API Tennis obtenidos")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo obtener datos de API Tennis: {e}")
-        
-        # 3. Construir información del partido
-        logger.info(f"🔨 Construyendo MatchInfo...")
+        # 2. Construir información del partido
         estado = match.get("estado", "pendiente")
         if estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
             estado = "pendiente"
@@ -150,57 +110,41 @@ async def get_match_full(match_id: int):
             "indoor": "Indoor", "Indoor": "Indoor",
         }
         superficie = superficie_map.get(superficie_raw, "Hard")
-        logger.info(f"📊 Estado: {estado}, Superficie: {superficie}")
-        
-        # Obtener fecha de forma segura
-        fecha_partido = match.get("fecha_partido")
-        logger.info(f"📅 Fecha partido (raw): {fecha_partido}, type: {type(fecha_partido)}")
         
         match_info = MatchInfo(
             id=match_id,
             status=MatchStatus(estado),
-            date=fecha_partido,
+            date=match.get("fecha_partido"),
             time=match.get("hora_inicio"),
             tournament=match.get("torneo", "Unknown"),
             round=match.get("ronda"),
             surface=Surface(superficie),
         )
-        logger.info(f"✅ MatchInfo creado")
         
-        # 4. Construir información de jugadores
-        logger.info(f"👤 Construyendo PlayerInfo...")
-        
-        # Obtener nombres
+        # 3. Construir información de jugadores (de BD, rápido)
         j1_nombre = match.get("jugador1_nombre") or match.get("jugador1") or "Player 1"
         j2_nombre = match.get("jugador2_nombre") or match.get("jugador2") or "Player 2"
-        
-        # Intentar obtener rankings actualizados de la tabla players
         j1_ranking = match.get("jugador1_ranking")
         j2_ranking = match.get("jugador2_ranking")
         j1_key = match.get("jugador1_key")
         j2_key = match.get("jugador2_key")
         
-        # Buscar ranking actual en tabla players si tenemos player_key
-        try:
-            if j1_key:
-                player1_data = db._fetchone(
-                    "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
-                    {"key": j1_key}
-                )
-                if player1_data and player1_data.get("atp_ranking"):
-                    j1_ranking = player1_data.get("atp_ranking")
-                    logger.info(f"📊 Ranking actualizado J1: {j1_ranking}")
-            
-            if j2_key:
-                player2_data = db._fetchone(
-                    "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
-                    {"key": j2_key}
-                )
-                if player2_data and player2_data.get("atp_ranking"):
-                    j2_ranking = player2_data.get("atp_ranking")
-                    logger.info(f"📊 Ranking actualizado J2: {j2_ranking}")
-        except Exception as e:
-            logger.warning(f"⚠️ Error obteniendo rankings de players: {e}")
+        # Buscar ranking actual en tabla players (consulta rápida a BD local)
+        if j1_key:
+            player1_data = db._fetchone(
+                "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
+                {"key": j1_key}
+            )
+            if player1_data and player1_data.get("atp_ranking"):
+                j1_ranking = player1_data.get("atp_ranking")
+        
+        if j2_key:
+            player2_data = db._fetchone(
+                "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
+                {"key": j2_key}
+            )
+            if player2_data and player2_data.get("atp_ranking"):
+                j2_ranking = player2_data.get("atp_ranking")
         
         player1 = PlayerInfo(
             name=j1_nombre,
@@ -215,114 +159,70 @@ async def get_match_full(match_id: int):
             ranking=j2_ranking,
             logo_url=match.get("jugador2_logo"),
         )
-        logger.info(f"✅ PlayerInfo creados: {player1.name} (#{j1_ranking}) vs {player2.name} (#{j2_ranking})")
         
-        # 5. Calcular scores
-        logger.info(f"🎯 Calculando scores...")
+        # 4. Obtener scores de la BD (rápido)
         scores = None
-        try:
-            if api_data and api_data.get("scores"):
-                scores = stats_calculator.calculate_scores(api_data["scores"], api_data)
-                logger.info(f"✅ Scores de API: {scores}")
-            elif match.get("resultado_marcador"):
+        if match.get("resultado_marcador"):
+            try:
                 scores = stats_calculator.parse_score_string(match["resultado_marcador"])
-                logger.info(f"✅ Scores parseados: {scores}")
-        except Exception as e:
-            logger.warning(f"⚠️ Error calculando scores: {e}")
+            except Exception:
+                pass
         
-        # Intentar obtener de match_sets si no hay scores
+        # Intentar obtener de match_sets si no hay scores parseados
         if not scores or not scores.sets:
-            try:
-                if hasattr(db, 'get_match_sets'):
-                    sets_db = db.get_match_sets(match_id)
-                    if sets_db:
-                        sets = []
-                        p1_sets = 0
-                        p2_sets = 0
-                        for s in sets_db:
-                            p1 = s.get("player1_score", 0)
-                            p2 = s.get("player2_score", 0)
-                            winner = 1 if p1 > p2 else 2 if p2 > p1 else None
-                            if winner == 1:
-                                p1_sets += 1
-                            elif winner == 2:
-                                p2_sets += 1
-                            sets.append(SetScore(
-                                set_number=s.get("set_number", len(sets) + 1),
-                                player1_games=p1,
-                                player2_games=p2,
-                                tiebreak_score=s.get("tiebreak_score"),
-                                winner=winner
-                            ))
-                        if sets:
-                            scores = MatchScores(sets_won=[p1_sets, p2_sets], sets=sets)
-                            logger.info(f"✅ Scores de BD: {scores}")
-            except Exception as e:
-                logger.warning(f"⚠️ Error obteniendo sets de BD: {e}")
+            if hasattr(db, 'get_match_sets'):
+                sets_db = db.get_match_sets(match_id)
+                if sets_db:
+                    sets = []
+                    p1_sets = 0
+                    p2_sets = 0
+                    for s in sets_db:
+                        p1 = s.get("player1_score", 0)
+                        p2 = s.get("player2_score", 0)
+                        winner = 1 if p1 > p2 else 2 if p2 > p1 else None
+                        if winner == 1:
+                            p1_sets += 1
+                        elif winner == 2:
+                            p2_sets += 1
+                        sets.append(SetScore(
+                            set_number=s.get("set_number", len(sets) + 1),
+                            player1_games=p1,
+                            player2_games=p2,
+                            tiebreak_score=s.get("tiebreak_score"),
+                            winner=winner
+                        ))
+                    if sets:
+                        scores = MatchScores(sets_won=[p1_sets, p2_sets], sets=sets)
         
-        # 6. Calcular estadísticas y timeline desde pointbypoint
-        logger.info(f"📊 Calculando estadísticas...")
-        stats = None
-        timeline = None
+        # 5. Obtener estadísticas y timeline de la BD (si existen pre-calculadas)
+        stats, timeline = _load_stats_from_db(db, match_id)
         
-        if api_data and api_data.get("pointbypoint"):
-            pbp_data = api_data["pointbypoint"]
-            logger.info(f"📊 Datos pointbypoint encontrados: {len(pbp_data)} juegos")
-            try:
-                stats = stats_calculator.calculate_stats(pbp_data, scores)
-                logger.info(f"✅ Stats calculadas: has_detailed_stats={stats.has_detailed_stats if stats else False}")
-            except Exception as e:
-                logger.warning(f"⚠️ Error calculando stats: {e}")
-            
-            try:
-                timeline = stats_calculator.calculate_timeline(pbp_data)
-                logger.info(f"✅ Timeline calculado: {timeline.total_games if timeline else 0} juegos")
-            except Exception as e:
-                logger.warning(f"⚠️ Error calculando timeline: {e}")
-        else:
-            logger.info(f"ℹ️ No hay datos pointbypoint disponibles")
-        
-        # 7. Obtener cuotas (simple, desde la BD)
-        logger.info(f"💰 Obteniendo cuotas...")
+        # 6. Obtener cuotas de la BD (rápido)
         odds = _get_match_odds(db, match_id, match)
         
-        # 8. Obtener predicción (desde la BD)
-        logger.info(f"🤖 Obteniendo predicción...")
+        # 7. Obtener predicción de la BD (ya está en el match)
         prediction = _get_prediction(match)
         
-        # 9. Obtener H2H si tenemos las keys de los jugadores
-        logger.info(f"🤝 Obteniendo H2H...")
-        h2h = None
-        try:
-            h2h = await _get_h2h_summary(db, api_client, match)
-            if h2h:
-                logger.info(f"✅ H2H obtenido: {h2h.total_matches} partidos")
-            else:
-                logger.info(f"ℹ️ No hay datos H2H")
-        except Exception as e:
-            logger.warning(f"⚠️ Error obteniendo H2H: {e}")
+        # 8. Obtener H2H de la BD (tabla head_to_head si existe)
+        h2h = _get_h2h_from_db(db, match)
         
-        # 10. Determinar ganador
+        # 9. Determinar ganador
         winner = None
         ganador = match.get("resultado_ganador")
-        j1_nombre = match.get("jugador1_nombre") or match.get("jugador1")
-        j2_nombre = match.get("jugador2_nombre") or match.get("jugador2")
         if ganador:
             if ganador == j1_nombre:
                 winner = 1
             elif ganador == j2_nombre:
                 winner = 2
-        logger.info(f"🏆 Winner: {winner} (ganador: {ganador})")
         
-        # 11. Determinar calidad de datos
+        # 10. Determinar calidad de datos
         data_quality = "basic"
         if stats and stats.has_detailed_stats:
             data_quality = "full"
         elif scores and scores.sets:
             data_quality = "partial"
         
-        logger.info(f"📦 Construyendo respuesta final...")
-        response = MatchFullResponse(
+        return MatchFullResponse(
             match=match_info,
             player1=player1,
             player2=player2,
@@ -336,19 +236,11 @@ async def get_match_full(match_id: int):
             last_updated=datetime.now().isoformat(),
             data_quality=data_quality,
         )
-        logger.info(f"✅ Respuesta construida exitosamente")
-        return response
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ ERROR en get_match_full({match_id}): {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error obteniendo datos del partido {match_id}: {e}", exc_info=True)
+        logger.error(f"Error en get_match_full({match_id}): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -361,37 +253,16 @@ async def get_match_timeline(match_id: int):
     """
     Obtiene el timeline de juegos del partido.
     
-    Incluye:
-    - Juegos agrupados por set
-    - Indicadores de break
-    - Score progresivo
-    - Estadísticas de breaks por set
+    OPTIMIZADO: Solo lee de la BD para respuesta rápida.
     """
     db = get_db()
-    api_client = get_api_client()
     
     try:
         match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Intentar obtener de API
-        event_key = match.get("event_key")
-        if event_key:
-            try:
-                params = {"match_key": event_key}
-                response = api_client._make_request("get_fixtures", params)
-                
-                if response and response.get("result"):
-                    results = response["result"]
-                    api_data = results[0] if isinstance(results, list) else results
-                    
-                    if api_data.get("pointbypoint"):
-                        return stats_calculator.calculate_timeline(api_data["pointbypoint"])
-            except Exception as e:
-                logger.warning(f"Error obteniendo timeline de API: {e}")
-        
-        # Intentar cargar de BD
+        # Cargar de BD (datos pre-sincronizados por scheduler)
         _, timeline = _load_stats_from_db(db, match_id)
         if timeline and timeline.total_games > 0:
             return timeline
@@ -417,40 +288,17 @@ async def get_point_by_point(
     """
     Obtiene los datos punto por punto del partido.
     
-    Args:
-        match_id: ID del partido
-        set_number: Filtrar por set específico (opcional)
-    
-    Returns:
-        Puntos con indicadores de BP/SP/MP
+    OPTIMIZADO: Solo lee de la BD para respuesta rápida.
     """
     db = get_db()
-    api_client = get_api_client()
     
     try:
         match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Intentar obtener de API
-        event_key = match.get("event_key")
-        if event_key:
-            try:
-                params = {"match_key": event_key}
-                response = api_client._make_request("get_fixtures", params)
-                
-                if response and response.get("result"):
-                    results = response["result"]
-                    api_data = results[0] if isinstance(results, list) else results
-                    
-                    if api_data.get("pointbypoint"):
-                        return stats_calculator.extract_point_by_point(
-                            api_data["pointbypoint"],
-                            set_filter=set_number
-                        )
-            except Exception as e:
-                logger.warning(f"Error obteniendo PBP de API: {e}")
-        
+        # Cargar de BD (tabla match_pointbypoint si existe)
+        # Por ahora devuelve vacío - los datos se sincronizan por scheduler
         return PointByPointData()
         
     except HTTPException:
@@ -465,48 +313,69 @@ async def get_point_by_point(
 # ============================================================
 
 @router.get("/{match_id}/odds")
-async def get_match_odds_detailed(match_id: int):
+async def get_match_odds_detailed(
+    match_id: int,
+    refresh: bool = Query(False, description="Forzar actualización desde API externa")
+):
     """
     Obtiene las cuotas detalladas de todas las casas de apuestas.
     
-    Llama directamente a la API Tennis para obtener cuotas en tiempo real.
-    Devuelve las cuotas ordenadas de mejor (más alta) a peor.
+    OPTIMIZADO: Por defecto lee de la BD (rápido).
+    Usa ?refresh=true para forzar actualización desde API Tennis.
     """
     db = get_db()
-    api_client = get_api_client()
     
     try:
         match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
+        p1_name = match.get("jugador1_nombre") or match.get("jugador1")
+        p2_name = match.get("jugador2_nombre") or match.get("jugador2")
         event_key = match.get("event_key")
+        
+        # 1. Primero intentar obtener de la BD (odds_history)
+        if not refresh:
+            odds_from_db = _get_detailed_odds_from_db(db, match_id, match)
+            if odds_from_db and odds_from_db.get("bookmakers"):
+                return odds_from_db
+        
+        # 2. Si refresh=true o no hay datos en BD, llamar a API
         if not event_key:
-            return {
-                "success": False,
-                "message": "No hay event_key para este partido",
-                "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
-                "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
-                "bookmakers": []
-            }
-        
-        # Llamar a la API de Tennis para obtener cuotas
-        params = {"match_key": event_key}
-        response = api_client._make_request("get_odds", params)
-        
-        if not response or not response.get("result"):
-            logger.info(f"No hay cuotas disponibles para evento {event_key}")
             return {
                 "success": True,
                 "message": "No hay cuotas disponibles",
-                "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
-                "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
+                "player1_name": p1_name,
+                "player2_name": p2_name,
+                "bookmakers": []
+            }
+        
+        api_client = get_api_client()
+        params = {"match_key": event_key}
+        
+        try:
+            response = api_client._make_request("get_odds", params)
+        except Exception as e:
+            logger.warning(f"Error llamando API odds: {e}")
+            # Fallback a BD si la API falla
+            return _get_detailed_odds_from_db(db, match_id, match) or {
+                "success": True,
+                "message": "No hay cuotas disponibles",
+                "player1_name": p1_name,
+                "player2_name": p2_name,
+                "bookmakers": []
+            }
+        
+        if not response or not response.get("result"):
+            return {
+                "success": True,
+                "message": "No hay cuotas disponibles",
+                "player1_name": p1_name,
+                "player2_name": p2_name,
                 "bookmakers": []
             }
         
         result = response["result"]
-        
-        # El resultado es un dict con el event_key como clave
         match_odds = result.get(str(event_key), {})
         
         # Extraer cuotas Home/Away (Ganador del partido)
@@ -539,12 +408,10 @@ async def get_match_odds_detailed(match_id: int):
         best_p1 = max([b["player1_odds"] for b in bookmakers_list if b["player1_odds"]], default=None)
         best_p2 = max([b["player2_odds"] for b in bookmakers_list if b["player2_odds"]], default=None)
         
-        logger.info(f"✅ Cuotas obtenidas: {len(bookmakers_list)} bookmakers para evento {event_key}")
-        
         return {
             "success": True,
-            "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
-            "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
+            "player1_name": p1_name,
+            "player2_name": p2_name,
             "best_odds_player1": best_p1,
             "best_odds_player2": best_p2,
             "bookmakers": bookmakers_list,
@@ -698,6 +565,134 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
         
     except Exception as e:
         logger.warning(f"Error obteniendo H2H: {e}")
+        return None
+
+
+def _get_detailed_odds_from_db(db, match_id: int, match: dict) -> Optional[dict]:
+    """
+    Obtiene cuotas detalladas de la BD (tabla odds_history).
+    """
+    try:
+        p1_name = match.get("jugador1_nombre") or match.get("jugador1")
+        p2_name = match.get("jugador2_nombre") or match.get("jugador2")
+        
+        # Buscar en odds_history
+        odds_rows = db._fetchall(
+            """
+            SELECT bookmaker, odds_player1, odds_player2, created_at
+            FROM odds_history 
+            WHERE match_id = :match_id
+            ORDER BY created_at DESC
+            """,
+            {"match_id": match_id}
+        )
+        
+        if not odds_rows:
+            # Fallback a cuotas simples del match
+            cuota1 = match.get("jugador1_cuota") or match.get("cuota_jugador1")
+            cuota2 = match.get("jugador2_cuota") or match.get("cuota_jugador2")
+            
+            if cuota1 or cuota2:
+                return {
+                    "success": True,
+                    "player1_name": p1_name,
+                    "player2_name": p2_name,
+                    "best_odds_player1": float(cuota1) if cuota1 else None,
+                    "best_odds_player2": float(cuota2) if cuota2 else None,
+                    "bookmakers": [{
+                        "bookmaker": "Default",
+                        "player1_odds": float(cuota1) if cuota1 else None,
+                        "player2_odds": float(cuota2) if cuota2 else None,
+                    }] if (cuota1 or cuota2) else [],
+                    "total_bookmakers": 1 if (cuota1 or cuota2) else 0
+                }
+            return None
+        
+        # Construir lista de bookmakers (último registro de cada bookmaker)
+        bookmakers_dict = {}
+        for row in odds_rows:
+            bm = row.get("bookmaker", "Unknown")
+            if bm not in bookmakers_dict:
+                bookmakers_dict[bm] = {
+                    "bookmaker": bm,
+                    "player1_odds": row.get("odds_player1"),
+                    "player2_odds": row.get("odds_player2"),
+                }
+        
+        bookmakers_list = list(bookmakers_dict.values())
+        
+        # Ordenar por mejor cuota
+        bookmakers_list.sort(
+            key=lambda x: (x["player1_odds"] or 0, x["player2_odds"] or 0),
+            reverse=True
+        )
+        
+        best_p1 = max([b["player1_odds"] for b in bookmakers_list if b["player1_odds"]], default=None)
+        best_p2 = max([b["player2_odds"] for b in bookmakers_list if b["player2_odds"]], default=None)
+        
+        return {
+            "success": True,
+            "player1_name": p1_name,
+            "player2_name": p2_name,
+            "best_odds_player1": best_p1,
+            "best_odds_player2": best_p2,
+            "bookmakers": bookmakers_list,
+            "total_bookmakers": len(bookmakers_list)
+        }
+    except Exception as e:
+        logger.warning(f"Error obteniendo odds de BD: {e}")
+        return None
+
+
+def _get_h2h_from_db(db, match: dict) -> Optional[H2HData]:
+    """
+    Obtiene datos de H2H de la base de datos local.
+    Los datos se pre-cargan por el scheduler de H2H.
+    """
+    try:
+        p1_key = match.get("jugador1_key")
+        p2_key = match.get("jugador2_key")
+        
+        if not p1_key or not p2_key:
+            return None
+        
+        # Buscar en tabla head_to_head
+        h2h_record = db._fetchone(
+            """
+            SELECT * FROM head_to_head 
+            WHERE (player1_key = :p1 AND player2_key = :p2)
+               OR (player1_key = :p2 AND player2_key = :p1)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            {"p1": p1_key, "p2": p2_key}
+        )
+        
+        if not h2h_record:
+            return None
+        
+        # Construir H2HData desde el registro
+        p1_wins = h2h_record.get("player1_wins", 0)
+        p2_wins = h2h_record.get("player2_wins", 0)
+        
+        # Si las keys están invertidas en el registro, invertir los wins
+        if h2h_record.get("player1_key") != p1_key:
+            p1_wins, p2_wins = p2_wins, p1_wins
+        
+        return H2HData(
+            total_matches=p1_wins + p2_wins,
+            player1_wins=p1_wins,
+            player2_wins=p2_wins,
+            # Records por superficie si están disponibles
+            surface_records={
+                "Hard": [h2h_record.get("hard_p1_wins", 0), h2h_record.get("hard_p2_wins", 0)],
+                "Clay": [h2h_record.get("clay_p1_wins", 0), h2h_record.get("clay_p2_wins", 0)],
+                "Grass": [h2h_record.get("grass_p1_wins", 0), h2h_record.get("grass_p2_wins", 0)],
+            },
+            recent_matches=[]  # Los partidos recientes se pueden cargar por separado si necesario
+        )
+    except Exception as e:
+        logger.warning(f"Error obteniendo H2H de BD: {e}")
         return None
 
 
