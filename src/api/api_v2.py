@@ -79,6 +79,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Registrar routers de endpoints v2
+from src.api.routes_match_detail import router as match_detail_router
+app.include_router(match_detail_router)
+logger.info("✅ Router de detalle de partidos v2 registrado")
+
 # Inicializar componentes
 # Usar variable de entorno para DB path (permite volumen persistente en Railway)
 import os
