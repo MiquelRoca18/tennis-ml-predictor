@@ -75,7 +75,7 @@ def get_api_client():
 # ENDPOINT PRINCIPAL: /matches/{id}/full
 # ============================================================
 
-@router.get("/{match_id}/full", response_model=MatchFullResponse)
+@router.get("/{match_id}/full", response_model=MatchFullResponse, response_model_by_alias=True)
 async def get_match_full(match_id: int):
     """
     Obtiene todos los datos de un partido en una sola llamada.
@@ -260,10 +260,27 @@ async def get_match_full(match_id: int):
             except Exception as e:
                 logger.warning(f"⚠️ Error obteniendo sets de BD: {e}")
         
-        # 6. Calcular estadísticas
+        # 6. Calcular estadísticas y timeline desde pointbypoint
         logger.info(f"📊 Calculando estadísticas...")
         stats = None
         timeline = None
+        
+        if api_data and api_data.get("pointbypoint"):
+            pbp_data = api_data["pointbypoint"]
+            logger.info(f"📊 Datos pointbypoint encontrados: {len(pbp_data)} juegos")
+            try:
+                stats = stats_calculator.calculate_stats(pbp_data, scores)
+                logger.info(f"✅ Stats calculadas: has_detailed_stats={stats.has_detailed_stats if stats else False}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error calculando stats: {e}")
+            
+            try:
+                timeline = stats_calculator.calculate_timeline(pbp_data)
+                logger.info(f"✅ Timeline calculado: {timeline.total_games if timeline else 0} juegos")
+            except Exception as e:
+                logger.warning(f"⚠️ Error calculando timeline: {e}")
+        else:
+            logger.info(f"ℹ️ No hay datos pointbypoint disponibles")
         
         # 7. Obtener cuotas (simple, desde la BD)
         logger.info(f"💰 Obteniendo cuotas...")
@@ -273,8 +290,17 @@ async def get_match_full(match_id: int):
         logger.info(f"🤖 Obteniendo predicción...")
         prediction = _get_prediction(match)
         
-        # 9. H2H (skip por ahora para evitar llamadas adicionales a API)
+        # 9. Obtener H2H si tenemos las keys de los jugadores
+        logger.info(f"🤝 Obteniendo H2H...")
         h2h = None
+        try:
+            h2h = await _get_h2h_summary(db, api_client, match)
+            if h2h:
+                logger.info(f"✅ H2H obtenido: {h2h.total_matches} partidos")
+            else:
+                logger.info(f"ℹ️ No hay datos H2H")
+        except Exception as e:
+            logger.warning(f"⚠️ Error obteniendo H2H: {e}")
         
         # 10. Determinar ganador
         winner = None
@@ -489,6 +515,7 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
         p2_key = match.get("jugador2_key")
         
         if not p1_key or not p2_key:
+            logger.info(f"⚠️ No hay player keys para H2H: p1={p1_key}, p2={p2_key}")
             return None
         
         # Llamar a API Tennis para H2H
@@ -499,37 +526,68 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
         response = api_client._make_request("get_H2H", params)
         
         if not response or not response.get("result"):
+            logger.info(f"ℹ️ No hay datos H2H en la API")
             return None
         
         result = response["result"]
         h2h_matches = result.get("H2H", [])
         
+        if not h2h_matches:
+            logger.info(f"ℹ️ No hay enfrentamientos previos")
+            return None
+        
         p1_wins = 0
         p2_wins = 0
         matches = []
         
-        for m in h2h_matches[:5]:  # Últimos 5
+        # Records por superficie
+        hard_p1, hard_p2 = 0, 0
+        clay_p1, clay_p2 = 0, 0
+        grass_p1, grass_p2 = 0, 0
+        
+        for m in h2h_matches:
             winner_str = m.get("event_winner", "")
+            surface = (m.get("tournament_surface") or "Hard").lower()
+            
             if "First" in winner_str:
                 p1_wins += 1
                 winner = 1
+                if "hard" in surface:
+                    hard_p1 += 1
+                elif "clay" in surface:
+                    clay_p1 += 1
+                elif "grass" in surface:
+                    grass_p1 += 1
             else:
                 p2_wins += 1
                 winner = 2
+                if "hard" in surface:
+                    hard_p2 += 1
+                elif "clay" in surface:
+                    clay_p2 += 1
+                elif "grass" in surface:
+                    grass_p2 += 1
             
-            matches.append(PreviousMatch(
-                date=m.get("event_date", ""),
-                tournament=m.get("tournament_name", ""),
-                surface=m.get("tournament_surface", "Hard"),
-                winner=winner,
-                score=m.get("event_final_result", "")
-            ))
+            # Solo los últimos 5 para mostrar
+            if len(matches) < 5:
+                matches.append(PreviousMatch(
+                    date=m.get("event_date", ""),
+                    tournament=m.get("tournament_name", "Unknown"),
+                    surface=m.get("tournament_surface", "Hard"),
+                    winner=winner,
+                    score=m.get("event_final_result", "")
+                ))
+        
+        logger.info(f"✅ H2H encontrado: {p1_wins}-{p2_wins} ({len(h2h_matches)} partidos)")
         
         return H2HData(
             total_matches=len(h2h_matches),
             player1_wins=p1_wins,
             player2_wins=p2_wins,
-            matches=matches
+            matches=matches,
+            hard_record=[hard_p1, hard_p2],
+            clay_record=[clay_p1, clay_p2],
+            grass_record=[grass_p1, grass_p2]
         )
         
     except Exception as e:

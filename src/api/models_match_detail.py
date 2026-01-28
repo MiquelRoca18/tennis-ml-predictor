@@ -173,15 +173,14 @@ class BreakPointStats(BaseModel):
 class PlayerStats(BaseModel):
     """Todas las estadísticas de un jugador"""
     serve: ServeStats = Field(default_factory=ServeStats)
-    return_: ReturnStats = Field(default_factory=ReturnStats, alias="return")
+    return_: ReturnStats = Field(default_factory=ReturnStats, serialization_alias="return")
     break_points: BreakPointStats = Field(default_factory=BreakPointStats)
     total_points_won: int = Field(0, description="Total puntos ganados")
     total_games_won: int = Field(0, description="Total juegos ganados")
     winners: int = Field(0, description="Winners (si disponible)")
     unforced_errors: int = Field(0, description="Errores no forzados (si disponible)")
     
-    class Config:
-        populate_by_name = True
+    model_config = {"populate_by_name": True}
 
 
 class MatchStats(BaseModel):
