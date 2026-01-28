@@ -159,15 +159,16 @@ async def get_match_full(match_id: int):
         
         # 4. Construir información de jugadores
         logger.info(f"👤 Construyendo PlayerInfo...")
+        # Campos de la BD usan jugador1_nombre, jugador2_nombre
         player1 = PlayerInfo(
-            name=match.get("jugador1", "Player 1"),
+            name=match.get("jugador1_nombre") or match.get("jugador1") or "Player 1",
             country=match.get("jugador1_pais"),
             ranking=match.get("jugador1_ranking"),
             logo_url=match.get("jugador1_logo"),
         )
         
         player2 = PlayerInfo(
-            name=match.get("jugador2", "Player 2"),
+            name=match.get("jugador2_nombre") or match.get("jugador2") or "Player 2",
             country=match.get("jugador2_pais"),
             ranking=match.get("jugador2_ranking"),
             logo_url=match.get("jugador2_logo"),
@@ -217,26 +218,33 @@ async def get_match_full(match_id: int):
             except Exception as e:
                 logger.warning(f"⚠️ Error obteniendo sets de BD: {e}")
         
-        # 6. Calcular estadísticas (skip for now to simplify)
+        # 6. Calcular estadísticas
         logger.info(f"📊 Calculando estadísticas...")
         stats = None
         timeline = None
         
-        # 7-9. Skip H2H, Odds, Prediction for now
-        logger.info(f"⏭️ Skipping H2H, Odds, Prediction for debugging")
+        # 7. Obtener cuotas (simple, desde la BD)
+        logger.info(f"💰 Obteniendo cuotas...")
+        odds = _get_match_odds(db, match_id, match)
+        
+        # 8. Obtener predicción (desde la BD)
+        logger.info(f"🤖 Obteniendo predicción...")
+        prediction = _get_prediction(match)
+        
+        # 9. H2H (skip por ahora para evitar llamadas adicionales a API)
         h2h = None
-        odds = None
-        prediction = None
         
         # 10. Determinar ganador
         winner = None
         ganador = match.get("resultado_ganador")
+        j1_nombre = match.get("jugador1_nombre") or match.get("jugador1")
+        j2_nombre = match.get("jugador2_nombre") or match.get("jugador2")
         if ganador:
-            if ganador == match.get("jugador1"):
+            if ganador == j1_nombre:
                 winner = 1
-            elif ganador == match.get("jugador2"):
+            elif ganador == j2_nombre:
                 winner = 2
-        logger.info(f"🏆 Winner: {winner}")
+        logger.info(f"🏆 Winner: {winner} (ganador: {ganador})")
         
         # 11. Determinar calidad de datos
         data_quality = "basic"
@@ -490,16 +498,18 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
 def _get_match_odds(db, match_id: int, match: dict) -> Optional[MatchOdds]:
     """Obtiene cuotas del partido"""
     try:
-        cuota1 = match.get("cuota_jugador1")
-        cuota2 = match.get("cuota_jugador2")
+        # Campos pueden venir de la vista (jugador1_cuota) o de otro lugar
+        cuota1 = match.get("jugador1_cuota") or match.get("cuota_jugador1")
+        cuota2 = match.get("jugador2_cuota") or match.get("cuota_jugador2")
         
         if not cuota1 and not cuota2:
+            logger.info(f"💰 No hay cuotas para partido {match_id}")
             return None
         
         # Determinar favorito
         market_consensus = None
         if cuota1 and cuota2:
-            market_consensus = 1 if cuota1 < cuota2 else 2
+            market_consensus = 1 if float(cuota1) < float(cuota2) else 2
         
         bookmakers = []
         
@@ -511,8 +521,7 @@ def _get_match_odds(db, match_id: int, match: dict) -> Optional[MatchOdds]:
                 player2_odds=float(cuota2) if cuota2 else 0,
             ))
         
-        # TODO: Cargar cuotas de múltiples casas desde odds_history
-        
+        logger.info(f"💰 Cuotas: {cuota1} vs {cuota2}")
         return MatchOdds(
             best_odds_player1=float(cuota1) if cuota1 else None,
             best_odds_player2=float(cuota2) if cuota2 else None,
@@ -528,11 +537,13 @@ def _get_match_odds(db, match_id: int, match: dict) -> Optional[MatchOdds]:
 def _get_prediction(match: dict) -> Optional[MatchPrediction]:
     """Obtiene predicción del partido"""
     try:
-        prob1 = match.get("probabilidad_jugador1")
-        prob2 = match.get("probabilidad_jugador2")
-        confianza = match.get("confianza")
+        # Campos pueden venir con diferentes nombres
+        prob1 = match.get("jugador1_probabilidad") or match.get("probabilidad_jugador1")
+        prob2 = match.get("jugador2_probabilidad") or match.get("probabilidad_jugador2")
+        confianza = match.get("confidence_score") or match.get("confianza")
         
         if not prob1 and not prob2:
+            logger.info(f"🤖 No hay predicción para este partido")
             return None
         
         prob1 = float(prob1) if prob1 else 0.5
@@ -543,8 +554,8 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
         
         # Calcular value bet
         value_bet = None
-        cuota1 = match.get("cuota_jugador1")
-        cuota2 = match.get("cuota_jugador2")
+        cuota1 = match.get("jugador1_cuota") or match.get("cuota_jugador1")
+        cuota2 = match.get("jugador2_cuota") or match.get("cuota_jugador2")
         
         if cuota1 and cuota2:
             ev1 = prob1 * float(cuota1) - 1
@@ -554,6 +565,7 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
             elif ev2 > 0.05:
                 value_bet = 2
         
+        logger.info(f"🤖 Predicción: {prob1:.0%} vs {prob2:.0%}, confianza: {confidence:.0f}%")
         return MatchPrediction(
             predicted_winner=predicted_winner,
             confidence=confidence,
