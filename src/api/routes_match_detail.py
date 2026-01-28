@@ -13,7 +13,7 @@ Endpoints:
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -31,6 +31,7 @@ from src.api.models_match_detail import (
     PlayerInfo,
     PointByPointData,
     PreviousMatch,
+    SetScore,
     Surface,
 )
 from src.services.match_stats_calculator import MatchStatsCalculator
@@ -43,17 +44,31 @@ router = APIRouter(prefix="/v2/matches", tags=["Match Detail v2"])
 # Instancia del calculador de estadísticas
 stats_calculator = MatchStatsCalculator()
 
+# Referencias a db y api_client (se configuran al registrar el router)
+_db: Any = None
+_api_client: Any = None
+
+
+def configure_dependencies(db, api_client):
+    """Configura las dependencias necesarias para los endpoints"""
+    global _db, _api_client
+    _db = db
+    _api_client = api_client
+    logger.info("✅ Dependencias de routes_match_detail configuradas")
+
 
 def get_db():
     """Obtiene la instancia de la base de datos"""
-    from src.api.api_v2 import db
-    return db
+    if _db is None:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    return _db
 
 
 def get_api_client():
     """Obtiene el cliente de API Tennis"""
-    from src.api.api_v2 import api_client
-    return api_client
+    if _api_client is None:
+        raise HTTPException(status_code=500, detail="API client not configured")
+    return _api_client
 
 
 # ============================================================
@@ -108,14 +123,29 @@ async def get_match_full(match_id: int):
                 logger.warning(f"No se pudo obtener datos de API Tennis: {e}")
         
         # 3. Construir información del partido
+        # Mapear estado y superficie de forma segura
+        estado = match.get("estado", "pendiente")
+        if estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
+            estado = "pendiente"
+        
+        superficie_raw = match.get("superficie", "Hard")
+        superficie_map = {
+            "hard": "Hard", "Hard": "Hard", "dura": "Hard",
+            "clay": "Clay", "Clay": "Clay", "tierra": "Clay", "arcilla": "Clay",
+            "grass": "Grass", "Grass": "Grass", "hierba": "Grass",
+            "carpet": "Carpet", "Carpet": "Carpet", "moqueta": "Carpet",
+            "indoor": "Indoor", "Indoor": "Indoor",
+        }
+        superficie = superficie_map.get(superficie_raw, "Hard")
+        
         match_info = MatchInfo(
             id=match_id,
-            status=MatchStatus(match.get("estado", "pendiente")),
+            status=MatchStatus(estado),
             date=match.get("fecha_partido"),
             time=match.get("hora_inicio"),
             tournament=match.get("torneo", "Unknown"),
             round=match.get("ronda"),
-            surface=Surface(match.get("superficie", "Hard")),
+            surface=Surface(superficie),
         )
         
         # 4. Construir información de jugadores
@@ -146,9 +176,8 @@ async def get_match_full(match_id: int):
         # Intentar obtener de match_sets si no hay scores
         if not scores or not scores.sets:
             try:
-                sets_db = db.get_match_sets(match_id)
+                sets_db = db.get_match_sets(match_id) if hasattr(db, 'get_match_sets') else []
                 if sets_db:
-                    from src.api.models_match_detail import SetScore
                     sets = []
                     p1_sets = 0
                     p2_sets = 0

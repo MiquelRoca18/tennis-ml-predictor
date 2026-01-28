@@ -79,11 +79,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Registrar routers de endpoints v2
-from src.api.routes_match_detail import router as match_detail_router
-app.include_router(match_detail_router)
-logger.info("✅ Router de detalle de partidos v2 registrado")
-
 # Inicializar componentes
 # Usar variable de entorno para DB path (permite volumen persistente en Railway)
 import os
@@ -94,6 +89,12 @@ predictor = None
 
 # Inicializar APITennisClient y servicios
 api_client = APITennisClient()
+
+# Registrar routers de endpoints v2 (después de inicializar db y api_client)
+from src.api.routes_match_detail import router as match_detail_router, configure_dependencies
+configure_dependencies(db, api_client)
+app.include_router(match_detail_router)
+logger.info("✅ Router de detalle de partidos v2 registrado")
 
 # Servicios Day 1
 odds_service = OddsUpdateService(db, api_client)
