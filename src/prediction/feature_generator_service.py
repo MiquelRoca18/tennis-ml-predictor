@@ -23,26 +23,11 @@ logger = logging.getLogger(__name__)
 class FeatureGeneratorService:
     """
     Servicio que mantiene los calculadores de features
-    inicializados para generar predicciones rápidamente.
-    
-    Implementado como Singleton para evitar múltiples conexiones a PostgreSQL.
+    inicializados para generar predicciones rápidamente
     """
-    
-    _instance = None
-    _initialized = False
-    
-    def __new__(cls):
-        """Singleton pattern - solo crea una instancia"""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
 
     def __init__(self):
-        """Inicializa el servicio cargando datos históricos (solo una vez)"""
-        # Evitar re-inicialización
-        if FeatureGeneratorService._initialized:
-            return
-            
+        """Inicializa el servicio cargando datos históricos"""
         logger.info("🚀 Inicializando Feature Generator Service...")
 
         # Cargar datos históricos
@@ -57,9 +42,7 @@ class FeatureGeneratorService:
         # Inicializar normalizador de nombres
         self._inicializar_normalizador()
 
-        # Marcar como inicializado
-        FeatureGeneratorService._initialized = True
-        logger.info("✅ Feature Generator Service inicializado (Singleton)")
+        logger.info("✅ Feature Generator Service inicializado")
 
     def _cargar_datos_historicos(self):
         """
@@ -153,21 +136,16 @@ class FeatureGeneratorService:
     def _load_from_postgres(self, database_url: str, query: str) -> pd.DataFrame:
         """Carga datos desde PostgreSQL"""
         from sqlalchemy import create_engine, text
-        from sqlalchemy.pool import NullPool
         
         # Fix Railway's postgres:// to postgresql://
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         
         logger.info("🐘 Conectando a PostgreSQL para datos históricos...")
-        # Usar NullPool para evitar conflictos de conexión
-        engine = create_engine(database_url, poolclass=NullPool, echo=False)
+        engine = create_engine(database_url)
         
         with engine.connect() as conn:
             df = pd.read_sql_query(query, conn)
-        
-        # Cerrar el engine explícitamente
-        engine.dispose()
         
         logger.info(f"✅ Datos cargados desde PostgreSQL: {len(df)} partidos")
         return df

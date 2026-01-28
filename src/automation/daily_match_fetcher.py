@@ -100,15 +100,10 @@ class DailyMatchFetcher:
 
             logger.info(f"✅ Found {len(matches_raw)} matches from API")
             
-            # DEBUG: Analizar tipos de eventos para diagnóstico
-            event_types_count = {}
-            for m in matches_raw:
-                et = (m.get("event_type") or m.get("event_type_type") or "UNKNOWN").upper()
-                event_types_count[et] = event_types_count.get(et, 0) + 1
-            
-            logger.info("📊 Tipos de eventos en la API:")
-            for et, count in sorted(event_types_count.items(), key=lambda x: -x[1]):
-                logger.info(f"   - {et}: {count} partidos")
+            # DEBUG: Log first match structure to see available fields
+            if matches_raw:
+                first_match = matches_raw[0]
+                logger.info(f"🔍 DEBUG - First match fields: event_type={first_match.get('event_type')}, league={first_match.get('league')}, player1={first_match.get('player1_name')}, player2={first_match.get('player2_name')}")
 
             # 2. Process each match
             for match_data in matches_raw:
@@ -254,55 +249,65 @@ class DailyMatchFetcher:
         Returns:
             Dict with processing result
         """
-        # ===== FILTROS: Todos los partidos MASCULINOS INDIVIDUALES =====
-        # Rechazamos: WTA (femenino) y Dobles
-        # Aceptamos: ATP, Challengers, ITF Men, etc.
+        # ===== FILTROS: Solo ATP Singles =====
         
-        # Obtener información del evento
+        # 0. VALIDACIÓN: Detectar tipo de evento
         event_type = (match_data.get("event_type") or match_data.get("event_type_type") or "").upper()
         league = (match_data.get("league") or "").upper()
+        
+        # Aceptar si es ATP Singles (exacto o parcial)
+        is_atp = "ATP" in event_type or "ATP" in league
+        is_singles = "SINGLES" in event_type or "SINGLE" in event_type
+        is_doubles = "DOUBLES" in event_type or "DOUBLE" in event_type
+        
+        # Si tenemos event_type, usarlo para filtrar
+        if event_type:
+            # Aceptar: "ATP SINGLES", "ATP Singles", etc.
+            # Rechazar: "WTA SINGLES", "ATP DOUBLES", etc.
+            if not is_atp or is_doubles:
+                logger.debug(f"⏭️  Ignorando tipo no-ATP-Singles: {event_type}")
+                return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
+        else:
+            # Si no hay event_type, continuamos y dejamos que los filtros de backup actúen
+            logger.debug(f"⚠️  Sin event_type, aplicando filtros de backup")
+        
+        # 1. BACKUP: Filtrar WTA (verificar múltiples campos)
+        league = match_data.get("league", "").upper()
         tournament = match_data.get("tournament", "")
-        tournament_upper = tournament.upper()
         tournament_lower = tournament.lower()
-        player1_name = match_data.get("player1_name", "Unknown")
-        player2_name = match_data.get("player2_name", "Unknown")
         
-        # ===== FILTRO 1: Rechazar DOBLES =====
-        is_doubles = (
-            "DOUBLES" in event_type or
-            "DOUBLE" in event_type or
-            "DOUBLES" in tournament_upper or
-            "/" in player1_name or  # Parejas de dobles tienen "/"
-            "/" in player2_name
-        )
-        
-        if is_doubles:
-            logger.debug(f"⏭️  Ignorando dobles: {event_type} - {tournament}")
-            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
-        
-        # ===== FILTRO 2: Rechazar WTA/FEMENINO =====
+        # Detectar WTA por múltiples indicadores (backup por si event_type falla)
         is_wta = (
-            "WTA" in event_type or
             "WTA" in league or
-            "WTA" in tournament_upper or
+            "WTA" in event_type or
+            "WTA" in tournament or
             "WOMEN" in event_type or
-            "WOMEN" in tournament_upper or
+            "WOMEN" in tournament_lower or
             "LADIES" in event_type or
-            "LADIES" in tournament_upper or
+            "LADIES" in tournament_lower or
             "FEMALE" in event_type or
-            "FEMALE" in tournament_upper or
+            "FEMALE" in tournament_lower or
             "GIRLS" in event_type or
-            "GIRLS" in tournament_upper or
-            # W-series tournaments (W15, W25, W50, W75, W100, etc.)
-            (tournament.startswith("W") and len(tournament) > 1 and " " in tournament and tournament.split()[0][1:].isdigit())
+            "GIRLS" in tournament_lower or
+            # W-series tournaments - verificar inicio del nombre
+            (tournament.startswith("W") and " " in tournament and tournament.split()[0][1:].isdigit())
         )
         
         if is_wta:
-            logger.debug(f"⏭️  Ignorando WTA/femenino: {event_type} - {tournament}")
+            logger.debug(f"⏭️  Ignorando partido WTA (backup filter): {tournament}")
             return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
         
-        # ===== ACEPTAR TODO LO DEMÁS (ATP, Challengers, ITF Men, etc.) =====
-        logger.debug(f"✅ Aceptando partido: {event_type} - {tournament} - {player1_name} vs {player2_name}")
+        # 2. BACKUP: Filtrar dobles (buscar "/" o "Doubles" en nombres)
+        player1_name = match_data.get("player1_name", "Unknown")
+        player2_name = match_data.get("player2_name", "Unknown")
+        
+        if "/" in player1_name or "/" in player2_name:
+            logger.debug(f"⏭️  Ignorando partido de dobles: {player1_name} vs {player2_name}")
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
+        
+        if "Doubles" in tournament or "doubles" in tournament:
+            logger.debug(f"⏭️  Ignorando torneo de dobles: {tournament}")
+            return {"created": False, "match_info": None, "prediction_generated": False, "filtered": True}
         
         # ===== Continuar con procesamiento normal =====
         

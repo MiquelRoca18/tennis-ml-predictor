@@ -307,31 +307,22 @@ class APITennisClient:
                 
             result = data.get("result", {})
             
-            # Filtrar partidos masculinos individuales (rechazar WTA y dobles)
-            def is_mens_singles(m):
+            # Filtrar solo ATP Singles en todos los resultados (flexible)
+            def is_atp_singles(m):
                 event_type = (m.get("event_type_type") or m.get("event_type") or "").upper()
-                tournament = (m.get("tournament_name") or "").upper()
-                # Rechazar dobles
-                if "DOUBLES" in event_type or "DOUBLE" in event_type:
-                    return False
-                # Rechazar WTA/femenino
-                if "WTA" in event_type or "WOMEN" in event_type or "LADIES" in event_type:
-                    return False
-                if "WTA" in tournament or "WOMEN" in tournament or "LADIES" in tournament:
-                    return False
-                return True
+                return "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type
             
             if "H2H" in result:
-                result["H2H"] = [m for m in result["H2H"] if is_mens_singles(m)]
+                result["H2H"] = [m for m in result["H2H"] if is_atp_singles(m)]
             
             if "firstPlayerResults" in result:
                 result["firstPlayerResults"] = [
-                    m for m in result["firstPlayerResults"] if is_mens_singles(m)
+                    m for m in result["firstPlayerResults"] if is_atp_singles(m)
                 ][:10]  # Últimos 10
                 
             if "secondPlayerResults" in result:
                 result["secondPlayerResults"] = [
-                    m for m in result["secondPlayerResults"] if is_mens_singles(m)
+                    m for m in result["secondPlayerResults"] if is_atp_singles(m)
                 ][:10]  # Últimos 10
             
             h2h_count = len(result.get("H2H", []))
@@ -365,27 +356,16 @@ class APITennisClient:
                 
             matches = data.get("result", [])
             
-            # Filtrar partidos masculinos individuales (rechazar WTA y dobles)
-            def is_mens_singles_match(m):
+            # Filtrar solo ATP Singles (flexible)
+            def is_atp_match(m):
                 event_type = (m.get("event_type") or m.get("event_type_type") or "").upper()
-                tournament = (m.get("tournament_name") or "").upper()
-                player1 = m.get("event_first_player") or ""
-                player2 = m.get("event_second_player") or ""
-                # Rechazar dobles
-                if "DOUBLES" in event_type or "/" in player1 or "/" in player2:
-                    return False
-                # Rechazar WTA/femenino
-                if "WTA" in event_type or "WOMEN" in event_type or "LADIES" in event_type:
-                    return False
-                if "WTA" in tournament or "WOMEN" in tournament:
-                    return False
-                return True
+                return "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type
             
-            mens_matches = [m for m in matches if is_mens_singles_match(m)]
+            atp_matches = [m for m in matches if is_atp_match(m)]
             
-            logger.info(f"✅ {len(mens_matches)} partidos masculinos en vivo (de {len(matches)} totales)")
+            logger.info(f"✅ {len(atp_matches)} partidos ATP en vivo (de {len(matches)} totales)")
             
-            return mens_matches
+            return atp_matches
             
         except Exception as e:
             logger.error(f"❌ Error obteniendo livescore: {e}")
@@ -413,23 +393,14 @@ class APITennisClient:
                 
             tournaments = data.get("result", [])
             
-            # Filtrar torneos masculinos individuales (rechazar WTA y dobles)
-            def is_mens_singles_tournament(t):
+            # Filtrar solo ATP Singles (flexible)
+            def is_atp_tournament(t):
                 event_type = (t.get("event_type_type") or t.get("event_type") or "").upper()
-                name = (t.get("tournament_name") or "").upper()
-                # Rechazar dobles
-                if "DOUBLES" in event_type or "DOUBLES" in name:
-                    return False
-                # Rechazar WTA/femenino
-                if "WTA" in event_type or "WOMEN" in event_type or "LADIES" in event_type:
-                    return False
-                if "WTA" in name or "WOMEN" in name or "LADIES" in name:
-                    return False
-                return True
+                return "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type
             
-            mens_tournaments = [t for t in tournaments if is_mens_singles_tournament(t)]
+            atp_tournaments = [t for t in tournaments if is_atp_tournament(t)]
             
-            logger.info(f"✅ {len(mens_tournaments)} torneos masculinos encontrados (de {len(tournaments)} totales)")
+            logger.info(f"✅ {len(atp_tournaments)} torneos ATP encontrados (de {len(tournaments)} totales)")
             
             return atp_tournaments
             
@@ -459,20 +430,14 @@ class APITennisClient:
                 
             events = data.get("result", [])
             
-            # Filtrar eventos masculinos individuales (rechazar WTA y dobles)
-            def is_mens_singles_event(e):
+            # Filtrar solo ATP Singles (flexible)
+            def is_atp_event(e):
                 event_type = (e.get("event_type_type") or e.get("event_type") or "").upper()
-                # Rechazar dobles
-                if "DOUBLES" in event_type:
-                    return False
-                # Rechazar WTA/femenino
-                if "WTA" in event_type or "WOMEN" in event_type or "LADIES" in event_type:
-                    return False
-                return True
+                return "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type
             
-            mens_events = [e for e in events if is_mens_singles_event(e)]
+            atp_events = [e for e in events if is_atp_event(e)]
             
-            logger.info(f"✅ {len(mens_events)} tipos de eventos masculinos (de {len(events)} totales)")
+            logger.info(f"✅ {len(atp_events)} tipos de eventos ATP (de {len(events)} totales)")
             
             return atp_events
             
@@ -555,26 +520,18 @@ class APITennisClient:
                 
             result = data.get("result", {})
             
-            # Filtrar partidos masculinos individuales (rechazar WTA y dobles)
-            mens_odds = {}
+            # Filtrar solo ATP Singles (flexible)
+            atp_odds = {}
             for match_id, match_data in result.items():
                 event_type = (match_data.get("event_type") or match_data.get("event_type_type") or "").upper()
-                tournament = (match_data.get("tournament_name") or "").upper()
                 
-                # Rechazar dobles
-                if "DOUBLES" in event_type:
-                    continue
-                # Rechazar WTA/femenino
-                if "WTA" in event_type or "WOMEN" in event_type or "LADIES" in event_type:
-                    continue
-                if "WTA" in tournament or "WOMEN" in tournament:
-                    continue
-                    
-                mens_odds[match_id] = match_data
+                # Aceptar si es ATP y no es dobles ni WTA
+                if "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type:
+                    atp_odds[match_id] = match_data
             
-            logger.info(f"✅ Cuotas en vivo obtenidas para {len(mens_odds)} partidos masculinos")
+            logger.info(f"✅ Cuotas en vivo obtenidas para {len(atp_odds)} partidos ATP")
             
-            return mens_odds
+            return atp_odds
             
         except Exception as e:
             logger.error(f"❌ Error obteniendo cuotas en vivo: {e}")

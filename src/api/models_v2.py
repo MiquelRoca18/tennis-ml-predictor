@@ -154,15 +154,49 @@ class BetRecord(BaseModel):
 
 
 # ============================================================
-# MODELOS DE RESULTADO
+# MODELOS DE RESULTADO Y DATOS EN VIVO
 # ============================================================
+
+
+class SetScoreSimple(BaseModel):
+    """Score de un set individual"""
+    set_number: int
+    player1_score: int
+    player2_score: int
+    tiebreak_score: Optional[str] = None  # Ej: "7-5" si hubo tiebreak
+
+
+class LiveData(BaseModel):
+    """Datos en vivo del partido (solo cuando está en juego)"""
+    
+    current_game_score: Optional[str] = None  # Ej: "30-15", "40-30", "Deuce"
+    current_server: Optional[str] = None  # "First Player" o "Second Player" o nombre
+    current_set: Optional[int] = None  # Set actual (1, 2, 3...)
+    current_game: Optional[int] = None  # Juego actual del set
+    is_tiebreak: bool = False
+
+
+class MatchScores(BaseModel):
+    """Marcador completo del partido"""
+    
+    # Resultado en sets (ej: "2-0", "2-1")
+    sets_result: Optional[str] = None
+    
+    # Score detallado por set
+    sets: List[SetScoreSimple] = []
+    
+    # Datos en vivo (solo si está en juego)
+    live: Optional[LiveData] = None
 
 
 class MatchResult(BaseModel):
     """Resultado de un partido"""
 
-    ganador: str
-    marcador: Optional[str] = None
+    ganador: Optional[str] = None
+    marcador: Optional[str] = None  # Formato string: "6-4, 7-5, 6-3"
+    
+    # Scores estructurados
+    scores: Optional[MatchScores] = None
 
     # Si había apuesta
     apostamos: bool = False

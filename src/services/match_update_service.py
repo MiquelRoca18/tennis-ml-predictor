@@ -65,14 +65,23 @@ class MatchUpdateService:
             # Obtener partidos recientes de la DB
             matches = self.db.get_recent_matches(days=days)
 
-            # OPTIMIZACIÓN: Solo actualizar partidos que pueden cambiar
+            # Filtrar partidos que necesitan actualización:
             # - "pendiente": pueden empezar
             # - "en_juego": pueden terminar
-            # - "completado": NO cambian (ya tienen datos finales)
-            matches_to_check = [
-                m for m in matches
-                if m.get("estado") in ["pendiente", "en_juego"]
-            ]
+            # - "completado" SIN datos completos: necesitan rellenar scores
+            def needs_update(m):
+                estado = m.get("estado")
+                if estado in ["pendiente", "en_juego"]:
+                    return True
+                # Completados sin ganador o sin marcador detallado
+                if estado == "completado":
+                    if not m.get("resultado_ganador"):
+                        return True
+                    if not m.get("resultado_marcador"):
+                        return True
+                return False
+            
+            matches_to_check = [m for m in matches if needs_update(m)]
 
             total_matches = len(matches)
             completed_count = total_matches - len(matches_to_check)
@@ -135,9 +144,15 @@ class MatchUpdateService:
         if not event_key:
             return False
 
-        # Si ya está completado Y tiene resultado guardado, no necesita actualización
-        if match.get("estado") == "completado" and match.get("resultado_ganador"):
-            return False
+        # Si ya está completado Y tiene TODOS los datos, no necesita actualización
+        if match.get("estado") == "completado" and match.get("resultado_ganador") and match.get("resultado_marcador"):
+            # Verificar si tiene scores por set guardados
+            try:
+                sets_count = len(self.db.get_match_sets(match_id))
+                if sets_count > 0:
+                    return False  # Ya tiene todo
+            except:
+                pass  # Continuar para obtener los sets
 
         try:
             # Consultar API para obtener estado actual
@@ -261,6 +276,9 @@ class MatchUpdateService:
                 
                 # Si el partido está completado, guardar estadísticas detalladas
                 if nuevo_estado == "completado":
+                    # Guardar scores por set
+                    self._save_match_sets_from_api(match_id, api_match)
+                    # Guardar estadísticas detalladas (juegos y puntos)
                     self._store_detailed_stats(match_id, event_key)
 
                 # Log del cambio
@@ -313,6 +331,48 @@ class MatchUpdateService:
             self.db.update_match_ganador(match_id, ganador)
         except Exception as e:
             logger.error(f"Error actualizando ganador: {e}")
+
+    def _save_match_sets_from_api(self, match_id: int, api_match: Dict):
+        """
+        Extrae y guarda los scores por set desde la respuesta de la API
+        
+        Args:
+            match_id: ID del partido
+            api_match: Datos del partido de la API
+        """
+        try:
+            scores = api_match.get("scores", [])
+            if not scores:
+                # Intentar parsear desde resultado_marcador si existe
+                return
+            
+            sets_data = []
+            for score in scores:
+                set_number = int(score.get("score_set", 0))
+                player1_score = int(score.get("score_first", 0))
+                player2_score = int(score.get("score_second", 0))
+                
+                # Detectar tiebreak
+                tiebreak_score = None
+                if (player1_score == 7 and player2_score == 6) or \
+                   (player1_score == 6 and player2_score == 7):
+                    # Podría ser tiebreak, la API no siempre da el detalle
+                    tiebreak_score = f"{player1_score}-{player2_score}"
+                
+                sets_data.append({
+                    "set_number": set_number,
+                    "player1_score": player1_score,
+                    "player2_score": player2_score,
+                    "tiebreak_score": tiebreak_score
+                })
+            
+            if sets_data:
+                saved = self.db.save_match_sets(match_id, sets_data)
+                if saved > 0:
+                    logger.debug(f"✅ Guardados {saved} sets para partido {match_id}")
+                    
+        except Exception as e:
+            logger.debug(f"Error guardando sets: {e}")
 
     def _determine_estado(
         self, event_live: str, event_final_result: str, event_status: str

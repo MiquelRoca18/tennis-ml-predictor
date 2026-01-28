@@ -145,54 +145,47 @@ class OddsUpdateService:
             partidos_wta_filtrados = 0
 
             for match in matches_api:
-                # ===== FILTROS: Todos los partidos MASCULINOS INDIVIDUALES =====
-                # Rechazamos: WTA (femenino) y Dobles
-                # Aceptamos: ATP, Challengers, ITF Men, etc.
-                
+                # FILTRO ATP SINGLES: Solo procesar partidos ATP individuales
                 event_type = (match.get("event_type") or match.get("event_type_type") or "").upper()
                 league = (match.get("league") or "").upper()
                 tournament_name = match.get("tournament", "")
-                tournament_upper = tournament_name.upper()
-                player1_name = match.get("player1_name", "")
-                player2_name = match.get("player2_name", "")
+                tournament_lower = tournament_name.lower()
                 
-                # ===== FILTRO 1: Rechazar DOBLES =====
-                is_doubles = (
-                    "DOUBLES" in event_type or
-                    "DOUBLE" in event_type or
-                    "DOUBLES" in tournament_upper or
-                    "/" in player1_name or
-                    "/" in player2_name
-                )
+                # Detectar tipo de partido (flexible, como en daily_match_fetcher)
+                is_atp = "ATP" in event_type or "ATP" in league
+                is_doubles = "DOUBLES" in event_type or "DOUBLE" in event_type
                 
-                if is_doubles:
-                    logger.debug(f"⏭️  Ignorando dobles: {event_type} - {tournament_name}")
-                    continue
-                
-                # ===== FILTRO 2: Rechazar WTA/FEMENINO =====
+                # Detectar WTA por múltiples indicadores
                 is_wta = (
                     "WTA" in event_type or
                     "WTA" in league or
-                    "WTA" in tournament_upper or
+                    "WTA" in tournament_name.upper() or
                     "WOMEN" in event_type or
-                    "WOMEN" in tournament_upper or
-                    "LADIES" in event_type or
-                    "LADIES" in tournament_upper or
-                    "FEMALE" in event_type or
-                    "FEMALE" in tournament_upper or
-                    "GIRLS" in event_type or
-                    "GIRLS" in tournament_upper or
-                    # W-series tournaments (W15, W25, W50, W75, W100, etc.)
-                    (tournament_name.startswith("W") and len(tournament_name) > 1 and " " in tournament_name and tournament_name.split()[0][1:].isdigit())
+                    "LADIES" in event_type
                 )
                 
+                # Filtrar WTA (femenino)
                 if is_wta:
                     partidos_wta_filtrados += 1
-                    logger.debug(f"⏭️  Ignorando WTA/femenino: {event_type} - {tournament_name}")
+                    logger.debug(f"⏭️  Ignorando partido WTA: {tournament_name}")
                     continue
                 
-                # ===== ACEPTAR TODO LO DEMÁS (ATP, Challengers, ITF Men, etc.) =====
-                logger.debug(f"✅ Procesando partido: {event_type} - {tournament_name}")
+                # Filtrar si no es ATP
+                if not is_atp:
+                    logger.debug(f"⏭️  Ignorando tipo no-ATP: {event_type}")
+                    continue
+
+                # Filtrar dobles
+                if is_doubles or "doubles" in tournament_lower:
+                    logger.debug(f"⏭️  Ignorando dobles: {tournament_name}")
+                    continue
+                
+                # Filtrar dobles por nombres de jugadores (contienen "/")
+                player1_name = match.get("player1_name", "")
+                player2_name = match.get("player2_name", "")
+                if "/" in player1_name or "/" in player2_name:
+                    logger.debug(f"⏭️  Ignorando dobles: {player1_name} vs {player2_name}")
+                    continue
 
                 # Extraer fecha del partido (API-Tennis usa event_date y event_time)
                 try:

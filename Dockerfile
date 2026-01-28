@@ -11,7 +11,7 @@
 #   docker run -p 8000:8000 -v $(pwd)/modelos:/app/modelos tennis-ml-api
 
 # Stage 1: Builder
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim as builder
 
 WORKDIR /app
 
@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y \
 # Copiar dependencias de Python desde builder
 COPY --from=builder /root/.local /root/.local
 
-# CACHE BUST: 2026-01-27-11:30 - Force rebuild with background sync fix
+# CACHE BUST: 2026-01-21-17:55 - Force rebuild from here
 # Copiar código de la aplicación
 COPY src/ ./src/
 COPY scripts/ ./scripts/

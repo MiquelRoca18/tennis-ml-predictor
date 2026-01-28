@@ -16,94 +16,49 @@ import json
 import threading
 import traceback
 
-# Configurar logging temprano para diagnóstico
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-_startup_logger = logging.getLogger("startup")
-_startup_logger.info("🚀 Iniciando imports de módulos...")
 
-try:
-    from fastapi import FastAPI, HTTPException, Query, Request
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
-    _startup_logger.info("✅ FastAPI importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando FastAPI: {e}")
-    raise
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Añadir src al path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-try:
-    from src.api.models_v2 import (
-        MatchCreateRequest,
-        MatchResultRequest,
-        MatchResponse,
-        MatchesDateResponse,
-        Superficie,
-        EstadoPartido,
-        JugadorInfo,
-        PredictionVersion,
-        MatchResult,
-        MatchDetails,
-        MatchAnalysis,
-        MatchStatsBasic,
-        MatchStatsAdvanced,
-        SetScore,
-    )
-    _startup_logger.info("✅ models_v2 importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando models_v2: {e}")
-    raise
-
-try:
-    from src.database.match_database import MatchDatabase
-    _startup_logger.info("✅ MatchDatabase importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando MatchDatabase: {e}")
-    raise
-
-try:
-    from src.prediction.predictor_calibrado import PredictorCalibrado
-    _startup_logger.info("✅ PredictorCalibrado importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando PredictorCalibrado: {e}")
-    raise
-
-try:
-    from src.config.settings import Config
-    _startup_logger.info("✅ Config importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando Config: {e}")
-    raise
-
-try:
-    from src.services.odds_update_service import OddsUpdateService
-    _startup_logger.info("✅ OddsUpdateService importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando OddsUpdateService: {e}")
-    raise
-
-try:
-    from src.services.api_tennis_client import APITennisClient
-    _startup_logger.info("✅ APITennisClient importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando APITennisClient: {e}")
-    raise
-
-try:
-    from src.services.match_stats_service import MatchStatsService
-    _startup_logger.info("✅ MatchStatsService importado")
-except Exception as e:
-    _startup_logger.error(f"❌ Error importando MatchStatsService: {e}")
-    raise
+from src.api.models_v2 import (
+    MatchCreateRequest,
+    MatchResultRequest,
+    MatchResponse,
+    MatchesDateResponse,
+    Superficie,
+    EstadoPartido,
+    JugadorInfo,
+    PredictionVersion,
+    MatchResult,
+    MatchDetails,
+    MatchAnalysis,
+    MatchStatsBasic,
+    MatchStatsAdvanced,
+    SetScore,
+    # Nuevos modelos para scores detallados
+    SetScoreSimple,
+    LiveData,
+    MatchScores,
+)
+from src.database.match_database import MatchDatabase
+from src.prediction.predictor_calibrado import PredictorCalibrado
+from src.config.settings import Config
+from src.services.odds_update_service import OddsUpdateService
+from src.services.api_tennis_client import APITennisClient
+from src.services.match_stats_service import MatchStatsService
 
 # APScheduler para actualizaciones automáticas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-_startup_logger.info("✅ Todos los módulos importados correctamente")
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Crear aplicación FastAPI
@@ -174,7 +129,8 @@ except Exception as e:
     multi_odds_service = None
     pbp_service = None
 
-# NOTA: LiveEventsService (WebSocket) fue eliminado - se usa Polling en su lugar
+# Variable global para LiveEventsService
+live_events_service = None
 
 # Inicializar ModelRetrainingExecutor
 from src.services.model_retraining_executor import ModelRetrainingExecutor
@@ -247,6 +203,131 @@ async def health_check():
         "database_connected": db_connected,
         "version": "2.0.0",
     }
+
+
+# ============================================================
+# FUNCIONES AUXILIARES PARA SCORES
+# ============================================================
+
+def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
+    """
+    Construye el objeto MatchScores con los datos del partido.
+    Incluye scores por set y datos en vivo si está en juego.
+    
+    Args:
+        match_data: Datos del partido de la BD
+        database: Instancia de MatchDatabase
+    
+    Returns:
+        MatchScores o None si no hay datos
+    """
+    try:
+        match_id = match_data.get("id")
+        estado = match_data.get("estado", "pendiente")
+        
+        # Obtener sets de la tabla match_sets
+        sets_data = []
+        try:
+            sets_raw = database.get_match_sets(match_id)
+            for s in sets_raw:
+                sets_data.append(SetScoreSimple(
+                    set_number=s.get("set_number", 0),
+                    player1_score=s.get("player1_score", 0),
+                    player2_score=s.get("player2_score", 0),
+                    tiebreak_score=s.get("tiebreak_score")
+                ))
+        except Exception as e:
+            logger.debug(f"No se pudieron obtener sets para match {match_id}: {e}")
+        
+        # Si no hay sets en la tabla, intentar parsear de resultado_marcador
+        if not sets_data and match_data.get("resultado_marcador"):
+            sets_data = _parse_marcador_to_sets(match_data["resultado_marcador"])
+        
+        # Si no hay sets en la tabla, intentar parsear de event_final_result
+        if not sets_data and match_data.get("event_final_result"):
+            # event_final_result es "2-0", "2-1" - no es suficiente para scores por set
+            pass
+        
+        # Calcular resultado en sets (2-0, 2-1, etc.)
+        sets_result = match_data.get("event_final_result")
+        if not sets_result and sets_data:
+            # Calcular desde los sets
+            p1_sets = sum(1 for s in sets_data if s.player1_score > s.player2_score)
+            p2_sets = sum(1 for s in sets_data if s.player2_score > s.player1_score)
+            sets_result = f"{p1_sets}-{p2_sets}"
+        
+        # Construir datos en vivo si está en juego
+        live_data = None
+        if estado == "en_juego":
+            live_data = LiveData(
+                current_game_score=match_data.get("event_game_result"),
+                current_server=match_data.get("event_serve"),
+                current_set=len(sets_data) + 1 if sets_data else 1,
+                is_tiebreak="tiebreak" in (match_data.get("event_status_detail") or "").lower()
+            )
+        
+        # Si no hay datos, retornar None
+        if not sets_data and not sets_result and not live_data:
+            return None
+        
+        return MatchScores(
+            sets_result=sets_result,
+            sets=sets_data,
+            live=live_data
+        )
+        
+    except Exception as e:
+        logger.error(f"Error construyendo scores para match: {e}")
+        return None
+
+
+def _parse_marcador_to_sets(marcador: str) -> list:
+    """
+    Parsea un marcador como "6-4, 7-5, 6-3" a lista de SetScoreSimple
+    
+    Args:
+        marcador: String con el marcador
+        
+    Returns:
+        Lista de SetScoreSimple
+    """
+    sets = []
+    if not marcador:
+        return sets
+    
+    try:
+        # Separar por coma o espacio
+        partes = [p.strip() for p in marcador.replace(",", " ").split() if "-" in p]
+        
+        for i, parte in enumerate(partes, 1):
+            # Parsear "6-4" o "7-6(5)"
+            if "(" in parte:
+                # Tiebreak: "7-6(5)"
+                score_part = parte.split("(")[0]
+                tiebreak = parte.split("(")[1].rstrip(")")
+                p1, p2 = score_part.split("-")
+                sets.append(SetScoreSimple(
+                    set_number=i,
+                    player1_score=int(p1),
+                    player2_score=int(p2),
+                    tiebreak_score=tiebreak
+                ))
+            else:
+                p1, p2 = parte.split("-")
+                sets.append(SetScoreSimple(
+                    set_number=i,
+                    player1_score=int(p1),
+                    player2_score=int(p2)
+                ))
+    except Exception as e:
+        logger.debug(f"Error parseando marcador '{marcador}': {e}")
+    
+    return sets
+
+
+# ============================================================
+# ENDPOINTS DE PARTIDOS
+# ============================================================
 
 
 @app.get("/matches", response_model=MatchesDateResponse, tags=["Matches"])
@@ -335,12 +416,16 @@ async def get_matches_by_date(
                     kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
                 )
 
-            # Construir resultado si existe
+            # Construir scores estructurados
+            match_scores = _build_match_scores(p, db)
+            
+            # Construir resultado (para partidos completados o en juego)
             resultado = None
-            if p.get("resultado_ganador"):
+            if p.get("resultado_ganador") or p.get("estado") in ["completado", "en_juego"]:
                 resultado = MatchResult(
-                    ganador=p["resultado_ganador"],
+                    ganador=p.get("resultado_ganador"),
                     marcador=p.get("resultado_marcador"),
+                    scores=match_scores,
                     apostamos=p.get("bet_id") is not None,
                     resultado_apuesta=p.get("bet_resultado"),
                     stake=p.get("stake"),
@@ -1265,179 +1350,88 @@ async def detect_new_matches_manual():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/keepalive", tags=["Health"])
-async def keepalive():
+@app.post("/admin/backfill-scores", tags=["Admin"])
+async def backfill_match_scores(days: int = 7, max_matches: int = 50):
     """
-    Endpoint para mantener la aplicación activa y ejecutar actualizaciones
+    Rellena los datos de scores para partidos completados sin datos
     
-    Este endpoint está diseñado para ser llamado por servicios externos como:
-    - cron-job.org (gratuito)
-    - UptimeRobot (gratuito)
-    - GitHub Actions (gratuito)
+    Este endpoint busca partidos completados que no tienen:
+    - resultado_ganador
+    - resultado_marcador
+    - scores por set
     
-    Configura un ping cada 5 minutos para mantener la app activa en Railway.
-    
-    Returns:
-        Estado de la app y última sincronización
-    """
-    try:
-        from datetime import datetime
-        
-        return {
-            "status": "alive",
-            "timestamp": datetime.now().isoformat(),
-            "scheduler_running": scheduler.running,
-            "jobs_count": len(scheduler.get_jobs()) if scheduler.running else 0,
-            "message": "App activa - schedulers ejecutándose"
-        }
-    except Exception as e:
-        logger.error(f"❌ Error en keepalive: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@app.post("/admin/sync-all", tags=["Admin"])
-async def sync_all_data(background: bool = True):
-    """
-    Ejecuta TODAS las actualizaciones de una vez
-    
-    Este endpoint ejecuta:
-    1. Actualización de estados de partidos (pendiente → en_juego → completado)
-    2. Actualización de cuotas
-    3. Sincronización de partidos en vivo
-    4. Detección de partidos nuevos
+    Y los actualiza consultando la API.
     
     Args:
-        background: Si True (default), ejecuta en background y retorna inmediatamente.
-                   Si False, espera a que termine (puede causar timeout).
-    
-    Útil para:
-    - Llamar manualmente cuando abres la app
-    - Configurar como cron job externo
-    - Recuperar datos después de un período de inactividad
+        days: Número de días hacia atrás (default: 7)
+        max_matches: Máximo de partidos a procesar (default: 50)
     
     Returns:
-        Status de la sincronización (inmediato si background=True)
+        Estadísticas del backfill
     """
     import threading
     
-    def _sync_all_background():
-        """Ejecuta todas las sincronizaciones en background"""
+    def _backfill_task():
         try:
-            logger.info("🔄 SYNC-ALL (background): Iniciando actualizaciones...")
+            logger.info(f"🔄 BACKFILL: Procesando partidos de los últimos {days} días...")
             
-            # 1. Actualizar estados de partidos recientes (7 días)
-            try:
-                status_result = match_update_service.update_recent_matches(days=7)
-                logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
-            except Exception as e:
-                logger.error(f"❌ Error actualizando estados: {e}")
+            # Obtener partidos completados sin datos
+            matches = db.get_recent_matches(days=days)
             
-            # 2. Actualizar cuotas
-            try:
-                match_update_service.update_all_pending_matches()
-                logger.info(f"✅ Cuotas actualizadas")
-            except Exception as e:
-                logger.error(f"❌ Error actualizando cuotas: {e}")
+            matches_to_fill = []
+            for m in matches:
+                if m.get("estado") != "completado":
+                    continue
+                
+                # Verificar si le faltan datos
+                needs_fill = False
+                if not m.get("resultado_ganador"):
+                    needs_fill = True
+                elif not m.get("resultado_marcador"):
+                    needs_fill = True
+                else:
+                    # Verificar si tiene sets guardados
+                    try:
+                        sets = db.get_match_sets(m["id"])
+                        if not sets:
+                            needs_fill = True
+                    except:
+                        needs_fill = True
+                
+                if needs_fill and m.get("event_key"):
+                    matches_to_fill.append(m)
             
-            # 3. Sincronizar partidos en vivo (si hay)
-            try:
-                if pbp_service:
-                    from src.services.live_match_data_service import LiveMatchDataService
-                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
-                    live_result = live_service.sync_live_matches()
-                    
-                    if live_result.get("matches_live", 0) > 0:
-                        logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
-            except Exception as e:
-                logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
+            # Limitar cantidad
+            matches_to_fill = matches_to_fill[:max_matches]
             
-            # 4. Sincronizar cuotas multi-bookmaker
-            try:
-                if multi_odds_service:
-                    multi_odds_service.sync_all_pending_matches_odds()
-            except Exception as e:
-                logger.error(f"❌ Error sincronizando multi-odds: {e}")
+            logger.info(f"📋 Encontrados {len(matches_to_fill)} partidos para rellenar")
             
-            logger.info("✅ SYNC-ALL (background) completado")
+            filled = 0
+            errors = 0
+            
+            for match in matches_to_fill:
+                try:
+                    updated = match_update_service._update_single_match(match)
+                    if updated:
+                        filled += 1
+                except Exception as e:
+                    logger.debug(f"Error rellenando partido {match.get('id')}: {e}")
+                    errors += 1
+            
+            logger.info(f"✅ BACKFILL completado: {filled} partidos actualizados, {errors} errores")
             
         except Exception as e:
-            logger.error(f"❌ Error en sync-all background: {e}", exc_info=True)
+            logger.error(f"❌ Error en backfill: {e}", exc_info=True)
     
-    try:
-        if background:
-            # Ejecutar en thread de background y retornar inmediatamente
-            sync_thread = threading.Thread(target=_sync_all_background, daemon=True)
-            sync_thread.start()
-            
-            return {
-                "status": "accepted",
-                "message": "Sincronización iniciada en background",
-                "timestamp": datetime.now().isoformat(),
-                "background": True
-            }
-        else:
-            # Ejecutar síncronamente (puede causar timeout)
-            logger.info("🔄 SYNC-ALL: Ejecutando todas las actualizaciones...")
-            results = {
-                "timestamp": datetime.now().isoformat(),
-                "updates": {}
-            }
-            
-            # 1. Actualizar estados de partidos recientes (7 días)
-            try:
-                status_result = match_update_service.update_recent_matches(days=7)
-                results["updates"]["match_status"] = status_result
-                logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
-            except Exception as e:
-                results["updates"]["match_status"] = {"error": str(e)}
-                logger.error(f"❌ Error actualizando estados: {e}")
-            
-            # 2. Actualizar cuotas
-            try:
-                odds_result = match_update_service.update_all_pending_matches()
-                results["updates"]["odds"] = odds_result
-                logger.info(f"✅ Cuotas actualizadas")
-            except Exception as e:
-                results["updates"]["odds"] = {"error": str(e)}
-                logger.error(f"❌ Error actualizando cuotas: {e}")
-            
-            # 3. Sincronizar partidos en vivo (si hay)
-            try:
-                if pbp_service:
-                    from src.services.live_match_data_service import LiveMatchDataService
-                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
-                    live_result = live_service.sync_live_matches()
-                    results["updates"]["live_matches"] = live_result
-                    
-                    if live_result.get("matches_live", 0) > 0:
-                        logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
-                else:
-                    results["updates"]["live_matches"] = {"skipped": "pbp_service not available"}
-            except Exception as e:
-                results["updates"]["live_matches"] = {"error": str(e)}
-                logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
-            
-            # 4. Sincronizar cuotas multi-bookmaker
-            try:
-                if multi_odds_service:
-                    multi_result = multi_odds_service.sync_all_pending_matches_odds()
-                    results["updates"]["multi_odds"] = multi_result
-                else:
-                    results["updates"]["multi_odds"] = {"skipped": "service not available"}
-            except Exception as e:
-                results["updates"]["multi_odds"] = {"error": str(e)}
-                logger.error(f"❌ Error sincronizando multi-odds: {e}")
-            
-            results["success"] = True
-            results["message"] = "Sincronización completa ejecutada"
-            results["background"] = False
-            
-            logger.info("✅ SYNC-ALL completado")
-            return results
-        
-    except Exception as e:
-        logger.error(f"❌ Error en sync-all: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    # Ejecutar en background
+    thread = threading.Thread(target=_backfill_task, daemon=True)
+    thread.start()
+    
+    return {
+        "status": "accepted",
+        "message": f"Backfill iniciado para {days} días, máximo {max_matches} partidos",
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 @app.get("/admin/retraining-status", tags=["Admin"])
@@ -1884,23 +1878,19 @@ async def github_webhook(request: Request):
 # ============================================================
 
 
-def _background_sync_task():
-    """
-    Tarea de sincronización que corre en background después del startup.
-    Esto permite que el servidor responda al healthcheck inmediatamente.
-    """
-    import time
-    time.sleep(5)  # Esperar 5 segundos para que el servidor esté listo
-    
+@app.on_event("startup")
+async def startup_event():
+    """Evento de inicio del servidor"""
     logger.info("=" * 70)
-    logger.info("🔄 SINCRONIZACIÓN EN BACKGROUND INICIADA")
+    logger.info("🚀 INICIANDO SERVIDOR - SINCRONIZACIÓN INICIAL")
     logger.info("=" * 70)
 
-    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía
+    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía (Railway/Docker)
     try:
         from src.database.match_database import MatchDatabase
         db_check = MatchDatabase()
         
+        # Usar método compatible PostgreSQL/SQLite
         result = db_check._fetchone("SELECT COUNT(*) as count FROM matches", {})
         count = result["count"] if result else 0
         
@@ -1909,7 +1899,7 @@ def _background_sync_task():
             try:
                 from scripts.import_historical_data import import_csv_to_db
                 import_csv_to_db()
-                logger.info("✅ Importación histórica completada")
+                logger.info("✅ Importación histórica completada en el arranque")
             except Exception as e:
                 logger.error(f"❌ Error importando históricos: {e}")
         else:
@@ -1918,27 +1908,35 @@ def _background_sync_task():
     except Exception as e:
         logger.error(f"⚠️  Error verificando estado DB: {e}")
 
-    # 1. Actualizar estados de partidos existentes
+    # 1. PRIMERO: Actualizar estados de partidos existentes
     try:
         from src.services.match_update_service import MatchUpdateService
         
         logger.info("\n🔄 Actualizando estados de partidos existentes...")
         update_service_startup = MatchUpdateService(db, api_client)
+        
+        # DESARROLLO: Reducido a 3 días para minimizar API usage
+        # TODO: En producción cambiar a days=7 (el servidor no se reinicia frecuentemente)
         stats = update_service_startup.update_recent_matches(days=3)
         
         logger.info(f"✅ Estados actualizados:")
         logger.info(f"   Partidos verificados: {stats['matches_checked']}")
         logger.info(f"   Partidos actualizados: {stats['matches_updated']}")
+        logger.info(f"   - En vivo: {stats['matches_live']}")
+        logger.info(f"   - Completados: {stats['matches_completed']}")
         
     except Exception as e:
-        logger.error(f"❌ Error actualizando estados: {e}")
+        logger.error(f"❌ Error actualizando estados: {e}", exc_info=True)
 
-    # 2. Fetch histórico (últimos 3 días + próximos 3 días)
+    # 2. SEGUNDO: Fetch histórico (últimos 7 días + próximos 7 días)
     try:
         from src.automation.daily_match_fetcher import DailyMatchFetcher
         
-        logger.info("\n📥 Iniciando fetch histórico...")
+        # DESARROLLO: Reducido a 3 días para minimizar API usage
+        # TODO: En producción cambiar a 7 días
+        logger.info("\n📥 Iniciando fetch histórico (últimos 3 días + próximos 3 días)...")
         
+        # Intentar cargar predictor sin fallar si no existe (permite fetch sin predicciones)
         pred = get_predictor(raise_on_error=False)
         if pred is None:
             logger.warning("⚠️  Predictor no disponible - se guardarán partidos SIN predicciones")
@@ -1949,48 +1947,35 @@ def _background_sync_task():
         total_found = 0
         
         # Días pasados (últimos 3 días)
+        logger.info("📅 Fetching últimos 3 días...")
         for days_back in range(3, 0, -1):
             target_date = date.today() - timedelta(days=days_back)
             try:
                 stats = fetcher.fetch_matches_for_date(target_date)
                 total_new += stats["matches_new"]
                 total_found += stats["matches_found"]
+                logger.info(f"   {target_date}: {stats['matches_found']} encontrados, {stats['matches_new']} nuevos")
             except Exception as e:
                 logger.error(f"❌ Error fetching {target_date}: {e}")
         
-        # Días futuros
+        # Días futuros (hoy + próximos 3 días)
+        logger.info(f"📅 Fetching próximos 3 días...")
         try:
             stats = fetcher.fetch_and_store_matches(days_ahead=3)
             total_new += stats["matches_new"]
             total_found += stats["matches_found"]
+            logger.info(f"   Próximos 7 días: {stats['matches_found']} encontrados, {stats['matches_new']} nuevos")
         except Exception as e:
             logger.error(f"❌ Error fetching próximos días: {e}")
         
         logger.info("=" * 70)
-        logger.info(f"✅ Sincronización background completada:")
+        logger.info(f"✅ Fetch histórico completado:")
         logger.info(f"   Total encontrados: {total_found}")
         logger.info(f"   Nuevos guardados: {total_new}")
         logger.info("=" * 70)
     
     except Exception as e:
-        logger.error(f"❌ Error en fetch histórico: {e}")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    Evento de inicio del servidor - RÁPIDO para pasar healthcheck.
-    La sincronización pesada se hace en background.
-    """
-    logger.info("=" * 70)
-    logger.info("🚀 SERVIDOR INICIANDO - Healthcheck disponible en /health")
-    logger.info("=" * 70)
-
-    # Iniciar sincronización en background (no bloquea el startup)
-    import threading
-    sync_thread = threading.Thread(target=_background_sync_task, daemon=True)
-    sync_thread.start()
-    logger.info("📋 Sincronización programada en background thread")
+        logger.error(f"❌ Error en fetch histórico: {e}", exc_info=True)
 
     # Configurar scheduler para actualizaciones automáticas cada 5 minutos
     try:
@@ -2067,9 +2052,25 @@ async def startup_event():
 
 
 
-        # NOTA: WebSocket live events fue eliminado.
-        # Se usa polling via LiveMatchDataService (cada 60 seg) en su lugar.
-        # Polling es más robusto para Railway (sobrevive a app sleeps con cron-job externo)
+        # DISABLED: LiveEventsService requires websocket_client which was removed
+        # IMPORTANTE: Ejecutar en thread separado para no bloquear el servidor
+        # from src.services.live_events_service import LiveEventsService
+
+        
+        # global live_events_service
+        # live_events_service = LiveEventsService(db, api_client)
+        
+        # def run_websocket():
+        #     """Ejecutar WebSocket en thread separado"""
+        #     loop = asyncio.new_event_loop()
+        #     asyncio.set_event_loop(loop)
+        #     loop.run_until_complete(live_events_service.start())
+        
+        # # Iniciar en background thread
+        # ws_thread = threading.Thread(target=run_websocket, daemon=True)
+        # ws_thread.start()
+        # logger.info("✅ WebSocket de live results iniciado en background (tiempo real)")
+        logger.info("ℹ️  WebSocket live events disabled (websocket_client removed)")
 
         # Job 3: Verificar commits en TML-Database (cada hora)
         def check_github_commits():
@@ -2238,6 +2239,12 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Limpieza al cerrar la API"""
+    global live_events_service
+    
+    # Detener WebSocket
+    if live_events_service:
+        await live_events_service.stop()
+    
     # Detener scheduler
     if scheduler.running:
         scheduler.shutdown()

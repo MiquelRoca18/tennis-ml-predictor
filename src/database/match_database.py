@@ -1340,6 +1340,69 @@ class MatchDatabase:
         )
         return result["count"] if result else 0
 
+    def get_match_sets(self, match_id: int) -> List[Dict]:
+        """
+        Obtiene los scores por set de un partido
+        
+        Args:
+            match_id: ID del partido
+            
+        Returns:
+            Lista de diccionarios con scores por set
+        """
+        return self._fetchall(
+            """
+            SELECT set_number, player1_score, player2_score, tiebreak_score
+            FROM match_sets
+            WHERE match_id = :match_id
+            ORDER BY set_number ASC
+            """,
+            {"match_id": match_id}
+        )
+
+    def save_match_sets(self, match_id: int, sets_data: List[Dict]) -> int:
+        """
+        Guarda los scores por set de un partido
+        
+        Args:
+            match_id: ID del partido
+            sets_data: Lista de diccionarios con datos de cada set
+                       [{"set_number": 1, "player1_score": 6, "player2_score": 4}, ...]
+            
+        Returns:
+            Número de sets guardados
+        """
+        saved = 0
+        for set_data in sets_data:
+            try:
+                # Usar UPSERT para no duplicar
+                if self.is_postgres:
+                    query = """
+                        INSERT INTO match_sets (match_id, set_number, player1_score, player2_score, tiebreak_score)
+                        VALUES (:match_id, :set_number, :player1_score, :player2_score, :tiebreak_score)
+                        ON CONFLICT (match_id, set_number) 
+                        DO UPDATE SET player1_score = :player1_score, player2_score = :player2_score, 
+                                      tiebreak_score = :tiebreak_score
+                    """
+                else:
+                    query = """
+                        INSERT OR REPLACE INTO match_sets (match_id, set_number, player1_score, player2_score, tiebreak_score)
+                        VALUES (:match_id, :set_number, :player1_score, :player2_score, :tiebreak_score)
+                    """
+                
+                self._execute(query, {
+                    "match_id": match_id,
+                    "set_number": set_data.get("set_number", 0),
+                    "player1_score": set_data.get("player1_score", 0),
+                    "player2_score": set_data.get("player2_score", 0),
+                    "tiebreak_score": set_data.get("tiebreak_score")
+                })
+                saved += 1
+            except Exception as e:
+                logger.debug(f"Error guardando set: {e}")
+        
+        return saved
+
     def save_match_game(self, match_id: int, game_data: Dict) -> bool:
         """
         Guarda un juego de un partido
