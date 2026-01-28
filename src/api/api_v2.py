@@ -2029,7 +2029,8 @@ async def startup_event():
             )
         
         # Job 1.6: Sincronizar cuotas multi-bookmaker (cada 5 min)
-        if multi_odds_service:
+        # NOTA: Deshabilitado temporalmente - no compatible con PostgreSQL
+        if multi_odds_service and not db.is_postgres:
             def sync_multi_odds():
                 """Sincroniza cuotas de múltiples bookmakers"""
                 try:
@@ -2272,7 +2273,8 @@ async def startup_event():
         logger.info("✅ Scheduler iniciado:")
         logger.info("   - Actualizaciones de cuotas: cada 5 minutos")
         logger.info("   - Actualización de estados: cada 5 minutos")
-        logger.info("   - Sincronización de cuotas multi-bookmaker: cada 5 minutos")
+        if not db.is_postgres:
+            logger.info("   - Sincronización de cuotas multi-bookmaker: cada 5 minutos")
         logger.info("   - Sincronización de partidos en vivo: cada 60 segundos")
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
