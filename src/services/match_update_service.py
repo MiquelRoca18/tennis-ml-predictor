@@ -170,7 +170,7 @@ class MatchUpdateService:
             params = {
                 "date_start": date_str,
                 "date_stop": date_str,
-                "event_key": event_key
+                "match_key": event_key  # API usa match_key, no event_key
             }
             data = self.api_client._make_request("get_fixtures", params)
 
