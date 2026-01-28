@@ -14,9 +14,9 @@ Estructura:
 - H2HData: Head to Head
 """
 
-from datetime import date, time
+from datetime import date as date_type, time as time_type
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -319,8 +319,8 @@ class MatchInfo(BaseModel):
     """Información básica del partido"""
     id: int
     status: MatchStatus
-    date: date
-    time: Optional[time] = None
+    date: Union[date_type, str]
+    time: Optional[Union[time_type, str]] = None
     tournament: str
     round: Optional[str] = None
     surface: Surface

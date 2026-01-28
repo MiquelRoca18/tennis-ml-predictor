@@ -226,6 +226,15 @@ async def health_check():
     }
 
 
+@app.get("/keepalive", tags=["Info"])
+async def keepalive():
+    """Keepalive endpoint for external cron jobs to prevent Railway from sleeping"""
+    return {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 # ============================================================
 # FUNCIONES AUXILIARES PARA SCORES
 # ============================================================
@@ -1291,7 +1300,7 @@ async def manual_update_odds():
     """
     try:
         logger.info("🔧 Actualización manual de cuotas solicitada")
-        result = odds_service.update_all_pending_matches()  # ✅ Fixed: usar odds_service
+        result = match_update_service.update_all_pending_matches()
         return result
     except Exception as e:
         logger.error(f"❌ Error en actualización manual: {e}", exc_info=True)
@@ -1995,8 +2004,8 @@ async def startup_event():
     try:
         # Job 1: Actualizar cuotas y detectar partidos nuevos (cada 5 min)
         scheduler.add_job(
-            func=odds_service.update_all_pending_matches,  # ✅ Fixed: usar odds_service
-            trigger=IntervalTrigger(minutes=5),
+            func=match_update_service.update_all_pending_matches,
+            trigger=IntervalTrigger(minutes=5),  # ✅ Reducido de 15 a 5 minutos
             id="update_odds_job",
             name="Actualización automática de cuotas",
             replace_existing=True,
