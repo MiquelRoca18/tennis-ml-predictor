@@ -536,6 +536,12 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
             logger.info(f"ℹ️ No hay enfrentamientos previos")
             return None
         
+        # Log para debug: ver qué campos trae la API
+        if h2h_matches:
+            sample = h2h_matches[0]
+            logger.info(f"🔍 H2H sample keys: {list(sample.keys())}")
+            logger.info(f"🔍 H2H sample tournament: {sample.get('tournament_name')}, surface field: {sample.get('tournament_surface')}")
+        
         p1_wins = 0
         p2_wins = 0
         matches = []
@@ -547,7 +553,9 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
         
         for m in h2h_matches:
             winner_str = m.get("event_winner", "")
-            surface = (m.get("tournament_surface") or "Hard").lower()
+            
+            # Intentar obtener superficie de varios campos
+            surface = _detect_surface_from_match(m)
             
             if "First" in winner_str:
                 p1_wins += 1
@@ -573,7 +581,7 @@ async def _get_h2h_summary(db, api_client, match: dict) -> Optional[H2HData]:
                 matches.append(PreviousMatch(
                     date=m.get("event_date", ""),
                     tournament=m.get("tournament_name", "Unknown"),
-                    surface=m.get("tournament_surface", "Hard"),
+                    surface=surface,  # Usa la superficie detectada
                     winner=winner,
                     score=m.get("event_final_result", "")
                 ))
@@ -632,6 +640,46 @@ def _get_match_odds(db, match_id: int, match: dict) -> Optional[MatchOdds]:
     except Exception as e:
         logger.warning(f"Error obteniendo odds: {e}")
         return None
+
+
+def _detect_surface_from_match(match_data: dict) -> str:
+    """
+    Detecta la superficie de un partido H2H.
+    Intenta varios métodos ya que la API no siempre devuelve tournament_surface.
+    """
+    # 1. Intentar campo directo
+    surface = match_data.get("tournament_surface")
+    if surface:
+        return surface
+    
+    # 2. Intentar detectar por nombre del torneo
+    tournament_name = (match_data.get("tournament_name") or "").lower()
+    
+    # Torneos conocidos de clay
+    clay_keywords = [
+        "roland garros", "french open", "rome", "roma", "madrid", 
+        "monte carlo", "monte-carlo", "barcelona", "buenos aires",
+        "rio", "sao paulo", "estoril", "geneva", "lyon", "hamburg",
+        "bastad", "gstaad", "kitzbuhel", "umag", "stuttgart"
+    ]
+    
+    # Torneos conocidos de grass
+    grass_keywords = [
+        "wimbledon", "queens", "queen's", "halle", "stuttgart grass",
+        "eastbourne", "s-hertogenbosch", "'s-hertogenbosch", "mallorca",
+        "newport"
+    ]
+    
+    for keyword in clay_keywords:
+        if keyword in tournament_name:
+            return "Clay"
+    
+    for keyword in grass_keywords:
+        if keyword in tournament_name:
+            return "Grass"
+    
+    # 3. Por defecto Hard (más común)
+    return "Hard"
 
 
 def _get_prediction(match: dict) -> Optional[MatchPrediction]:
