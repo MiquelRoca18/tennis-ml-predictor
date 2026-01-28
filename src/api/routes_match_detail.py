@@ -461,6 +461,104 @@ async def get_point_by_point(
 
 
 # ============================================================
+# ENDPOINT: ODDS (Cuotas detalladas de bookmakers)
+# ============================================================
+
+@router.get("/{match_id}/odds")
+async def get_match_odds_detailed(match_id: int):
+    """
+    Obtiene las cuotas detalladas de todas las casas de apuestas.
+    
+    Llama directamente a la API Tennis para obtener cuotas en tiempo real.
+    Devuelve las cuotas ordenadas de mejor (más alta) a peor.
+    """
+    db = get_db()
+    api_client = get_api_client()
+    
+    try:
+        match = db.get_match(match_id)
+        if not match:
+            raise HTTPException(status_code=404, detail="Partido no encontrado")
+        
+        event_key = match.get("event_key")
+        if not event_key:
+            return {
+                "success": False,
+                "message": "No hay event_key para este partido",
+                "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
+                "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
+                "bookmakers": []
+            }
+        
+        # Llamar a la API de Tennis para obtener cuotas
+        params = {"match_key": event_key}
+        response = api_client._make_request("get_odds", params)
+        
+        if not response or not response.get("result"):
+            logger.info(f"No hay cuotas disponibles para evento {event_key}")
+            return {
+                "success": True,
+                "message": "No hay cuotas disponibles",
+                "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
+                "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
+                "bookmakers": []
+            }
+        
+        result = response["result"]
+        
+        # El resultado es un dict con el event_key como clave
+        match_odds = result.get(str(event_key), {})
+        
+        # Extraer cuotas Home/Away (Ganador del partido)
+        home_away = match_odds.get("Home/Away", {})
+        home_odds = home_away.get("Home", {})  # Player 1
+        away_odds = home_away.get("Away", {})  # Player 2
+        
+        # Construir lista de bookmakers con cuotas
+        bookmakers_list = []
+        all_bookmakers = set(home_odds.keys()) | set(away_odds.keys())
+        
+        for bookmaker in all_bookmakers:
+            p1_odds = home_odds.get(bookmaker)
+            p2_odds = away_odds.get(bookmaker)
+            
+            if p1_odds or p2_odds:
+                bookmakers_list.append({
+                    "bookmaker": bookmaker,
+                    "player1_odds": float(p1_odds) if p1_odds else None,
+                    "player2_odds": float(p2_odds) if p2_odds else None,
+                })
+        
+        # Ordenar por mejor cuota de Player 1 (descendente)
+        bookmakers_list.sort(
+            key=lambda x: (x["player1_odds"] or 0, x["player2_odds"] or 0),
+            reverse=True
+        )
+        
+        # Calcular mejores cuotas
+        best_p1 = max([b["player1_odds"] for b in bookmakers_list if b["player1_odds"]], default=None)
+        best_p2 = max([b["player2_odds"] for b in bookmakers_list if b["player2_odds"]], default=None)
+        
+        logger.info(f"✅ Cuotas obtenidas: {len(bookmakers_list)} bookmakers para evento {event_key}")
+        
+        return {
+            "success": True,
+            "player1_name": match.get("jugador1_nombre") or match.get("jugador1"),
+            "player2_name": match.get("jugador2_nombre") or match.get("jugador2"),
+            "best_odds_player1": best_p1,
+            "best_odds_player2": best_p2,
+            "bookmakers": bookmakers_list,
+            "total_bookmakers": len(bookmakers_list)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error obteniendo cuotas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # FUNCIONES AUXILIARES
 # ============================================================
 
