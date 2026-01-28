@@ -174,8 +174,7 @@ except Exception as e:
     multi_odds_service = None
     pbp_service = None
 
-# Variable global para LiveEventsService
-live_events_service = None
+# NOTA: LiveEventsService (WebSocket) fue eliminado - se usa Polling en su lugar
 
 # Inicializar ModelRetrainingExecutor
 from src.services.model_retraining_executor import ModelRetrainingExecutor
@@ -1297,7 +1296,7 @@ async def keepalive():
 
 
 @app.post("/admin/sync-all", tags=["Admin"])
-async def sync_all_data():
+async def sync_all_data(background: bool = True):
     """
     Ejecuta TODAS las actualizaciones de una vez
     
@@ -1307,71 +1306,134 @@ async def sync_all_data():
     3. Sincronización de partidos en vivo
     4. Detección de partidos nuevos
     
+    Args:
+        background: Si True (default), ejecuta en background y retorna inmediatamente.
+                   Si False, espera a que termine (puede causar timeout).
+    
     Útil para:
     - Llamar manualmente cuando abres la app
     - Configurar como cron job externo
     - Recuperar datos después de un período de inactividad
     
     Returns:
-        Resultados de todas las sincronizaciones
+        Status de la sincronización (inmediato si background=True)
     """
+    import threading
+    
+    def _sync_all_background():
+        """Ejecuta todas las sincronizaciones en background"""
+        try:
+            logger.info("🔄 SYNC-ALL (background): Iniciando actualizaciones...")
+            
+            # 1. Actualizar estados de partidos recientes (7 días)
+            try:
+                status_result = match_update_service.update_recent_matches(days=7)
+                logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
+            except Exception as e:
+                logger.error(f"❌ Error actualizando estados: {e}")
+            
+            # 2. Actualizar cuotas
+            try:
+                match_update_service.update_all_pending_matches()
+                logger.info(f"✅ Cuotas actualizadas")
+            except Exception as e:
+                logger.error(f"❌ Error actualizando cuotas: {e}")
+            
+            # 3. Sincronizar partidos en vivo (si hay)
+            try:
+                if pbp_service:
+                    from src.services.live_match_data_service import LiveMatchDataService
+                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
+                    live_result = live_service.sync_live_matches()
+                    
+                    if live_result.get("matches_live", 0) > 0:
+                        logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
+            
+            # 4. Sincronizar cuotas multi-bookmaker
+            try:
+                if multi_odds_service:
+                    multi_odds_service.sync_all_pending_matches_odds()
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando multi-odds: {e}")
+            
+            logger.info("✅ SYNC-ALL (background) completado")
+            
+        except Exception as e:
+            logger.error(f"❌ Error en sync-all background: {e}", exc_info=True)
+    
     try:
-        logger.info("🔄 SYNC-ALL: Ejecutando todas las actualizaciones...")
-        results = {
-            "timestamp": datetime.now().isoformat(),
-            "updates": {}
-        }
-        
-        # 1. Actualizar estados de partidos recientes (7 días)
-        try:
-            status_result = match_update_service.update_recent_matches(days=7)
-            results["updates"]["match_status"] = status_result
-            logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
-        except Exception as e:
-            results["updates"]["match_status"] = {"error": str(e)}
-            logger.error(f"❌ Error actualizando estados: {e}")
-        
-        # 2. Actualizar cuotas
-        try:
-            odds_result = match_update_service.update_all_pending_matches()
-            results["updates"]["odds"] = odds_result
-            logger.info(f"✅ Cuotas actualizadas")
-        except Exception as e:
-            results["updates"]["odds"] = {"error": str(e)}
-            logger.error(f"❌ Error actualizando cuotas: {e}")
-        
-        # 3. Sincronizar partidos en vivo (si hay)
-        try:
-            if pbp_service:
-                from src.services.live_match_data_service import LiveMatchDataService
-                live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
-                live_result = live_service.sync_live_matches()
-                results["updates"]["live_matches"] = live_result
-                
-                if live_result.get("matches_live", 0) > 0:
-                    logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
-            else:
-                results["updates"]["live_matches"] = {"skipped": "pbp_service not available"}
-        except Exception as e:
-            results["updates"]["live_matches"] = {"error": str(e)}
-            logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
-        
-        # 4. Sincronizar cuotas multi-bookmaker
-        try:
-            if multi_odds_service:
-                multi_result = multi_odds_service.sync_all_pending_matches_odds()
-                results["updates"]["multi_odds"] = multi_result
-            else:
-                results["updates"]["multi_odds"] = {"skipped": "service not available"}
-        except Exception as e:
-            results["updates"]["multi_odds"] = {"error": str(e)}
-            logger.error(f"❌ Error sincronizando multi-odds: {e}")
-        
-        results["success"] = True
-        results["message"] = "Sincronización completa ejecutada"
-        
-        logger.info("✅ SYNC-ALL completado")
-        return results
+        if background:
+            # Ejecutar en thread de background y retornar inmediatamente
+            sync_thread = threading.Thread(target=_sync_all_background, daemon=True)
+            sync_thread.start()
+            
+            return {
+                "status": "accepted",
+                "message": "Sincronización iniciada en background",
+                "timestamp": datetime.now().isoformat(),
+                "background": True
+            }
+        else:
+            # Ejecutar síncronamente (puede causar timeout)
+            logger.info("🔄 SYNC-ALL: Ejecutando todas las actualizaciones...")
+            results = {
+                "timestamp": datetime.now().isoformat(),
+                "updates": {}
+            }
+            
+            # 1. Actualizar estados de partidos recientes (7 días)
+            try:
+                status_result = match_update_service.update_recent_matches(days=7)
+                results["updates"]["match_status"] = status_result
+                logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
+            except Exception as e:
+                results["updates"]["match_status"] = {"error": str(e)}
+                logger.error(f"❌ Error actualizando estados: {e}")
+            
+            # 2. Actualizar cuotas
+            try:
+                odds_result = match_update_service.update_all_pending_matches()
+                results["updates"]["odds"] = odds_result
+                logger.info(f"✅ Cuotas actualizadas")
+            except Exception as e:
+                results["updates"]["odds"] = {"error": str(e)}
+                logger.error(f"❌ Error actualizando cuotas: {e}")
+            
+            # 3. Sincronizar partidos en vivo (si hay)
+            try:
+                if pbp_service:
+                    from src.services.live_match_data_service import LiveMatchDataService
+                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
+                    live_result = live_service.sync_live_matches()
+                    results["updates"]["live_matches"] = live_result
+                    
+                    if live_result.get("matches_live", 0) > 0:
+                        logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
+                else:
+                    results["updates"]["live_matches"] = {"skipped": "pbp_service not available"}
+            except Exception as e:
+                results["updates"]["live_matches"] = {"error": str(e)}
+                logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
+            
+            # 4. Sincronizar cuotas multi-bookmaker
+            try:
+                if multi_odds_service:
+                    multi_result = multi_odds_service.sync_all_pending_matches_odds()
+                    results["updates"]["multi_odds"] = multi_result
+                else:
+                    results["updates"]["multi_odds"] = {"skipped": "service not available"}
+            except Exception as e:
+                results["updates"]["multi_odds"] = {"error": str(e)}
+                logger.error(f"❌ Error sincronizando multi-odds: {e}")
+            
+            results["success"] = True
+            results["message"] = "Sincronización completa ejecutada"
+            results["background"] = False
+            
+            logger.info("✅ SYNC-ALL completado")
+            return results
         
     except Exception as e:
         logger.error(f"❌ Error en sync-all: {e}", exc_info=True)
@@ -2005,25 +2067,9 @@ async def startup_event():
 
 
 
-        # DISABLED: LiveEventsService requires websocket_client which was removed
-        # IMPORTANTE: Ejecutar en thread separado para no bloquear el servidor
-        # from src.services.live_events_service import LiveEventsService
-
-        
-        # global live_events_service
-        # live_events_service = LiveEventsService(db, api_client)
-        
-        # def run_websocket():
-        #     """Ejecutar WebSocket en thread separado"""
-        #     loop = asyncio.new_event_loop()
-        #     asyncio.set_event_loop(loop)
-        #     loop.run_until_complete(live_events_service.start())
-        
-        # # Iniciar en background thread
-        # ws_thread = threading.Thread(target=run_websocket, daemon=True)
-        # ws_thread.start()
-        # logger.info("✅ WebSocket de live results iniciado en background (tiempo real)")
-        logger.info("ℹ️  WebSocket live events disabled (websocket_client removed)")
+        # NOTA: WebSocket live events fue eliminado.
+        # Se usa polling via LiveMatchDataService (cada 60 seg) en su lugar.
+        # Polling es más robusto para Railway (sobrevive a app sleeps con cron-job externo)
 
         # Job 3: Verificar commits en TML-Database (cada hora)
         def check_github_commits():
@@ -2192,12 +2238,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Limpieza al cerrar la API"""
-    global live_events_service
-    
-    # Detener WebSocket
-    if live_events_service:
-        await live_events_service.stop()
-    
     # Detener scheduler
     if scheduler.running:
         scheduler.shutdown()
