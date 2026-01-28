@@ -97,13 +97,23 @@ async def get_match_full(match_id: int):
         raise HTTPException(status_code=500, detail=f"Error API Client: {str(e)}")
     
     try:
-        # 1. Obtener partido de la BD
+        # 1. Obtener partido de la BD (usando vista con predicciones)
         logger.info(f"📥 Obteniendo partido {match_id} de BD...")
-        match = db.get_match(match_id)
+        # Usar la vista que incluye predicciones
+        match = db._fetchone(
+            "SELECT * FROM matches_with_latest_prediction WHERE id = :id",
+            {"id": match_id}
+        )
+        if not match:
+            # Fallback a tabla matches si no está en la vista
+            match = db.get_match(match_id)
         if not match:
             logger.warning(f"⚠️ Partido {match_id} no encontrado")
             raise HTTPException(status_code=404, detail="Partido no encontrado")
-        logger.info(f"✅ Partido encontrado: {match.get('jugador1')} vs {match.get('jugador2')}")
+        
+        # Log de campos disponibles para debug
+        logger.info(f"✅ Partido encontrado: {match.get('jugador1_nombre')} vs {match.get('jugador2_nombre')}")
+        logger.info(f"📋 Campos disponibles: {list(match.keys())[:15]}...")
         
         # 2. Obtener datos adicionales de la API Tennis si hay event_key
         api_data = None
