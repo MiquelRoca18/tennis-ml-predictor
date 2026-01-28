@@ -1300,7 +1300,7 @@ async def manual_update_odds():
     """
     try:
         logger.info("🔧 Actualización manual de cuotas solicitada")
-        result = match_update_service.update_all_pending_matches()
+        result = match_update_service.update_recent_matches(days=1)
         return result
     except Exception as e:
         logger.error(f"❌ Error en actualización manual: {e}", exc_info=True)
@@ -2002,10 +2002,17 @@ async def startup_event():
 
     # Configurar scheduler para actualizaciones automáticas cada 5 minutos
     try:
-        # Job 1: Actualizar cuotas y detectar partidos nuevos (cada 5 min)
+        # Job 1: Actualizar cuotas y estados de partidos (cada 5 min)
+        def update_matches_job():
+            try:
+                result = match_update_service.update_recent_matches(days=1)
+                logger.info(f"✅ Actualización automática: {result}")
+            except Exception as e:
+                logger.error(f"❌ Error en actualización automática: {e}")
+        
         scheduler.add_job(
-            func=match_update_service.update_all_pending_matches,
-            trigger=IntervalTrigger(minutes=5),  # ✅ Reducido de 15 a 5 minutos
+            func=update_matches_job,
+            trigger=IntervalTrigger(minutes=5),
             id="update_odds_job",
             name="Actualización automática de cuotas",
             replace_existing=True,
