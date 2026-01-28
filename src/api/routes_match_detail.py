@@ -248,24 +248,47 @@ async def get_match_full(match_id: int):
 # ENDPOINT: TIMELINE
 # ============================================================
 
-@router.get("/{match_id}/timeline", response_model=MatchTimeline)
+@router.get("/{match_id}/timeline")
 async def get_match_timeline(match_id: int):
     """
     Obtiene el timeline de juegos del partido.
     
-    OPTIMIZADO: Solo lee de la BD para respuesta rápida.
+    Estrategia lazy loading:
+    1. Si hay datos en BD → Devuelve instantáneo
+    2. Si NO hay datos → Llama a API, guarda en BD, devuelve
     """
     db = get_db()
+    api_client = get_api_client()
     
     try:
         match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Cargar de BD (datos pre-sincronizados por scheduler)
+        # 1. Intentar cargar de BD
         _, timeline = _load_stats_from_db(db, match_id)
         if timeline and timeline.total_games > 0:
             return timeline
+        
+        # 2. No hay datos - lazy loading desde API
+        event_key = match.get("event_key")
+        if not event_key:
+            return MatchTimeline()
+        
+        try:
+            response = api_client._make_request("get_fixtures", {"match_key": event_key})
+            if response and response.get("result"):
+                results = response["result"]
+                api_data = results[0] if isinstance(results, list) else results
+                
+                if api_data.get("pointbypoint"):
+                    # Guardar en BD para caché
+                    _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
+                    
+                    timeline = stats_calculator.calculate_timeline(api_data["pointbypoint"])
+                    return timeline
+        except Exception as e:
+            logger.warning(f"Error obteniendo timeline de API: {e}")
         
         return MatchTimeline()
         
@@ -273,6 +296,67 @@ async def get_match_timeline(match_id: int):
         raise
     except Exception as e:
         logger.error(f"Error obteniendo timeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# ENDPOINT: STATS (Estadísticas del partido)
+# ============================================================
+
+@router.get("/{match_id}/stats")
+async def get_match_stats(match_id: int):
+    """
+    Obtiene las estadísticas detalladas del partido.
+    
+    Estrategia lazy loading:
+    1. Si hay datos en BD → Devuelve instantáneo
+    2. Si NO hay datos → Llama a API, guarda en BD, devuelve
+    """
+    db = get_db()
+    api_client = get_api_client()
+    
+    try:
+        match = db.get_match(match_id)
+        if not match:
+            raise HTTPException(status_code=404, detail="Partido no encontrado")
+        
+        # 1. Intentar cargar de BD
+        stats, _ = _load_stats_from_db(db, match_id)
+        if stats and stats.has_detailed_stats:
+            return stats
+        
+        # 2. No hay datos - lazy loading desde API
+        event_key = match.get("event_key")
+        if not event_key:
+            return {"has_detailed_stats": False, "message": "No hay estadísticas disponibles"}
+        
+        try:
+            response = api_client._make_request("get_fixtures", {"match_key": event_key})
+            if response and response.get("result"):
+                results = response["result"]
+                api_data = results[0] if isinstance(results, list) else results
+                
+                if api_data.get("pointbypoint"):
+                    # Guardar en BD para caché
+                    _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
+                    
+                    # Calcular scores primero
+                    scores = None
+                    if api_data.get("scores"):
+                        scores = stats_calculator.calculate_scores(api_data["scores"], api_data)
+                    
+                    stats = stats_calculator.calculate_stats(api_data["pointbypoint"], scores)
+                    if stats:
+                        return stats
+        except Exception as e:
+            logger.warning(f"Error obteniendo stats de API: {e}")
+        
+        return {"has_detailed_stats": False, "message": "No hay estadísticas disponibles"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error obteniendo stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -287,18 +371,33 @@ async def get_point_by_point(
 ):
     """
     Obtiene los datos punto por punto del partido.
-    
-    OPTIMIZADO: Solo lee de la BD para respuesta rápida.
+    Lazy loading con caché.
     """
     db = get_db()
+    api_client = get_api_client()
     
     try:
         match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Cargar de BD (tabla match_pointbypoint si existe)
-        # Por ahora devuelve vacío - los datos se sincronizan por scheduler
+        # Intentar obtener de API con lazy loading
+        event_key = match.get("event_key")
+        if event_key:
+            try:
+                response = api_client._make_request("get_fixtures", {"match_key": event_key})
+                if response and response.get("result"):
+                    results = response["result"]
+                    api_data = results[0] if isinstance(results, list) else results
+                    
+                    if api_data.get("pointbypoint"):
+                        return stats_calculator.extract_point_by_point(
+                            api_data["pointbypoint"],
+                            set_filter=set_number
+                        )
+            except Exception as e:
+                logger.warning(f"Error obteniendo PBP: {e}")
+        
         return PointByPointData()
         
     except HTTPException:
@@ -607,6 +706,48 @@ async def get_match_h2h(match_id: int):
 # FUNCIONES AUXILIARES
 # ============================================================
 
+def _save_pointbypoint_to_db(db, match_id: int, pointbypoint_data: list):
+    """
+    Guarda datos pointbypoint en la BD para caché.
+    Esto permite que futuras requests sean instantáneas.
+    """
+    try:
+        import json
+        
+        # Guardar como JSON en la tabla match_pointbypoint
+        db._execute(
+            """
+            INSERT INTO match_pointbypoint (match_id, data, created_at)
+            VALUES (:match_id, :data, CURRENT_TIMESTAMP)
+            ON CONFLICT (match_id) DO UPDATE SET 
+                data = :data,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            {"match_id": match_id, "data": json.dumps(pointbypoint_data)}
+        )
+        logger.info(f"✅ Pointbypoint guardado en caché para match {match_id}")
+    except Exception as e:
+        logger.warning(f"Error guardando pointbypoint en BD: {e}")
+
+
+def _load_pointbypoint_from_db(db, match_id: int) -> Optional[list]:
+    """Carga datos pointbypoint de la BD si existen"""
+    try:
+        import json
+        
+        result = db._fetchone(
+            "SELECT data FROM match_pointbypoint WHERE match_id = :match_id",
+            {"match_id": match_id}
+        )
+        
+        if result and result.get("data"):
+            return json.loads(result["data"])
+    except Exception as e:
+        logger.warning(f"Error cargando pointbypoint de BD: {e}")
+    
+    return None
+
+
 def _save_match_data_to_db(db, match_id: int, api_data: dict):
     """Guarda datos del partido en la BD para caché"""
     try:
@@ -629,21 +770,39 @@ def _save_match_data_to_db(db, match_id: int, api_data: dict):
 
 
 def _load_stats_from_db(db, match_id: int):
-    """Carga estadísticas desde la BD"""
+    """
+    Carga estadísticas y timeline desde la BD (caché de pointbypoint).
+    
+    Returns:
+        Tuple[MatchStats, MatchTimeline] o (None, None) si no hay datos
+    """
     stats = None
     timeline = None
     
     try:
-        # Cargar games
-        from src.api.api_v2 import pbp_service
-        if pbp_service:
-            games = pbp_service.get_games(match_id)
-            points = pbp_service.get_point_by_point(match_id)
+        # Intentar cargar pointbypoint de la caché
+        pbp_data = _load_pointbypoint_from_db(db, match_id)
+        
+        if pbp_data:
+            logger.info(f"✅ Pointbypoint encontrado en caché para match {match_id}")
             
-            if games:
-                # Construir timeline desde games de BD
-                # (simplificado - se podría mejorar)
-                pass
+            # Calcular stats
+            try:
+                # Obtener scores del match para calcular stats
+                match = db.get_match(match_id)
+                scores = None
+                if match and match.get("resultado_marcador"):
+                    scores = stats_calculator.parse_score_string(match["resultado_marcador"])
+                
+                stats = stats_calculator.calculate_stats(pbp_data, scores)
+            except Exception as e:
+                logger.warning(f"Error calculando stats desde caché: {e}")
+            
+            # Calcular timeline
+            try:
+                timeline = stats_calculator.calculate_timeline(pbp_data)
+            except Exception as e:
+                logger.warning(f"Error calculando timeline desde caché: {e}")
                 
     except Exception as e:
         logger.warning(f"Error cargando stats de BD: {e}")
