@@ -1893,28 +1893,34 @@ async def github_webhook(request: Request):
 # ============================================================
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Evento de inicio del servidor"""
+def _startup_sync_background():
+    """
+    Sincronización inicial en background.
+    Se ejecuta en un thread separado para no bloquear el healthcheck.
+    """
+    import time
+    
+    # Pequeña pausa para que el servidor esté completamente listo
+    time.sleep(5)
+    
     logger.info("=" * 70)
-    logger.info("🚀 INICIANDO SERVIDOR - SINCRONIZACIÓN INICIAL")
+    logger.info("🔄 INICIANDO SINCRONIZACIÓN EN BACKGROUND")
     logger.info("=" * 70)
-
-    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía (Railway/Docker)
+    
+    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía
     try:
         from src.database.match_database import MatchDatabase
-        db_check = MatchDatabase()
+        db_bg = MatchDatabase()
         
-        # Usar método compatible PostgreSQL/SQLite
-        result = db_check._fetchone("SELECT COUNT(*) as count FROM matches", {})
+        result = db_bg._fetchone("SELECT COUNT(*) as count FROM matches", {})
         count = result["count"] if result else 0
         
         if count < 100:
-            logger.warning(f"⚠️  Base de datos casi vacía ({count} partidos). Iniciando importación de históricos...")
+            logger.warning(f"⚠️  Base de datos casi vacía ({count} partidos). Iniciando importación...")
             try:
                 from scripts.import_historical_data import import_csv_to_db
                 import_csv_to_db()
-                logger.info("✅ Importación histórica completada en el arranque")
+                logger.info("✅ Importación histórica completada")
             except Exception as e:
                 logger.error(f"❌ Error importando históricos: {e}")
         else:
@@ -1923,74 +1929,61 @@ async def startup_event():
     except Exception as e:
         logger.error(f"⚠️  Error verificando estado DB: {e}")
 
-    # 1. PRIMERO: Actualizar estados de partidos existentes
+    # 1. Actualizar estados de partidos existentes (limitado a 50 partidos max)
     try:
         from src.services.match_update_service import MatchUpdateService
+        from src.database.match_database import MatchDatabase
+        from src.services.api_tennis_client import APITennisClient
         
         logger.info("\n🔄 Actualizando estados de partidos existentes...")
-        update_service_startup = MatchUpdateService(db, api_client)
+        db_update = MatchDatabase()
+        api_update = APITennisClient()
+        update_service = MatchUpdateService(db_update, api_update)
         
-        # DESARROLLO: Reducido a 3 días para minimizar API usage
-        # TODO: En producción cambiar a days=7 (el servidor no se reinicia frecuentemente)
-        stats = update_service_startup.update_recent_matches(days=3)
+        # Solo 1 día para no bloquear mucho tiempo
+        stats = update_service.update_recent_matches(days=1)
         
-        logger.info(f"✅ Estados actualizados:")
-        logger.info(f"   Partidos verificados: {stats['matches_checked']}")
-        logger.info(f"   Partidos actualizados: {stats['matches_updated']}")
-        logger.info(f"   - En vivo: {stats['matches_live']}")
-        logger.info(f"   - Completados: {stats['matches_completed']}")
+        logger.info(f"✅ Estados actualizados: {stats['matches_updated']} de {stats['matches_checked']}")
         
     except Exception as e:
-        logger.error(f"❌ Error actualizando estados: {e}", exc_info=True)
+        logger.error(f"❌ Error actualizando estados: {e}")
 
-    # 2. SEGUNDO: Fetch histórico (últimos 7 días + próximos 7 días)
+    # 2. Fetch de partidos (solo hoy y mañana para arranque rápido)
     try:
         from src.automation.daily_match_fetcher import DailyMatchFetcher
+        from src.database.match_database import MatchDatabase
+        from src.services.api_tennis_client import APITennisClient
         
-        # DESARROLLO: Reducido a 3 días para minimizar API usage
-        # TODO: En producción cambiar a 7 días
-        logger.info("\n📥 Iniciando fetch histórico (últimos 3 días + próximos 3 días)...")
+        logger.info("\n📥 Fetching partidos de hoy y mañana...")
         
-        # Intentar cargar predictor sin fallar si no existe (permite fetch sin predicciones)
+        db_fetch = MatchDatabase()
+        api_fetch = APITennisClient()
         pred = get_predictor(raise_on_error=False)
-        if pred is None:
-            logger.warning("⚠️  Predictor no disponible - se guardarán partidos SIN predicciones")
+        fetcher = DailyMatchFetcher(db_fetch, api_fetch, pred)
         
-        fetcher = DailyMatchFetcher(db, api_client, pred)
-        
-        total_new = 0
-        total_found = 0
-        
-        # Días pasados (últimos 3 días)
-        logger.info("📅 Fetching últimos 3 días...")
-        for days_back in range(3, 0, -1):
-            target_date = date.today() - timedelta(days=days_back)
-            try:
-                stats = fetcher.fetch_matches_for_date(target_date)
-                total_new += stats["matches_new"]
-                total_found += stats["matches_found"]
-                logger.info(f"   {target_date}: {stats['matches_found']} encontrados, {stats['matches_new']} nuevos")
-            except Exception as e:
-                logger.error(f"❌ Error fetching {target_date}: {e}")
-        
-        # Días futuros (hoy + próximos 3 días)
-        logger.info(f"📅 Fetching próximos 3 días...")
-        try:
-            stats = fetcher.fetch_and_store_matches(days_ahead=3)
-            total_new += stats["matches_new"]
-            total_found += stats["matches_found"]
-            logger.info(f"   Próximos 7 días: {stats['matches_found']} encontrados, {stats['matches_new']} nuevos")
-        except Exception as e:
-            logger.error(f"❌ Error fetching próximos días: {e}")
-        
-        logger.info("=" * 70)
-        logger.info(f"✅ Fetch histórico completado:")
-        logger.info(f"   Total encontrados: {total_found}")
-        logger.info(f"   Nuevos guardados: {total_new}")
-        logger.info("=" * 70)
+        # Solo hoy + 1 día para arranque rápido
+        stats = fetcher.fetch_and_store_matches(days_ahead=1)
+        logger.info(f"✅ Fetch completado: {stats.get('matches_found', 0)} encontrados, {stats.get('matches_new', 0)} nuevos")
     
     except Exception as e:
-        logger.error(f"❌ Error en fetch histórico: {e}", exc_info=True)
+        logger.error(f"❌ Error en fetch: {e}")
+    
+    logger.info("=" * 70)
+    logger.info("✅ SINCRONIZACIÓN BACKGROUND COMPLETADA")
+    logger.info("=" * 70)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Evento de inicio del servidor - Rápido para pasar healthcheck"""
+    logger.info("=" * 70)
+    logger.info("🚀 SERVIDOR INICIANDO...")
+    logger.info("=" * 70)
+    
+    # Iniciar sincronización en background (no bloquea el servidor)
+    sync_thread = threading.Thread(target=_startup_sync_background, daemon=True)
+    sync_thread.start()
+    logger.info("📡 Sincronización iniciada en background")
 
     # Configurar scheduler para actualizaciones automáticas cada 5 minutos
     try:
