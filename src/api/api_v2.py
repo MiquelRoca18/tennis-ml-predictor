@@ -1266,6 +1266,118 @@ async def detect_new_matches_manual():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/keepalive", tags=["Health"])
+async def keepalive():
+    """
+    Endpoint para mantener la aplicación activa y ejecutar actualizaciones
+    
+    Este endpoint está diseñado para ser llamado por servicios externos como:
+    - cron-job.org (gratuito)
+    - UptimeRobot (gratuito)
+    - GitHub Actions (gratuito)
+    
+    Configura un ping cada 5 minutos para mantener la app activa en Railway.
+    
+    Returns:
+        Estado de la app y última sincronización
+    """
+    try:
+        from datetime import datetime
+        
+        return {
+            "status": "alive",
+            "timestamp": datetime.now().isoformat(),
+            "scheduler_running": scheduler.running,
+            "jobs_count": len(scheduler.get_jobs()) if scheduler.running else 0,
+            "message": "App activa - schedulers ejecutándose"
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en keepalive: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/admin/sync-all", tags=["Admin"])
+async def sync_all_data():
+    """
+    Ejecuta TODAS las actualizaciones de una vez
+    
+    Este endpoint ejecuta:
+    1. Actualización de estados de partidos (pendiente → en_juego → completado)
+    2. Actualización de cuotas
+    3. Sincronización de partidos en vivo
+    4. Detección de partidos nuevos
+    
+    Útil para:
+    - Llamar manualmente cuando abres la app
+    - Configurar como cron job externo
+    - Recuperar datos después de un período de inactividad
+    
+    Returns:
+        Resultados de todas las sincronizaciones
+    """
+    try:
+        logger.info("🔄 SYNC-ALL: Ejecutando todas las actualizaciones...")
+        results = {
+            "timestamp": datetime.now().isoformat(),
+            "updates": {}
+        }
+        
+        # 1. Actualizar estados de partidos recientes (7 días)
+        try:
+            status_result = match_update_service.update_recent_matches(days=7)
+            results["updates"]["match_status"] = status_result
+            logger.info(f"✅ Estados actualizados: {status_result.get('matches_updated', 0)} partidos")
+        except Exception as e:
+            results["updates"]["match_status"] = {"error": str(e)}
+            logger.error(f"❌ Error actualizando estados: {e}")
+        
+        # 2. Actualizar cuotas
+        try:
+            odds_result = match_update_service.update_all_pending_matches()
+            results["updates"]["odds"] = odds_result
+            logger.info(f"✅ Cuotas actualizadas")
+        except Exception as e:
+            results["updates"]["odds"] = {"error": str(e)}
+            logger.error(f"❌ Error actualizando cuotas: {e}")
+        
+        # 3. Sincronizar partidos en vivo (si hay)
+        try:
+            if pbp_service:
+                from src.services.live_match_data_service import LiveMatchDataService
+                live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
+                live_result = live_service.sync_live_matches()
+                results["updates"]["live_matches"] = live_result
+                
+                if live_result.get("matches_live", 0) > 0:
+                    logger.info(f"🔴 LIVE: {live_result['matches_live']} partidos en vivo")
+            else:
+                results["updates"]["live_matches"] = {"skipped": "pbp_service not available"}
+        except Exception as e:
+            results["updates"]["live_matches"] = {"error": str(e)}
+            logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
+        
+        # 4. Sincronizar cuotas multi-bookmaker
+        try:
+            if multi_odds_service:
+                multi_result = multi_odds_service.sync_all_pending_matches_odds()
+                results["updates"]["multi_odds"] = multi_result
+            else:
+                results["updates"]["multi_odds"] = {"skipped": "service not available"}
+        except Exception as e:
+            results["updates"]["multi_odds"] = {"error": str(e)}
+            logger.error(f"❌ Error sincronizando multi-odds: {e}")
+        
+        results["success"] = True
+        results["message"] = "Sincronización completa ejecutada"
+        
+        logger.info("✅ SYNC-ALL completado")
+        return results
+        
+    except Exception as e:
+        logger.error(f"❌ Error en sync-all: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin/retraining-status", tags=["Admin"])
 async def get_retraining_status():
     """
