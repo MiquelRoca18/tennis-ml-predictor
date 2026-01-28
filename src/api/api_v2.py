@@ -2205,22 +2205,41 @@ async def startup_event():
         # ELITE SCHEDULER JOBS
         # ============================================================
         
-        # Job Elite 1: Actualizar rankings ATP/WTA (diario a las 3 AM)
+        # Job Elite 1: Actualizar rankings ATP (diario a las 3 AM)
         if ranking_service:
-            def sync_rankings():
-                """Sincroniza rankings ATP y WTA"""
+            def sync_rankings_job():
+                """Sincroniza rankings ATP y actualiza partidos"""
                 try:
-                    result = ranking_service.sync_all_rankings()
-                    logger.info(f"✅ Rankings sincronizados: {result['total']} jugadores")
-                    logger.info(f"   - ATP: {result['atp']}, WTA: {result['wta']}")
+                    # Sincronizar rankings desde API
+                    atp_count = ranking_service.sync_atp_rankings(limit=500)
+                    logger.info(f"✅ Rankings ATP sincronizados: {atp_count} jugadores")
+                    
+                    # Actualizar partidos con rankings actualizados
+                    db._execute("""
+                        UPDATE matches
+                        SET jugador1_ranking = (
+                            SELECT atp_ranking FROM players 
+                            WHERE player_key = matches.jugador1_key
+                        )
+                        WHERE jugador1_key IS NOT NULL
+                    """)
+                    db._execute("""
+                        UPDATE matches
+                        SET jugador2_ranking = (
+                            SELECT atp_ranking FROM players 
+                            WHERE player_key = matches.jugador2_key
+                        )
+                        WHERE jugador2_key IS NOT NULL
+                    """)
+                    logger.info("✅ Rankings de partidos actualizados")
                 except Exception as e:
                     logger.error(f"❌ Error sincronizando rankings: {e}")
             
             scheduler.add_job(
-                func=sync_rankings,
+                func=sync_rankings_job,
                 trigger=CronTrigger(hour=3, minute=0),  # 3:00 AM cada día
                 id="sync_rankings_job",
-                name="Sincronización de rankings ATP/WTA (3 AM)",
+                name="Sincronización de rankings ATP (3 AM)",
                 replace_existing=True,
             )
         
@@ -2253,7 +2272,7 @@ async def startup_event():
         logger.info("   - Verificación de commits TML: cada hora")
         logger.info("   - Fetch diario de partidos: 6:00 AM")
         logger.info("   - Limpieza de partidos antiguos (>7 días): 2:00 AM")
-        logger.info("   - [ELITE] Sincronización de rankings: 3:00 AM")
+        logger.info("   - [ELITE] Sincronización de rankings ATP: 3:00 AM")
         logger.info("   - [ELITE] Sincronización de torneos: Domingos 4:00 AM")
     except Exception as e:
         logger.error(f"❌ Error iniciando scheduler: {e}")

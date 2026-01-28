@@ -169,21 +169,53 @@ async def get_match_full(match_id: int):
         
         # 4. Construir información de jugadores
         logger.info(f"👤 Construyendo PlayerInfo...")
-        # Campos de la BD usan jugador1_nombre, jugador2_nombre
+        
+        # Obtener nombres
+        j1_nombre = match.get("jugador1_nombre") or match.get("jugador1") or "Player 1"
+        j2_nombre = match.get("jugador2_nombre") or match.get("jugador2") or "Player 2"
+        
+        # Intentar obtener rankings actualizados de la tabla players
+        j1_ranking = match.get("jugador1_ranking")
+        j2_ranking = match.get("jugador2_ranking")
+        j1_key = match.get("jugador1_key")
+        j2_key = match.get("jugador2_key")
+        
+        # Buscar ranking actual en tabla players si tenemos player_key
+        try:
+            if j1_key:
+                player1_data = db._fetchone(
+                    "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
+                    {"key": j1_key}
+                )
+                if player1_data and player1_data.get("atp_ranking"):
+                    j1_ranking = player1_data.get("atp_ranking")
+                    logger.info(f"📊 Ranking actualizado J1: {j1_ranking}")
+            
+            if j2_key:
+                player2_data = db._fetchone(
+                    "SELECT atp_ranking, country, player_logo FROM players WHERE player_key = :key",
+                    {"key": j2_key}
+                )
+                if player2_data and player2_data.get("atp_ranking"):
+                    j2_ranking = player2_data.get("atp_ranking")
+                    logger.info(f"📊 Ranking actualizado J2: {j2_ranking}")
+        except Exception as e:
+            logger.warning(f"⚠️ Error obteniendo rankings de players: {e}")
+        
         player1 = PlayerInfo(
-            name=match.get("jugador1_nombre") or match.get("jugador1") or "Player 1",
+            name=j1_nombre,
             country=match.get("jugador1_pais"),
-            ranking=match.get("jugador1_ranking"),
+            ranking=j1_ranking,
             logo_url=match.get("jugador1_logo"),
         )
         
         player2 = PlayerInfo(
-            name=match.get("jugador2_nombre") or match.get("jugador2") or "Player 2",
+            name=j2_nombre,
             country=match.get("jugador2_pais"),
-            ranking=match.get("jugador2_ranking"),
+            ranking=j2_ranking,
             logo_url=match.get("jugador2_logo"),
         )
-        logger.info(f"✅ PlayerInfo creados: {player1.name} vs {player2.name}")
+        logger.info(f"✅ PlayerInfo creados: {player1.name} (#{j1_ranking}) vs {player2.name} (#{j2_ranking})")
         
         # 5. Calcular scores
         logger.info(f"🎯 Calculando scores...")
