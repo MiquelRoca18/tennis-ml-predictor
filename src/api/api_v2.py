@@ -365,17 +365,12 @@ async def get_matches_by_date(
     date_param: Optional[str] = Query(None, alias="date", description="Fecha en formato YYYY-MM-DD")
 ):
     """
-    Obtiene todos los partidos de una fecha específica
-
-    Args:
-        date: Fecha en formato YYYY-MM-DD (default: hoy)
-
-    Returns:
-        Partidos con predicciones y resultados
-
-    Example:
-        GET /matches?date=2026-01-08
+    Obtiene todos los partidos de una fecha específica.
+    OPTIMIZADO: Una sola consulta a BD, sin llamadas adicionales.
     """
+    import time
+    start_time = time.time()
+    
     try:
         # Parsear fecha
         if date_param:
@@ -404,8 +399,11 @@ async def get_matches_by_date(
                 detail=f"Fecha fuera de rango. Máximo: {fecha_maxima} (7 días adelante)",
             )
 
-        # Obtener partidos de la BD
+        # Obtener partidos de la BD (una sola consulta)
+        db_start = time.time()
         partidos_raw = db.get_matches_by_date(fecha)
+        db_time = time.time() - db_start
+        logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
 
         # Convertir a modelos Pydantic
@@ -446,8 +444,26 @@ async def get_matches_by_date(
                     kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
                 )
 
-            # Construir scores estructurados
-            match_scores = _build_match_scores(p, db)
+            # Construir scores de forma simple (sin consultas adicionales)
+            # Los detalles completos se cargan en el endpoint de detalle
+            match_scores = None
+            if p.get("resultado_marcador") or p.get("event_final_result"):
+                try:
+                    marcador = p.get("resultado_marcador") or p.get("event_final_result")
+                    sets_data = _parse_marcador_to_sets(marcador) if marcador else []
+                    if sets_data or p.get("event_final_result"):
+                        match_scores = MatchScores(
+                            sets_result=p.get("event_final_result"),
+                            sets=sets_data,
+                            live=LiveData(
+                                current_game_score=p.get("event_game_result"),
+                                current_server=p.get("event_serve"),
+                                current_set=len(sets_data) + 1 if sets_data else 1,
+                                is_tiebreak=False
+                            ) if p.get("estado") == "en_juego" else None
+                        )
+                except Exception:
+                    pass
             
             # Construir resultado (para partidos completados o en juego)
             resultado = None
@@ -486,6 +502,9 @@ async def get_matches_by_date(
         en_juego = sum(1 for p in partidos if p.estado == EstadoPartido.EN_JUEGO)
         pendientes = sum(1 for p in partidos if p.estado == EstadoPartido.PENDIENTE)
 
+        total_time = time.time() - start_time
+        logger.info(f"⏱️ /matches endpoint took {total_time:.2f}s total ({len(partidos)} matches)")
+        
         return MatchesDateResponse(
             fecha=fecha,
             es_hoy=(fecha == date.today()),
