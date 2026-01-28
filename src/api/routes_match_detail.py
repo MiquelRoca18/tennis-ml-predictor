@@ -313,15 +313,14 @@ async def get_point_by_point(
 # ============================================================
 
 @router.get("/{match_id}/odds")
-async def get_match_odds_detailed(
-    match_id: int,
-    refresh: bool = Query(False, description="Forzar actualización desde API externa")
-):
+async def get_match_odds_detailed(match_id: int):
     """
     Obtiene las cuotas detalladas de todas las casas de apuestas.
     
-    OPTIMIZADO: Por defecto lee de la BD (rápido).
-    Usa ?refresh=true para forzar actualización desde API Tennis.
+    Estrategia "lazy loading":
+    1. Si hay datos en BD → Devuelve instantáneo
+    2. Si NO hay datos en BD → Llama a API, guarda en BD, devuelve
+    3. Siguientes peticiones → Instantáneo desde BD
     """
     db = get_db()
     
@@ -334,15 +333,15 @@ async def get_match_odds_detailed(
         p2_name = match.get("jugador2_nombre") or match.get("jugador2")
         event_key = match.get("event_key")
         
-        # 1. Primero intentar obtener de la BD (odds_history)
-        if not refresh:
-            odds_from_db = _get_detailed_odds_from_db(db, match_id, match)
-            if odds_from_db and odds_from_db.get("bookmakers"):
-                return odds_from_db
+        # 1. Intentar obtener de la BD (instantáneo)
+        odds_from_db = _get_detailed_odds_from_db(db, match_id, match)
+        if odds_from_db and odds_from_db.get("bookmakers") and len(odds_from_db["bookmakers"]) > 1:
+            # Ya tenemos datos de múltiples bookmakers en BD
+            return odds_from_db
         
-        # 2. Si refresh=true o no hay datos en BD, llamar a API
+        # 2. No hay datos completos en BD - llamar a API (lazy loading)
         if not event_key:
-            return {
+            return odds_from_db or {
                 "success": True,
                 "message": "No hay cuotas disponibles",
                 "player1_name": p1_name,
@@ -351,14 +350,12 @@ async def get_match_odds_detailed(
             }
         
         api_client = get_api_client()
-        params = {"match_key": event_key}
         
         try:
-            response = api_client._make_request("get_odds", params)
+            response = api_client._make_request("get_odds", {"match_key": event_key})
         except Exception as e:
             logger.warning(f"Error llamando API odds: {e}")
-            # Fallback a BD si la API falla
-            return _get_detailed_odds_from_db(db, match_id, match) or {
+            return odds_from_db or {
                 "success": True,
                 "message": "No hay cuotas disponibles",
                 "player1_name": p1_name,
@@ -367,7 +364,7 @@ async def get_match_odds_detailed(
             }
         
         if not response or not response.get("result"):
-            return {
+            return odds_from_db or {
                 "success": True,
                 "message": "No hay cuotas disponibles",
                 "player1_name": p1_name,
@@ -378,12 +375,11 @@ async def get_match_odds_detailed(
         result = response["result"]
         match_odds = result.get(str(event_key), {})
         
-        # Extraer cuotas Home/Away (Ganador del partido)
+        # Extraer cuotas Home/Away
         home_away = match_odds.get("Home/Away", {})
-        home_odds = home_away.get("Home", {})  # Player 1
-        away_odds = home_away.get("Away", {})  # Player 2
+        home_odds = home_away.get("Home", {})
+        away_odds = home_away.get("Away", {})
         
-        # Construir lista de bookmakers con cuotas
         bookmakers_list = []
         all_bookmakers = set(home_odds.keys()) | set(away_odds.keys())
         
@@ -392,19 +388,32 @@ async def get_match_odds_detailed(
             p2_odds = away_odds.get(bookmaker)
             
             if p1_odds or p2_odds:
+                p1_float = float(p1_odds) if p1_odds else None
+                p2_float = float(p2_odds) if p2_odds else None
+                
                 bookmakers_list.append({
                     "bookmaker": bookmaker,
-                    "player1_odds": float(p1_odds) if p1_odds else None,
-                    "player2_odds": float(p2_odds) if p2_odds else None,
+                    "player1_odds": p1_float,
+                    "player2_odds": p2_float,
                 })
+                
+                # Guardar en BD para caché (lazy loading)
+                try:
+                    db._execute(
+                        """
+                        INSERT INTO odds_history (match_id, bookmaker, odds_player1, odds_player2, created_at)
+                        VALUES (:match_id, :bookmaker, :p1, :p2, CURRENT_TIMESTAMP)
+                        """,
+                        {"match_id": match_id, "bookmaker": bookmaker, "p1": p1_float, "p2": p2_float}
+                    )
+                except Exception:
+                    pass  # Ignorar errores de inserción duplicada
         
-        # Ordenar por mejor cuota de Player 1 (descendente)
         bookmakers_list.sort(
             key=lambda x: (x["player1_odds"] or 0, x["player2_odds"] or 0),
             reverse=True
         )
         
-        # Calcular mejores cuotas
         best_p1 = max([b["player1_odds"] for b in bookmakers_list if b["player1_odds"]], default=None)
         best_p2 = max([b["player2_odds"] for b in bookmakers_list if b["player2_odds"]], default=None)
         
@@ -422,6 +431,175 @@ async def get_match_odds_detailed(
         raise
     except Exception as e:
         logger.error(f"Error obteniendo cuotas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# ENDPOINT: H2H (Head to Head)
+# ============================================================
+
+@router.get("/{match_id}/h2h")
+async def get_match_h2h(match_id: int):
+    """
+    Obtiene el historial de enfrentamientos entre los jugadores.
+    
+    Estrategia "lazy loading":
+    1. Si hay datos en BD → Devuelve instantáneo
+    2. Si NO hay datos en BD → Llama a API, guarda en BD, devuelve
+    """
+    db = get_db()
+    api_client = get_api_client()
+    
+    try:
+        match = db.get_match(match_id)
+        if not match:
+            raise HTTPException(status_code=404, detail="Partido no encontrado")
+        
+        p1_key = match.get("jugador1_key")
+        p2_key = match.get("jugador2_key")
+        p1_name = match.get("jugador1_nombre") or match.get("jugador1")
+        p2_name = match.get("jugador2_nombre") or match.get("jugador2")
+        
+        if not p1_key or not p2_key:
+            return {
+                "success": True,
+                "message": "No hay datos de jugadores",
+                "total_matches": 0,
+                "player1_wins": 0,
+                "player2_wins": 0,
+                "recent_matches": []
+            }
+        
+        # 1. Intentar obtener de BD (instantáneo)
+        h2h_from_db = _get_h2h_from_db(db, match)
+        if h2h_from_db and h2h_from_db.total_matches > 0:
+            return {
+                "success": True,
+                "total_matches": h2h_from_db.total_matches,
+                "player1_wins": h2h_from_db.player1_wins,
+                "player2_wins": h2h_from_db.player2_wins,
+                "surface_records": h2h_from_db.surface_records,
+                "recent_matches": [m.model_dump() for m in h2h_from_db.recent_matches] if h2h_from_db.recent_matches else []
+            }
+        
+        # 2. No hay datos en BD - llamar a API (lazy loading)
+        try:
+            response = api_client._make_request("get_H2H", {
+                "first_player_key": p1_key,
+                "second_player_key": p2_key
+            })
+        except Exception as e:
+            logger.warning(f"Error llamando API H2H: {e}")
+            return {
+                "success": True,
+                "message": "No hay datos de H2H disponibles",
+                "total_matches": 0,
+                "player1_wins": 0,
+                "player2_wins": 0,
+                "recent_matches": []
+            }
+        
+        if not response or not response.get("result"):
+            return {
+                "success": True,
+                "message": "No hay enfrentamientos previos",
+                "total_matches": 0,
+                "player1_wins": 0,
+                "player2_wins": 0,
+                "recent_matches": []
+            }
+        
+        result = response["result"]
+        h2h_matches = result.get("H2H", [])
+        
+        if not h2h_matches:
+            return {
+                "success": True,
+                "message": "No hay enfrentamientos previos",
+                "total_matches": 0,
+                "player1_wins": 0,
+                "player2_wins": 0,
+                "recent_matches": []
+            }
+        
+        # Procesar datos
+        p1_wins = 0
+        p2_wins = 0
+        hard_p1, hard_p2 = 0, 0
+        clay_p1, clay_p2 = 0, 0
+        grass_p1, grass_p2 = 0, 0
+        recent_matches = []
+        
+        for m in h2h_matches:
+            winner_str = m.get("event_winner", "")
+            surface = _detect_surface_from_match(m)
+            
+            if "First" in winner_str:
+                p1_wins += 1
+                winner = 1
+                if "hard" in surface.lower(): hard_p1 += 1
+                elif "clay" in surface.lower(): clay_p1 += 1
+                elif "grass" in surface.lower(): grass_p1 += 1
+            else:
+                p2_wins += 1
+                winner = 2
+                if "hard" in surface.lower(): hard_p2 += 1
+                elif "clay" in surface.lower(): clay_p2 += 1
+                elif "grass" in surface.lower(): grass_p2 += 1
+            
+            if len(recent_matches) < 5:
+                recent_matches.append({
+                    "date": m.get("event_date", ""),
+                    "tournament": m.get("tournament_name", "Unknown"),
+                    "surface": surface,
+                    "winner": winner,
+                    "score": m.get("event_final_result", "")
+                })
+        
+        # Guardar en BD para caché
+        try:
+            db._execute(
+                """
+                INSERT INTO head_to_head (player1_key, player2_key, player1_wins, player2_wins,
+                    hard_p1_wins, hard_p2_wins, clay_p1_wins, clay_p2_wins, grass_p1_wins, grass_p2_wins,
+                    updated_at)
+                VALUES (:p1_key, :p2_key, :p1_wins, :p2_wins, :hard_p1, :hard_p2, :clay_p1, :clay_p2, 
+                    :grass_p1, :grass_p2, CURRENT_TIMESTAMP)
+                ON CONFLICT (player1_key, player2_key) DO UPDATE SET
+                    player1_wins = :p1_wins, player2_wins = :p2_wins,
+                    hard_p1_wins = :hard_p1, hard_p2_wins = :hard_p2,
+                    clay_p1_wins = :clay_p1, clay_p2_wins = :clay_p2,
+                    grass_p1_wins = :grass_p1, grass_p2_wins = :grass_p2,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                {
+                    "p1_key": p1_key, "p2_key": p2_key,
+                    "p1_wins": p1_wins, "p2_wins": p2_wins,
+                    "hard_p1": hard_p1, "hard_p2": hard_p2,
+                    "clay_p1": clay_p1, "clay_p2": clay_p2,
+                    "grass_p1": grass_p1, "grass_p2": grass_p2
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Error guardando H2H en BD: {e}")
+        
+        return {
+            "success": True,
+            "total_matches": p1_wins + p2_wins,
+            "player1_wins": p1_wins,
+            "player2_wins": p2_wins,
+            "surface_records": {
+                "Hard": [hard_p1, hard_p2],
+                "Clay": [clay_p1, clay_p2],
+                "Grass": [grass_p1, grass_p2]
+            },
+            "recent_matches": recent_matches
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error obteniendo H2H: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
