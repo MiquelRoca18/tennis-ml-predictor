@@ -76,6 +76,8 @@ class Config:
     # ==================== KELLY CRITERION ====================
     KELLY_ENABLED = os.getenv("KELLY_ENABLED", "true").lower() == "true"
     KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.05"))  # 5% Kelly (muy conservador)
+    MIN_STAKE_EUR = float(os.getenv("MIN_STAKE_EUR", "5"))  # Mínimo 5€ (igual que backtesting)
+    MAX_STAKE_PCT = float(os.getenv("MAX_STAKE_PCT", "0.10"))  # Máximo 10% del bankroll
 
     # ==================== BOOKMAKERS ====================
     # The Odds API
@@ -288,9 +290,11 @@ MAX_CUOTA=2.0
 MIN_PROBABILIDAD=0.60
 BANKROLL_INICIAL=1000
 
-# Kelly Criterion
+# Kelly Criterion (igual que backtesting)
 KELLY_ENABLED=true
 KELLY_FRACTION=0.05
+MIN_STAKE_EUR=5
+MAX_STAKE_PCT=0.10
 
 # Bookmakers
 ODDS_REGIONS=eu,us

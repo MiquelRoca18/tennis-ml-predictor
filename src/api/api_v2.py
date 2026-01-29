@@ -791,12 +791,16 @@ async def create_match_and_predict(request: MatchCreateRequest):
         elif (ev_j2 > umbral_ev and 
               request.jugador2_cuota < max_cuota and 
               prob_j2 > min_prob):
-            # Apostar a jugador 2
+            # Apostar a jugador 2 (stake igual que backtesting)
+            from src.utils.common import compute_kelly_stake_backtesting
             recomendacion = f"APOSTAR a {request.jugador2_nombre}"
             mejor_opcion = request.jugador2_nombre
             kelly_j1 = None
-            kelly_pct = (prob_j2 * request.jugador2_cuota - 1) / (request.jugador2_cuota - 1)
-            kelly_j2 = round(kelly_pct * Config.KELLY_FRACTION * 100, 2)
+            kelly_j2 = compute_kelly_stake_backtesting(
+                prob=prob_j2, cuota=request.jugador2_cuota, bankroll=Config.BANKROLL_INICIAL,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+            ) or None
         else:
             recomendacion = "NO APOSTAR"
             mejor_opcion = None
@@ -1012,12 +1016,16 @@ async def refresh_match_odds(match_id: int, jugador1_cuota: float, jugador2_cuot
         elif (ev_j2 > umbral_ev and 
               jugador2_cuota < max_cuota and 
               prob_j2 > min_prob):
-            # Apostar a jugador 2
+            # Apostar a jugador 2 (stake igual que backtesting)
+            from src.utils.common import compute_kelly_stake_backtesting
             recomendacion_nueva = f"APOSTAR a {partido['jugador2_nombre']}"
             mejor_opcion_nueva = partido["jugador2_nombre"]
             kelly_j1 = None
-            kelly_pct = (prob_j2 * jugador2_cuota - 1) / (jugador2_cuota - 1)
-            kelly_j2 = round(kelly_pct * Config.KELLY_FRACTION * 100, 2)
+            kelly_j2 = compute_kelly_stake_backtesting(
+                prob=prob_j2, cuota=jugador2_cuota, bankroll=Config.BANKROLL_INICIAL,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+            ) or None
         else:
             recomendacion_nueva = "NO APOSTAR"
             mejor_opcion_nueva = None

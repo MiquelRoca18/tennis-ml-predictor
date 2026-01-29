@@ -105,8 +105,8 @@ class PredictorCalibrado:
         from src.config.settings import Config
         from datetime import datetime
 
-        # Obtener servicio de generación de features (singleton)
-        feature_service = FeatureGeneratorService()
+        # Obtener servicio de generación de features (singleton, igual que backtesting)
+        feature_service = FeatureGeneratorService.get_instance()
 
         # PREDICCIÓN BIDIRECCIONAL (igual que backtesting)
         # Generar features para jugador1 (como 'jugador')
@@ -150,9 +150,8 @@ class PredictorCalibrado:
         # Calcular EV
         ev = self.calcular_ev(prob_j1_gana, cuota)
 
-        # Decisión
-        umbral_ev = 0.03
-        decision = "APOSTAR" if ev > umbral_ev else "NO APOSTAR"
+        # Decisión (usar mismo umbral que backtesting)
+        decision = "APOSTAR" if ev > Config.EV_THRESHOLD else "NO APOSTAR"
 
         # Probabilidad implícita de la cuota
         prob_implicita = 1 / cuota
@@ -160,12 +159,16 @@ class PredictorCalibrado:
         # Edge (ventaja sobre la casa)
         edge = prob_j1_gana - prob_implicita
 
-        # Kelly stake usando Config.KELLY_FRACTION
-        stake_recomendado = 0
-        if ev > 0:
-            kelly_pct = (prob_j1_gana * cuota - 1) / (cuota - 1)
-            kelly_pct = kelly_pct * Config.KELLY_FRACTION  # Usar configuración centralizada (5%)
-            stake_recomendado = max(kelly_pct * 100, 0)  # Stake en €
+        # Kelly stake igual que backtesting (bankroll, min 5€, max 10%)
+        from src.utils.common import compute_kelly_stake_backtesting
+        stake_recomendado = compute_kelly_stake_backtesting(
+            prob=prob_j1_gana,
+            cuota=cuota,
+            bankroll=Config.BANKROLL_INICIAL,
+            kelly_fraction=Config.KELLY_FRACTION,
+            min_stake_eur=Config.MIN_STAKE_EUR,
+            max_stake_pct=Config.MAX_STAKE_PCT,
+        )
 
         # Formatear respuesta para la API
         return {

@@ -578,8 +578,12 @@ class DailyMatchFetcher:
                 recomendacion = f"APOSTAR a {player2_name}"
                 mejor_opcion = player2_name
                 kelly_j1 = None
-                kelly_pct = (prob_j2 * player2_odds - 1) / (player2_odds - 1)
-                kelly_j2 = round(kelly_pct * Config.KELLY_FRACTION * 100, 2)
+                from src.utils.common import compute_kelly_stake_backtesting
+                kelly_j2 = compute_kelly_stake_backtesting(
+                    prob=prob_j2, cuota=player2_odds, bankroll=Config.BANKROLL_INICIAL,
+                    kelly_fraction=Config.KELLY_FRACTION,
+                    min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+                ) or None
             else:
                 recomendacion = "NO APOSTAR"
                 mejor_opcion = None

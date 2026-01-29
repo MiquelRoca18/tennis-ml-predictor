@@ -305,6 +305,11 @@ class MatchUpdateService:
 
                 # Log del cambio
                 self._log_change(match, estado_actual, nuevo_estado, update_data)
+
+                # Actualizar estado del predictor (igual que backtesting) cuando hay partido completado
+                if nuevo_estado == "completado" and update_data.get("resultado_ganador"):
+                    self._actualizar_feature_generator_completado(match, update_data)
+
                 cambios_detectados = True
 
             return cambios_detectados
@@ -554,6 +559,39 @@ class MatchUpdateService:
                 )
             else:
                 logger.info(f"✅ Partido completado: {jugador1} vs {jugador2} ({marcador})")
+
+    def _actualizar_feature_generator_completado(self, match: Dict, update_data: Dict) -> None:
+        """
+        Notifica al FeatureGeneratorService que un partido se completó,
+        para actualizar ELO e histórico (igual que backtesting).
+        """
+        ganador = update_data.get("resultado_ganador")
+        if not ganador:
+            return
+        j1 = match.get("jugador1_nombre") or ""
+        j2 = match.get("jugador2_nombre") or ""
+        perdedor = j2 if ganador == j1 else j1
+        superficie = match.get("superficie") or "Hard"
+        r1 = match.get("jugador1_ranking")
+        r2 = match.get("jugador2_ranking")
+        winner_rank = int(r1) if r1 is not None and ganador == j1 else (int(r2) if r2 is not None else 999)
+        loser_rank = int(r2) if r2 is not None and perdedor == j2 else (int(r1) if r1 is not None else 999)
+        fecha = match.get("fecha_partido")
+        if not fecha:
+            return
+        try:
+            from src.prediction.feature_generator_service import get_instance
+            svc = get_instance()
+            svc.actualizar_con_partido(
+                winner_name=ganador,
+                loser_name=perdedor,
+                surface=superficie,
+                winner_rank=winner_rank,
+                loser_rank=loser_rank,
+                fecha=fecha,
+            )
+        except Exception as e:
+            logger.debug(f"No se pudo actualizar feature generator: {e}")
 
 
 # ============================================================

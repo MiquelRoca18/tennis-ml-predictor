@@ -19,6 +19,17 @@ from src.utils.player_name_normalizer import PlayerNameNormalizer
 
 logger = logging.getLogger(__name__)
 
+# Singleton (igual que backtesting: un único estado que se actualiza con cada partido)
+_instance = None
+
+
+def get_instance() -> "FeatureGeneratorService":
+    """Devuelve la instancia singleton del servicio (crea si no existe)."""
+    global _instance
+    if _instance is None:
+        _instance = FeatureGeneratorService()
+    return _instance
+
 
 class FeatureGeneratorService:
     """
@@ -278,6 +289,65 @@ class FeatureGeneratorService:
             else:
                 return ultimo.get("loser_rank", 999)
         return 999
+
+    def actualizar_con_partido(
+        self,
+        winner_name: str,
+        loser_name: str,
+        surface: str,
+        winner_rank: int,
+        loser_rank: int,
+        fecha,
+    ) -> None:
+        """
+        Actualiza el estado interno después de un partido completado (igual que backtesting).
+        Añade el partido al histórico y actualiza ELO; los demás calculadores siguen
+        usando el df inicial (como en backtesting).
+
+        Args:
+            winner_name: Nombre del ganador
+            loser_name: Nombre del perdedor
+            surface: Superficie (Hard/Clay/Grass)
+            winner_rank: Ranking del ganador
+            loser_rank: Ranking del perdedor
+            fecha: Fecha del partido (date o datetime)
+        """
+        try:
+            surface = self._normalizar_superficie(surface)
+            fecha = pd.to_datetime(fecha)
+            nuevo_partido = pd.DataFrame(
+                [
+                    {
+                        "tourney_date": fecha,
+                        "tourney_name": "",
+                        "surface": surface,
+                        "winner_name": winner_name,
+                        "loser_name": loser_name,
+                        "winner_rank": winner_rank if winner_rank else 999,
+                        "loser_rank": loser_rank if loser_rank else 999,
+                        "score": "",
+                    }
+                ]
+            )
+            self.df_historico = pd.concat(
+                [self.df_historico, nuevo_partido], ignore_index=True
+            )
+            self.df_historico = self.df_historico.sort_values("tourney_date").reset_index(
+                drop=True
+            )
+            self.elo_system.update_ratings(winner_name, loser_name, surface)
+            logger.debug(
+                f"📊 Feature state updated: {winner_name} d. {loser_name} ({surface})"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️  actualizar_con_partido failed: {e}")
+
+    def _normalizar_superficie(self, superficie: str) -> str:
+        """Mapea superficies a Hard/Clay/Grass (igual que backtesting)."""
+        if not superficie:
+            return "Hard"
+        m = {"Outdoor": "Hard", "Indoor": "Hard", "Carpet": "Hard", "Hard": "Hard", "Clay": "Clay", "Grass": "Grass"}
+        return m.get(str(superficie).strip(), "Hard")
 
     def generar_features(self, jugador, oponente, superficie, fecha=None):
         """

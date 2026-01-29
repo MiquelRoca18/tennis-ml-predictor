@@ -12,6 +12,34 @@ import sys
 import joblib  # Añadido para cargar modelos correctamente
 
 
+def compute_kelly_stake_backtesting(
+    prob: float,
+    cuota: float,
+    bankroll: float,
+    kelly_fraction: float = 0.05,
+    min_stake_eur: float = 5.0,
+    max_stake_pct: float = 0.10,
+) -> float:
+    """
+    Calcula stake en € igual que backtesting_produccion_real_completo:
+    bankroll * kelly_pct, mínimo min_stake_eur, máximo max_stake_pct del bankroll.
+
+    Returns:
+        Stake en euros, o 0.0 si no se debe apostar.
+    """
+    if prob <= (1.0 / cuota):
+        return 0.0
+    kelly_pct = (prob * cuota - 1) / (cuota - 1)
+    kelly_pct = kelly_pct * kelly_fraction
+    kelly_pct = min(kelly_pct, max_stake_pct)
+    if kelly_pct <= 0.01:
+        return 0.0
+    stake = bankroll * kelly_pct
+    if stake < min_stake_eur:
+        return 0.0
+    return round(stake, 2)
+
+
 def load_model(model_path: str) -> Any:
     """
     Carga modelo de forma segura usando joblib
