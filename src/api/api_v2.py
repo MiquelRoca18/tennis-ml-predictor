@@ -1523,6 +1523,104 @@ async def get_retraining_status():
 # ============================================================
 
 
+@app.get("/admin/compare-matches", tags=["Admin"])
+async def compare_matches_api_vs_db(
+    date_param: Optional[str] = Query(None, alias="date", description="Fecha YYYY-MM-DD (ej: 2026-01-29)")
+):
+    """
+    Compara partidos de una fecha: base de datos vs API api-tennis.
+    Ejemplo: GET /admin/compare-matches?date=2026-01-29
+    """
+    date_str = date_param or date.today().strftime("%Y-%m-%d")
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fecha inválida. Use YYYY-MM-DD")
+
+    db_matches = db.get_matches_by_date(target_date)
+    db_count = len(db_matches)
+    db_event_keys = {str(m.get("event_key")) for m in db_matches if m.get("event_key")}
+    db_list = [
+        {"event_key": m.get("event_key"), "jugador1": m.get("jugador1_nombre"), "jugador2": m.get("jugador2_nombre"), "torneo": m.get("torneo")}
+        for m in db_matches
+    ]
+
+    data = api_client._make_request("get_fixtures", {"date_start": date_str, "date_stop": date_str})
+    if not data or "result" not in data:
+        return {
+            "date": date_str,
+            "db_count": db_count,
+            "db_matches": db_list,
+            "api_total": 0,
+            "api_atp_count": 0,
+            "api_error": "API no devolvió datos",
+            "match": False,
+            "missing_in_db": [],
+            "summary": f"BD={db_count}. API sin datos.",
+        }
+
+    result = data["result"]
+    if isinstance(result, list):
+        api_raw = result
+    elif isinstance(result, dict):
+        if result.get("event_key") is not None or result.get("event_first_player") is not None:
+            api_raw = [result]
+        else:
+            api_raw = list(result.values())
+    else:
+        api_raw = [result] if result else []
+    api_total = len(api_raw)
+
+    # Mismo filtro que daily_match_fetcher: ATP + Challenger + ITF Men Singles; excluir dobles, Boys, Girls, WTA
+    atp_singles = []
+    for raw in api_raw:
+        if not isinstance(raw, dict):
+            continue
+        event_type = (raw.get("event_type_type") or raw.get("event_type") or "").upper()
+        tournament = (raw.get("tournament_name") or "").lower()
+        p1 = raw.get("event_first_player") or raw.get("event_home_team") or ""
+        p2 = raw.get("event_second_player") or raw.get("event_away_team") or ""
+        if "/" in p1 or "/" in p2:
+            continue
+        if "DOUBLES" in event_type or "doubles" in tournament:
+            continue
+        if "WTA" in event_type or "WOMEN" in event_type or "women" in tournament or "wta" in tournament:
+            continue
+        if "GIRLS" in event_type or "girls" in tournament or "BOYS" in event_type or "boys" in tournament:
+            continue
+        if not ("SINGLES" in event_type or "SINGLE" in event_type):
+            continue
+        is_atp = "ATP" in event_type
+        is_challenger = "CHALLENGER" in event_type and "MEN" in event_type
+        is_itf_men = "ITF" in event_type and "MEN" in event_type
+        is_men_singles = "MEN" in event_type
+        if not (is_atp or is_challenger or is_itf_men or is_men_singles):
+            continue
+        atp_singles.append(raw)
+
+    api_atp_count = len(atp_singles)
+    api_event_keys = {str(m.get("event_key")) for m in atp_singles if m.get("event_key")}
+    missing_in_db = api_event_keys - db_event_keys
+    missing_list = [
+        {"event_key": ek, "player1": next((m.get("event_first_player") for m in atp_singles if str(m.get("event_key")) == ek), ""), "player2": next((m.get("event_second_player") for m in atp_singles if str(m.get("event_key")) == ek), ""), "tournament": next((m.get("tournament_name") for m in atp_singles if str(m.get("event_key")) == ek), "")}
+        for ek in sorted(missing_in_db)
+    ]
+    match_ok = db_count == api_atp_count and not missing_in_db
+
+    summary = f"BD={db_count} partidos, API(total)={api_total}, API(ATP Singles)={api_atp_count}. "
+    summary += "✅ Coinciden." if match_ok else f"⚠️ Faltan {len(missing_in_db)} en BD." if missing_in_db else "Diferencia en conteo."
+
+    return {
+        "date": date_str,
+        "db_count": db_count,
+        "db_matches": db_list,
+        "api_total": api_total,
+        "api_atp_count": api_atp_count,
+        "match": match_ok,
+        "missing_in_db_count": len(missing_in_db),
+        "missing_in_db": missing_list,
+        "summary": summary,
+    }
 
 
 @app.get("/admin/debug-postgres", tags=["Admin"])
