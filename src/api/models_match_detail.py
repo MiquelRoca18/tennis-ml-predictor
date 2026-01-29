@@ -324,6 +324,8 @@ class MatchInfo(BaseModel):
     round: Optional[str] = None
     surface: Surface
     court: Optional[str] = None
+    # Motivo de finalización (API: "Finished", "Retired", "Walk Over", etc.)
+    event_status: Optional[str] = None
 
 
 class MatchFullResponse(BaseModel):

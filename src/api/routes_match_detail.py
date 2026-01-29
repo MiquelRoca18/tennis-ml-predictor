@@ -119,6 +119,7 @@ async def get_match_full(match_id: int):
             tournament=match.get("torneo", "Unknown"),
             round=match.get("ronda"),
             surface=Surface(superficie),
+            event_status=match.get("event_status"),
         )
         
         # 3. Construir información de jugadores (de BD, rápido)

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS matches (
     resultado_ganador VARCHAR(200),  -- Nombre del ganador
     resultado_marcador VARCHAR(100),  -- Ej: "6-4, 7-5, 6-3"
     event_final_result VARCHAR(20),  -- Ej: "2-0", "2-1"
+    event_status VARCHAR(50),  -- API: "Finished", "Retired", "Walk Over", etc.
     
     -- Estado del partido
     estado VARCHAR(20) NOT NULL DEFAULT 'pendiente' CHECK(estado IN ('pendiente', 'en_juego', 'completado', 'cancelado')),

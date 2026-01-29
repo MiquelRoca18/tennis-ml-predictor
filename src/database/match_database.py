@@ -225,10 +225,39 @@ class MatchDatabase:
                 self.conn.executescript(schema_script)
                 self.conn.commit()
                 logger.info("✅ SQLite schema initialized")
+            
+            # Migración: columna event_status (Retired, Walk Over, etc.)
+            self._migrate_add_event_status()
                 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
             # Don't fail completely, tables might already exist
+
+    def _migrate_add_event_status(self):
+        """Añade columna event_status si no existe (para retiros/walkovers)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        DO $$ BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public' AND table_name = 'matches' AND column_name = 'event_status'
+                        ) THEN
+                            ALTER TABLE matches ADD COLUMN event_status VARCHAR(50);
+                        END IF;
+                        END $$
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("ALTER TABLE matches ADD COLUMN event_status VARCHAR(50)")
+                self.conn.commit()
+        except Exception as e:
+            if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                logger.debug("Columna event_status ya existe")
+            else:
+                logger.warning(f"Migración event_status: {e}")
 
 
     # ============================================================
@@ -515,6 +544,8 @@ class MatchDatabase:
             params["event_live"] = event_live
         
         if event_status is not None:
+            updates.append("event_status = :event_status")
+            params["event_status"] = event_status
             # Mapear estado de API a nuestro estado (incl. Retired, Walk Over, etc.)
             event_status_lower = event_status.lower()
             finished_keywords = [
