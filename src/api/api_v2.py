@@ -459,25 +459,26 @@ async def get_matches_by_date(
                     kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
                 )
 
-            # Construir scores de forma simple (sin consultas adicionales)
-            # Los detalles completos se cargan en el endpoint de detalle
-            # No mostrar "en directo" ni live para partidos con fecha futura
+            # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador)
+            # Así todos los partidos usan la misma variable/fuente y se muestran igual
             match_scores = None
             if not is_future and (p.get("resultado_marcador") or p.get("event_final_result")):
                 try:
-                    marcador = p.get("resultado_marcador") or p.get("event_final_result")
-                    sets_data = _parse_marcador_to_sets(marcador) if marcador else []
-                    if sets_data or p.get("event_final_result"):
-                        match_scores = MatchScores(
-                            sets_result=p.get("event_final_result"),
-                            sets=sets_data,
-                            live=LiveData(
-                                current_game_score=p.get("event_game_result"),
-                                current_server=p.get("event_serve"),
-                                current_set=len(sets_data) + 1 if sets_data else 1,
-                                is_tiebreak=False
-                            ) if effective_estado == "en_juego" else None
-                        )
+                    match_scores = _build_match_scores(p, db)
+                    if match_scores is None and p.get("event_final_result"):
+                        marcador = p.get("resultado_marcador") or p.get("event_final_result")
+                        sets_data = _parse_marcador_to_sets(marcador) if marcador else []
+                        if sets_data:
+                            match_scores = MatchScores(
+                                sets_result=p.get("event_final_result"),
+                                sets=sets_data,
+                                live=LiveData(
+                                    current_game_score=p.get("event_game_result"),
+                                    current_server=p.get("event_serve"),
+                                    current_set=len(sets_data) + 1,
+                                    is_tiebreak=False
+                                ) if effective_estado == "en_juego" else None
+                            )
                 except Exception:
                     pass
             
@@ -508,6 +509,7 @@ async def get_matches_by_date(
                 jugador2=jugador2,
                 prediccion=prediccion,
                 resultado=resultado,
+                event_status=p.get("event_status"),
             )
 
             partidos.append(partido)

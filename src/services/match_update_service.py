@@ -246,19 +246,33 @@ class MatchUpdateService:
                     if event_time != match.get("hora_inicio"):
                         logger.debug(f"⏰ Hora actualizada: {match.get('hora_inicio')} → {event_time}")
 
-                # Extraer marcador detallado desde scores (juegos por set)
+                # Extraer marcador detallado desde scores (juegos por set), orden jugador1-jugador2
                 scores = api_match.get("scores", [])
                 if scores:
-                    # Construir marcador detallado: "6-4, 7-5, 6-3"
-                    marcador_detallado = self._build_detailed_score(scores)
+                    swap = not self._api_first_is_our_jugador1(api_match, match)
+                    marcador_detallado = self._build_detailed_score(scores, swap_order=swap)
                     if marcador_detallado:
                         update_data["resultado_marcador"] = marcador_detallado
                 
-                # Fallback: usar event_home/away_final_result si no hay scores
+                # Fallback: solo si parece JUEGOS por set (no resultado en sets tipo 0-3)
                 if not update_data.get("resultado_marcador"):
-                    event_scores = api_match.get("event_home_final_result", "") + " - " + api_match.get("event_away_final_result", "")
-                    if event_scores and event_scores != " - ":
-                        update_data["resultado_marcador"] = event_scores
+                    home = api_match.get("event_home_final_result", "").strip()
+                    away = api_match.get("event_away_final_result", "").strip()
+                    if home and away:
+                        try:
+                            h, a = int(home), int(away)
+                            if max(h, a) >= 4:
+                                update_data["resultado_marcador"] = f"{home}-{away}"
+                        except (ValueError, TypeError):
+                            pass
+
+                # Si completado y aún no tenemos juegos por set, intentar get_events (scores o games)
+                if nuevo_estado == "completado" and not update_data.get("resultado_marcador"):
+                    event_detail = self._fetch_scores_from_get_events(event_key, match)
+                    if event_detail:
+                        update_data["resultado_marcador"] = event_detail.get("marcador")
+                        if event_detail.get("scores"):
+                            api_match = {**api_match, "scores": event_detail["scores"]}
 
                 # Si hay resultado final, extraer ganador y marcador completo
                 if event_final_result and event_final_result != "-":
@@ -298,8 +312,8 @@ class MatchUpdateService:
                 
                 # Si el partido está completado, guardar estadísticas detalladas
                 if nuevo_estado == "completado":
-                    # Guardar scores por set
-                    self._save_match_sets_from_api(match_id, api_match)
+                    # Guardar scores por set (orden jugador1-jugador2)
+                    self._save_match_sets_from_api(match_id, api_match, match)
                     # Guardar estadísticas detalladas (juegos y puntos)
                     self._store_detailed_stats(match_id, event_key)
 
@@ -318,33 +332,96 @@ class MatchUpdateService:
             logger.debug(f"Error consultando API para partido {match_id}: {e}")
             return False
 
-    def _build_detailed_score(self, scores: List[Dict]) -> Optional[str]:
+    def _fetch_scores_from_get_events(self, event_key: str, db_match: Dict) -> Optional[Dict]:
+        """
+        Obtiene juegos por set desde get_events (scores o construidos desde games).
+        Returns: {"marcador": "6-4, 6-3, 6-2", "scores": [{score_set, score_first, score_second}, ...]} o None.
+        """
+        try:
+            data = self.api_client._make_request("get_events", {"event_key": event_key})
+            if not data or not data.get("result"):
+                return None
+            result = data["result"]
+            if isinstance(result, list):
+                result = result[0] if result else {}
+            scores = result.get("scores")
+            if scores and isinstance(scores, list):
+                swap = not self._api_first_is_our_jugador1(result, db_match)
+                marcador = self._build_detailed_score(scores, swap_order=swap)
+                if marcador:
+                    return {"marcador": marcador, "scores": scores}
+            games = result.get("games") or []
+            if games:
+                set_games: Dict[int, List[Dict]] = {}
+                for g in games:
+                    sn = int(g.get("set_number", 0))
+                    if sn not in set_games:
+                        set_games[sn] = []
+                    set_games[sn].append(g)
+                built = []
+                for sn in sorted(set_games.keys()):
+                    first_won = second_won = 0
+                    for g in set_games[sn]:
+                        w = g.get("winner")
+                        if w is None:
+                            continue
+                        ws = str(w).lower()
+                        if ws in ("first player", "first", "1") or w == 1:
+                            first_won += 1
+                        elif ws in ("second player", "second", "2") or w == 2:
+                            second_won += 1
+                    if first_won > 0 or second_won > 0:
+                        built.append({"score_set": sn, "score_first": str(first_won), "score_second": str(second_won)})
+                if built:
+                    swap = not self._api_first_is_our_jugador1(result, db_match)
+                    marcador = self._build_detailed_score(built, swap_order=swap)
+                    if marcador:
+                        return {"marcador": marcador, "scores": built}
+        except Exception as e:
+            logger.debug(f"Error obteniendo scores desde get_events: {e}")
+        return None
+
+    def _api_first_is_our_jugador1(self, api_match: Dict, db_match: Dict) -> bool:
+        """True si API first/home corresponde a nuestro jugador1 (para no intercambiar scores)."""
+        api_first = (api_match.get("event_first_player") or api_match.get("event_home_team") or "").strip()
+        if not api_first:
+            return True
+        j1 = (db_match.get("jugador1_nombre") or db_match.get("jugador1") or "").strip()
+        if not j1:
+            return True
+        api_first_norm = api_first.lower().replace("-", " ").split()
+        j1_norm = j1.lower().replace("-", " ").split()
+        if api_first_norm and j1_norm:
+            if api_first_norm[-1] == j1_norm[-1]:
+                return True
+            if any(a in j1_norm for a in api_first_norm) or any(a in api_first_norm for a in j1_norm):
+                return True
+        return False
+
+    def _build_detailed_score(self, scores: List[Dict], swap_order: bool = False) -> Optional[str]:
         """
         Construye el marcador detallado desde los scores por set.
+        Siempre en orden jugador1 - jugador2 (nuestro partido).
         
         Args:
-            scores: Lista de scores desde API (ej: [{"score_first": "6", "score_second": "4", "score_set": "1"}])
-            
-        Returns:
-            Marcador formateado (ej: "6-4, 7-5, 6-3") o None
+            scores: Lista de scores desde API (score_first, score_second, score_set)
+            swap_order: Si True, first<->second para que quede jugador1-jugador2
         """
         if not scores:
             return None
         
         try:
-            # Ordenar por set_number
             sorted_scores = sorted(scores, key=lambda x: int(x.get("score_set", 0)))
-            
             set_scores = []
             for score in sorted_scores:
                 p1 = score.get("score_first", "0")
                 p2 = score.get("score_second", "0")
+                if swap_order:
+                    p1, p2 = p2, p1
                 if p1 and p2:
                     set_scores.append(f"{p1}-{p2}")
-            
             if set_scores:
                 return ", ".join(set_scores)
-            
             return None
         except Exception as e:
             logger.debug(f"Error construyendo marcador detallado: {e}")
@@ -361,10 +438,10 @@ class MatchUpdateService:
             Marcador formateado o None
         """
         try:
-            # PRIORIDAD 1: Usar scores detallados
+            # PRIORIDAD 1: Usar scores detallados (caller must pass swap if needed; live has no match context here)
             scores = api_match.get("scores", [])
             if scores:
-                detailed = self._build_detailed_score(scores)
+                detailed = self._build_detailed_score(scores, swap_order=False)
                 if detailed:
                     return detailed
             
@@ -393,25 +470,23 @@ class MatchUpdateService:
         except Exception as e:
             logger.error(f"Error actualizando ganador: {e}")
 
-    def _save_match_sets_from_api(self, match_id: int, api_match: Dict):
+    def _save_match_sets_from_api(self, match_id: int, api_match: Dict, db_match: Optional[Dict] = None):
         """
-        Extrae y guarda los scores por set desde la respuesta de la API
-        
-        Args:
-            match_id: ID del partido
-            api_match: Datos del partido de la API
+        Extrae y guarda los scores por set desde la respuesta de la API.
+        Orden siempre jugador1-jugador2 (nuestro partido).
         """
         try:
             scores = api_match.get("scores", [])
             if not scores:
-                # Intentar parsear desde resultado_marcador si existe
                 return
-            
+            swap = bool(db_match) and not self._api_first_is_our_jugador1(api_match, db_match)
             sets_data = []
             for score in scores:
                 set_number = int(score.get("score_set", 0))
-                player1_score = int(score.get("score_first", 0))
-                player2_score = int(score.get("score_second", 0))
+                p_first = int(score.get("score_first", 0))
+                p_second = int(score.get("score_second", 0))
+                player1_score = p_second if swap else p_first
+                player2_score = p_first if swap else p_second
                 
                 # Detectar tiebreak
                 tiebreak_score = None

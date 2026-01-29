@@ -392,6 +392,9 @@ class MatchResponse(BaseModel):
     # Resultado (si existe)
     resultado: Optional[MatchResult] = None
 
+    # Motivo de finalización (Retired, Walk Over, etc.) para mostrar en card
+    event_status: Optional[str] = None
+
     class Config:
         json_schema_extra = {
             "example": {
