@@ -198,6 +198,22 @@ class MatchUpdateService:
             event_status = api_match.get("event_status", "")
             event_time = api_match.get("event_time")
 
+            # Si el partido es en fecha futura, no confiar en event_live=1 (bug API o timezone)
+            from datetime import date as date_type
+            match_date_val = match_date
+            if hasattr(match_date_val, "date"):
+                match_date_val = match_date_val.date()
+            elif isinstance(match_date_val, str):
+                try:
+                    match_date_val = datetime.strptime(match_date_val[:10], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    match_date_val = date_type.today()
+            if match_date_val > date_type.today():
+                event_live = "0"
+                if not (event_final_result and event_final_result != "-"):
+                    event_status = ""  # forzar pendiente si no hay resultado
+                logger.debug(f"📅 Partido {match_id} es futuro ({match_date_val}), forzando event_live=0")
+
             # Determinar nuevo estado
             nuevo_estado = self._determine_estado(event_live, event_final_result, event_status)
 
@@ -223,11 +239,12 @@ class MatchUpdateService:
                     "event_status": event_status,
                 }
                 
-                # Actualizar hora si ha cambiado (por retrasos)
+                # Actualizar hora desde API (corrige horarios y cambios de la organización)
                 event_time = api_match.get("event_time")
-                if event_time and event_time != match.get("hora_inicio"):
+                if event_time:
                     update_data["hora_inicio"] = event_time
-                    logger.debug(f"⏰ Hora actualizada: {match.get('hora_inicio')} → {event_time}")
+                    if event_time != match.get("hora_inicio"):
+                        logger.debug(f"⏰ Hora actualizada: {match.get('hora_inicio')} → {event_time}")
 
                 # Extraer marcador detallado desde scores (juegos por set)
                 scores = api_match.get("scores", [])

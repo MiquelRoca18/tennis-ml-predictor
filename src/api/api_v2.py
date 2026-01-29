@@ -408,7 +408,22 @@ async def get_matches_by_date(
 
         # Convertir a modelos Pydantic
         partidos = []
+        today = date.today()
         for p in partidos_raw:
+            # Partidos con fecha futura: nunca mostrar como "en directo" ni resultado
+            match_date = p.get("fecha_partido")
+            if isinstance(match_date, str):
+                try:
+                    match_date = datetime.strptime(match_date[:10], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    match_date = today
+            elif hasattr(match_date, "date") and callable(getattr(match_date, "date", None)):
+                match_date = match_date.date()
+            elif not isinstance(match_date, date):
+                match_date = today
+            is_future = match_date > today
+            effective_estado = "pendiente" if is_future else p.get("estado", "pendiente")
+
             # Construir jugadores
             jugador1 = JugadorInfo(
                 nombre=p["jugador1_nombre"],
@@ -446,8 +461,9 @@ async def get_matches_by_date(
 
             # Construir scores de forma simple (sin consultas adicionales)
             # Los detalles completos se cargan en el endpoint de detalle
+            # No mostrar "en directo" ni live para partidos con fecha futura
             match_scores = None
-            if p.get("resultado_marcador") or p.get("event_final_result"):
+            if not is_future and (p.get("resultado_marcador") or p.get("event_final_result")):
                 try:
                     marcador = p.get("resultado_marcador") or p.get("event_final_result")
                     sets_data = _parse_marcador_to_sets(marcador) if marcador else []
@@ -460,14 +476,14 @@ async def get_matches_by_date(
                                 current_server=p.get("event_serve"),
                                 current_set=len(sets_data) + 1 if sets_data else 1,
                                 is_tiebreak=False
-                            ) if p.get("estado") == "en_juego" else None
+                            ) if effective_estado == "en_juego" else None
                         )
                 except Exception:
                     pass
             
-            # Construir resultado (para partidos completados o en juego)
+            # Construir resultado (solo para completados o en juego, nunca para fecha futura)
             resultado = None
-            if p.get("resultado_ganador") or p.get("estado") in ["completado", "en_juego"]:
+            if not is_future and (p.get("resultado_ganador") or effective_estado in ["completado", "en_juego"]):
                 resultado = MatchResult(
                     ganador=p.get("resultado_ganador"),
                     marcador=p.get("resultado_marcador"),
@@ -479,10 +495,10 @@ async def get_matches_by_date(
                     roi=p.get("ganancia") / p.get("stake") if p.get("stake") else None,
                 )
 
-            # Construir partido completo
+            # Construir partido completo (estado efectivo: pendiente si fecha futura)
             partido = MatchResponse(
                 id=p["id"],
-                estado=EstadoPartido(p["estado"]),
+                estado=EstadoPartido(effective_estado),
                 fecha_partido=p["fecha_partido"],
                 hora_inicio=p.get("hora_inicio"),
                 torneo=p.get("torneo"),
@@ -2207,6 +2223,27 @@ async def startup_event():
             replace_existing=True,
         )
 
+        # Job 4b: Sincronizar fixtures hoy y mañana (evitar partidos faltantes por torneo)
+        def sync_today_tomorrow_fixtures():
+            """Obtiene get_fixtures por fecha para hoy y mañana y crea partidos que falten."""
+            try:
+                from src.automation.daily_match_fetcher import DailyMatchFetcher
+                pred = get_predictor()
+                fetcher = DailyMatchFetcher(db, api_client, pred)
+                stats = fetcher.sync_fixtures_for_dates()
+                if stats.get("matches_new", 0) > 0:
+                    logger.info(f"✅ Sync hoy/mañana: {stats['matches_new']} partidos nuevos")
+            except Exception as e:
+                logger.debug(f"Sync hoy/mañana: {e}")
+
+        scheduler.add_job(
+            func=sync_today_tomorrow_fixtures,
+            trigger=IntervalTrigger(hours=6),  # Cada 6 horas
+            id="sync_today_tomorrow_fixtures_job",
+            name="Sincronizar fixtures hoy y mañana (cada 6h)",
+            replace_existing=True,
+        )
+
         # Job 5: Limpieza automática de partidos antiguos (2:00 AM cada día)
         def cleanup_old_matches():
             """Elimina partidos antiguos (>7 días)"""
@@ -2297,6 +2334,7 @@ async def startup_event():
         logger.info("   - Sincronización de partidos en vivo: cada 60 segundos")
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
+        logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")
         logger.info("   - Verificación de commits TML: cada hora")
         logger.info("   - Fetch diario de partidos: 6:00 AM")
         logger.info("   - Limpieza de partidos antiguos (>7 días): 2:00 AM")

@@ -239,6 +239,68 @@ class DailyMatchFetcher:
             stats["errors"].append(error_msg)
             return stats
 
+    def sync_fixtures_for_dates(self, dates: Optional[List[date]] = None) -> Dict:
+        """
+        Sincroniza fixtures por fecha: obtiene get_fixtures para cada fecha y crea
+        partidos que no existan. Sirve para no perder partidos que otras apps muestran.
+        Por defecto sincroniza hoy y mañana.
+        """
+        if dates is None:
+            dates = [date.today(), date.today() + timedelta(days=1)]
+        stats = {
+            "timestamp": datetime.now().isoformat(),
+            "dates": [d.isoformat() for d in dates],
+            "matches_found": 0,
+            "matches_new": 0,
+            "matches_existing": 0,
+            "errors": [],
+        }
+        try:
+            for target_date in dates:
+                date_str = target_date.strftime("%Y-%m-%d")
+                data = self.api_client._make_request("get_fixtures", {
+                    "date_start": date_str,
+                    "date_stop": date_str,
+                })
+                if not data or "result" not in data:
+                    continue
+                result = data["result"]
+                raw_list = result if isinstance(result, list) else list(result.values()) if isinstance(result, dict) else []
+                # Normalizar: cada elemento puede ser un partido (dict) o lista de uno
+                matches_raw = []
+                for m in raw_list:
+                    if isinstance(m, list):
+                        matches_raw.extend(m)
+                    elif isinstance(m, dict):
+                        matches_raw.append(m)
+                all_odds = self.api_client.get_all_odds_batch(date_str, date_str) or {}
+                for raw_match in matches_raw:
+                    try:
+                        match_info = self.api_client.extract_match_info(raw_match)
+                        if not match_info:
+                            continue
+                        match_key = match_info.get("match_id") or match_info.get("event_key")
+                        if match_key and str(match_key) in all_odds:
+                            best = self.api_client.extract_best_odds(all_odds, match_key)
+                            if best:
+                                match_info.update(best)
+                        stats["matches_found"] += 1
+                        result = self._process_match(match_info)
+                        if result.get("created"):
+                            stats["matches_new"] += 1
+                        elif not result.get("filtered"):
+                            stats["matches_existing"] += 1
+                    except Exception as e:
+                        stats["errors"].append(str(e))
+                        logger.debug(f"Error procesando partido {date_str}: {e}")
+            if stats["matches_new"] > 0:
+                logger.info(f"✅ Sync fixtures: {stats['matches_new']} nuevos, {stats['matches_existing']} ya existían")
+            return stats
+        except Exception as e:
+            logger.error(f"❌ Error sync_fixtures_for_dates: {e}", exc_info=True)
+            stats["errors"].append(str(e))
+            return stats
+
     def _determine_match_status(
         self, event_live: str, event_final_result: str, event_status: str
     ) -> str:
