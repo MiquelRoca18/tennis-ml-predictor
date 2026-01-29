@@ -162,14 +162,9 @@ async def get_match_full(match_id: int):
         
         # 4. Obtener scores de la BD (rápido)
         scores = None
-        if match.get("resultado_marcador"):
-            try:
-                scores = stats_calculator.parse_score_string(match["resultado_marcador"])
-            except Exception:
-                pass
         
-        # Intentar obtener de match_sets si no hay scores parseados
-        if not scores or not scores.sets:
+        # PRIORIDAD 1: Intentar obtener de match_sets (más fiable)
+        try:
             if hasattr(db, 'get_match_sets'):
                 sets_db = db.get_match_sets(match_id)
                 if sets_db:
@@ -193,6 +188,36 @@ async def get_match_full(match_id: int):
                         ))
                     if sets:
                         scores = MatchScores(sets_won=[p1_sets, p2_sets], sets=sets)
+                        logger.debug(f"✅ Scores de match_sets: {p1_sets}-{p2_sets}")
+        except Exception as e:
+            logger.debug(f"Error obteniendo match_sets: {e}")
+        
+        # PRIORIDAD 2: Fallback a resultado_marcador (parsear string)
+        if not scores or not scores.sets:
+            marcador = match.get("resultado_marcador")
+            if marcador and "-" in marcador and any(c.isdigit() for c in marcador):
+                # Solo parsear si parece un marcador válido (ej: "6-4, 7-5" no "2 - 1")
+                # El formato "2 - 1" es resultado en sets, no juegos
+                if "," in marcador or len(marcador.split()) > 2:
+                    try:
+                        scores = stats_calculator.parse_score_string(marcador)
+                        logger.debug(f"✅ Scores parseados de resultado_marcador")
+                    except Exception as e:
+                        logger.debug(f"Error parseando marcador: {e}")
+        
+        # PRIORIDAD 3: Usar event_final_result para sets_won si no hay scores detallados
+        if not scores or not scores.sets:
+            event_final_result = match.get("event_final_result")
+            if event_final_result and "-" in event_final_result:
+                try:
+                    parts = event_final_result.replace(" ", "").split("-")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        p1_sets = int(parts[0])
+                        p2_sets = int(parts[1])
+                        scores = MatchScores(sets_won=[p1_sets, p2_sets], sets=[])
+                        logger.debug(f"✅ Sets_won de event_final_result: {p1_sets}-{p2_sets}")
+                except Exception:
+                    pass
         
         # 5. Obtener estadísticas y timeline de la BD (si existen pre-calculadas)
         stats, timeline = _load_stats_from_db(db, match_id)

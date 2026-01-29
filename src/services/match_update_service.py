@@ -229,10 +229,19 @@ class MatchUpdateService:
                     update_data["hora_inicio"] = event_time
                     logger.debug(f"⏰ Hora actualizada: {match.get('hora_inicio')} → {event_time}")
 
-                # Extraer marcador actual (para partidos en vivo y completados)
-                event_scores = api_match.get("event_home_final_result", "") + " - " + api_match.get("event_away_final_result", "")
-                if event_scores and event_scores != " - ":
-                    update_data["resultado_marcador"] = event_scores
+                # Extraer marcador detallado desde scores (juegos por set)
+                scores = api_match.get("scores", [])
+                if scores:
+                    # Construir marcador detallado: "6-4, 7-5, 6-3"
+                    marcador_detallado = self._build_detailed_score(scores)
+                    if marcador_detallado:
+                        update_data["resultado_marcador"] = marcador_detallado
+                
+                # Fallback: usar event_home/away_final_result si no hay scores
+                if not update_data.get("resultado_marcador"):
+                    event_scores = api_match.get("event_home_final_result", "") + " - " + api_match.get("event_away_final_result", "")
+                    if event_scores and event_scores != " - ":
+                        update_data["resultado_marcador"] = event_scores
 
                 # Si hay resultado final, extraer ganador y marcador completo
                 if event_final_result and event_final_result != "-":
@@ -242,10 +251,6 @@ class MatchUpdateService:
                     ganador = self._extract_winner(api_match, match)
                     if ganador:
                         update_data["resultado_ganador"] = ganador
-                    
-                    # Guardar marcador detallado si está disponible
-                    if not update_data.get("resultado_marcador"):
-                        update_data["resultado_marcador"] = event_final_result
 
                 # Para partidos en vivo, actualizar marcador parcial
                 elif nuevo_estado == "en_juego":
@@ -291,6 +296,38 @@ class MatchUpdateService:
             logger.debug(f"Error consultando API para partido {match_id}: {e}")
             return False
 
+    def _build_detailed_score(self, scores: List[Dict]) -> Optional[str]:
+        """
+        Construye el marcador detallado desde los scores por set.
+        
+        Args:
+            scores: Lista de scores desde API (ej: [{"score_first": "6", "score_second": "4", "score_set": "1"}])
+            
+        Returns:
+            Marcador formateado (ej: "6-4, 7-5, 6-3") o None
+        """
+        if not scores:
+            return None
+        
+        try:
+            # Ordenar por set_number
+            sorted_scores = sorted(scores, key=lambda x: int(x.get("score_set", 0)))
+            
+            set_scores = []
+            for score in sorted_scores:
+                p1 = score.get("score_first", "0")
+                p2 = score.get("score_second", "0")
+                if p1 and p2:
+                    set_scores.append(f"{p1}-{p2}")
+            
+            if set_scores:
+                return ", ".join(set_scores)
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Error construyendo marcador detallado: {e}")
+            return None
+
     def _extract_live_score(self, api_match: Dict) -> Optional[str]:
         """
         Extrae el marcador en vivo de un partido
@@ -302,17 +339,19 @@ class MatchUpdateService:
             Marcador formateado o None
         """
         try:
-            # Intentar obtener marcador de sets
+            # PRIORIDAD 1: Usar scores detallados
+            scores = api_match.get("scores", [])
+            if scores:
+                detailed = self._build_detailed_score(scores)
+                if detailed:
+                    return detailed
+            
+            # PRIORIDAD 2: Fallback a home/away final result
             home_score = api_match.get("event_home_final_result", "")
             away_score = api_match.get("event_away_final_result", "")
             
             if home_score and away_score:
                 return f"{home_score} - {away_score}"
-            
-            # Alternativamente, buscar en otros campos
-            scores = api_match.get("scores", {})
-            if scores:
-                return str(scores)
             
             return None
         except Exception as e:
@@ -395,19 +434,22 @@ class MatchUpdateService:
         # Estos indican que el partido YA terminó de alguna forma
         finished_statuses = [
             "finished", "ended", "completed", "final",
-            "walk over", "walkover", "w.o.", "wo",
-            "retired", "ret", "defaulted", "def"
+            "walk over", "walkover", "w.o.", "wo", "w/o",
+            "retired", "ret", "retirement",
+            "defaulted", "def", "default",
+            "awarded"
         ]
         
         for status in finished_statuses:
             if status in event_status_lower:
+                logger.debug(f"🏁 Partido finalizado - status detectado: '{status}' en '{event_status}'")
                 return "completado"
         
         # PRIORIDAD 2: Estados cancelados/pospuestos
-        cancelled_statuses = ["cancelled", "canceled", "postponed", "suspended"]
+        cancelled_statuses = ["cancelled", "canceled", "postponed", "suspended", "interrupted"]
         for status in cancelled_statuses:
             if status in event_status_lower:
-                # Marcar como completado para que no se siga actualizando
+                logger.debug(f"⚠️ Partido cancelado/pospuesto - status: '{status}' en '{event_status}'")
                 return "completado"
         
         # PRIORIDAD 3: Si está en vivo
@@ -416,7 +458,11 @@ class MatchUpdateService:
         
         # PRIORIDAD 4: Si tiene resultado final y NO está en vivo
         if event_final_result and event_final_result != "-" and event_final_result.strip():
-            return "completado"
+            # Verificar que parece un resultado válido (no solo "-")
+            parts = event_final_result.replace(" ", "").split("-")
+            if len(parts) >= 2 and all(p.isdigit() or p == "" for p in parts):
+                logger.debug(f"🏆 Partido completado con resultado: {event_final_result}")
+                return "completado"
         
         # PRIORIDAD 5: Por defecto, pendiente
         return "pendiente"
