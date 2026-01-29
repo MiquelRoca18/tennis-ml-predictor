@@ -975,6 +975,9 @@ async def refresh_match_odds(match_id: int, jugador1_cuota: float, jugador2_cuot
                 detail=f"No se puede actualizar: partido en estado '{partido['estado']}'",
             )
 
+        # 2.5. Actualizar cuotas en la tabla matches
+        db.update_match_odds(match_id, jugador1_cuota, jugador2_cuota)
+
         # 3. Obtener predicción anterior
         prediccion_anterior = db.get_latest_prediction(match_id)
 
@@ -1347,6 +1350,27 @@ async def manual_update_odds():
         return result
     except Exception as e:
         logger.error(f"❌ Error en actualización manual: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/sync-odds-and-predictions", tags=["Admin"])
+async def manual_sync_odds_and_predictions():
+    """
+    Sincroniza cuotas desde la API para partidos pendientes (hoy + 2 días)
+    y genera/actualiza predicciones (primera vez o cuando cambian las cuotas).
+
+    Útil para forzar sync sin esperar al job cada 4h.
+    """
+    try:
+        if not odds_service:
+            raise HTTPException(status_code=503, detail="OddsUpdateService no disponible")
+        logger.info("🔧 Sync manual cuotas y predicciones solicitado")
+        result = odds_service.sync_odds_and_predictions_for_pending_matches()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error en sync cuotas/predicciones: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2349,6 +2373,30 @@ async def startup_event():
             name="Sincronizar fixtures hoy y mañana (cada 6h)",
             replace_existing=True,
         )
+
+        # Job 4c: Sincronizar cuotas y predicciones (partidos sin cuotas → primera predicción; cuotas cambiadas → nueva versión)
+        if odds_service:
+            def sync_odds_and_predictions_job():
+                """Actualiza cuotas desde API para pendientes y genera/regenera predicciones."""
+                try:
+                    result = odds_service.sync_odds_and_predictions_for_pending_matches()
+                    if result.get("success"):
+                        ou = result.get("odds_updated", 0)
+                        pg = result.get("predictions_generated", 0)
+                        if ou > 0 or pg > 0:
+                            logger.info(f"✅ Sync cuotas/predicciones: {ou} cuotas actualizadas, {pg} predicciones")
+                    elif result.get("error"):
+                        logger.debug(f"Sync cuotas/predicciones: {result['error']}")
+                except Exception as e:
+                    logger.error(f"❌ Error sync cuotas/predicciones: {e}", exc_info=True)
+
+            scheduler.add_job(
+                func=sync_odds_and_predictions_job,
+                trigger=IntervalTrigger(hours=4),  # Cada 4 horas
+                id="sync_odds_and_predictions_job",
+                name="Sincronizar cuotas y predicciones (cada 4h)",
+                replace_existing=True,
+            )
 
         # Job 5: Limpieza automática de partidos antiguos (2:00 AM cada día)
         def cleanup_old_matches():

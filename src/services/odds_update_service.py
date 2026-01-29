@@ -7,12 +7,17 @@ detectar partidos nuevos y regenerar predicciones cada 15 minutos.
 """
 
 import logging
-from datetime import datetime
-from typing import List, Dict
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Optional
 from src.database.match_database import MatchDatabase
 from src.services.api_tennis_client import APITennisClient
 
 logger = logging.getLogger(__name__)
+
+# Días hacia adelante para sincronizar cuotas (hoy + mañana + pasado)
+ODDS_SYNC_DAYS_AHEAD = 2
+# Máximo partidos a procesar por ejecución (limita llamadas API)
+ODDS_SYNC_MAX_MATCHES_PER_RUN = 80
 
 
 class OddsUpdateService:
@@ -414,6 +419,129 @@ class OddsUpdateService:
         finally:
             if temp_db.conn:
                 temp_db.conn.close()
+
+    def sync_odds_and_predictions_for_pending_matches(
+        self,
+        days_ahead: int = ODDS_SYNC_DAYS_AHEAD,
+        max_matches: int = ODDS_SYNC_MAX_MATCHES_PER_RUN,
+    ) -> Dict:
+        """
+        Sincroniza cuotas desde la API para partidos pendientes y genera/actualiza predicciones.
+
+        Casos cubiertos:
+        1. Partido creado sin cuotas → cuando la API devuelve cuotas, se actualizan en BD y se genera la primera predicción.
+        2. Partido con predicción → si las cuotas cambian, se actualizan en BD y se guarda una nueva versión de predicción.
+
+        Estrategia: una llamada batch por día (get_all_odds_batch) para minimizar uso de API.
+        """
+        if not self.odds_client:
+            return {
+                "success": False,
+                "error": "API client not available",
+                "matches_checked": 0,
+                "odds_updated": 0,
+                "predictions_generated": 0,
+            }
+
+        today = date.today()
+        end_date = today + timedelta(days=days_ahead)
+
+        # Partidos pendientes con event_key (necesario para buscar cuotas en la API)
+        pending = self.db._fetchall(
+            """
+            SELECT * FROM matches
+            WHERE estado = 'pendiente'
+            AND fecha_partido >= :today
+            AND fecha_partido <= :end_date
+            AND event_key IS NOT NULL AND TRIM(COALESCE(event_key, '')) != ''
+            ORDER BY fecha_partido ASC, id ASC
+            """,
+            {"today": today, "end_date": end_date},
+        )
+
+        if not pending:
+            return {
+                "success": True,
+                "matches_checked": 0,
+                "odds_updated": 0,
+                "predictions_generated": 0,
+                "message": "No pending matches with event_key",
+            }
+
+        # Limitar por run
+        to_process = pending[:max_matches]
+
+        # Obtener cuotas en batch por fecha (1 llamada API por día)
+        all_odds_by_key = {}
+        for d in range((end_date - today).days + 1):
+            day = today + timedelta(days=d)
+            day_str = day.strftime("%Y-%m-%d")
+            batch = self.odds_client.get_all_odds_batch(day_str, day_str)
+            if batch:
+                all_odds_by_key.update(batch)
+
+        odds_updated = 0
+        predictions_generated = 0
+        predictor = None
+
+        for match in to_process:
+            match_id = match.get("id")
+            event_key = match.get("event_key")
+            if not event_key:
+                continue
+
+            best = self.odds_client.extract_best_odds(all_odds_by_key, str(event_key))
+            if not best or not best.get("player1_odds") or not best.get("player2_odds"):
+                continue
+
+            j1 = float(best["player1_odds"])
+            j2 = float(best["player2_odds"])
+
+            # Actualizar cuotas en la tabla matches
+            if self.db.update_match_odds(match_id, j1, j2):
+                odds_updated += 1
+
+            # Decidir si generar/regenerar predicción (nunca tuvo o cuotas cambiaron >0.5%)
+            latest_pred = self.db.get_latest_prediction(match_id)
+            need_prediction = latest_pred is None
+            if not need_prediction and latest_pred:
+                p1 = float(latest_pred.get("jugador1_cuota") or 0)
+                p2 = float(latest_pred.get("jugador2_cuota") or 0)
+                need_prediction = abs(p1 - j1) > 0.005 or abs(p2 - j2) > 0.005
+
+            if need_prediction:
+                if predictor is None:
+                    try:
+                        from src.prediction.predictor_calibrado import PredictorCalibrado
+                        from src.config.settings import Config
+                        predictor = PredictorCalibrado(Config.MODEL_PATH)
+                    except Exception as e:
+                        logger.warning(f"⚠️  Predictor not available: {e}")
+                        break
+                from src.services.prediction_runner import run_prediction_and_save
+                if run_prediction_and_save(
+                    db=self.db,
+                    predictor=predictor,
+                    match_id=match_id,
+                    player1_name=match.get("jugador1_nombre", ""),
+                    player2_name=match.get("jugador2_nombre", ""),
+                    surface=match.get("superficie") or "Hard",
+                    player1_odds=j1,
+                    player2_odds=j2,
+                ):
+                    predictions_generated += 1
+
+        logger.info(
+            f"✅ Sync odds: {len(to_process)} checked, {odds_updated} odds updated, "
+            f"{predictions_generated} predictions generated"
+        )
+        return {
+            "success": True,
+            "matches_checked": len(to_process),
+            "odds_updated": odds_updated,
+            "predictions_generated": predictions_generated,
+            "message": f"{odds_updated} cuotas actualizadas, {predictions_generated} predicciones generadas",
+        }
 
     def get_update_stats(self) -> Dict:
         """

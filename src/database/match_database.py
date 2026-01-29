@@ -1337,6 +1337,34 @@ class MatchDatabase:
             logger.error(f"Error actualizando ganador: {e}")
             return False
 
+    def update_match_odds(
+        self, match_id: int, jugador1_cuota: float, jugador2_cuota: float
+    ) -> bool:
+        """
+        Actualiza las cuotas de un partido (para sync automático de odds).
+
+        Args:
+            match_id: ID del partido
+            jugador1_cuota: Nueva cuota jugador 1
+            jugador2_cuota: Nueva cuota jugador 2
+
+        Returns:
+            True si se actualizó correctamente
+        """
+        try:
+            self._execute(
+                """
+                UPDATE matches SET jugador1_cuota = :j1, jugador2_cuota = :j2
+                WHERE id = :match_id
+                """,
+                {"j1": jugador1_cuota, "j2": jugador2_cuota, "match_id": match_id},
+            )
+            logger.debug(f"Actualizadas cuotas partido {match_id}: {jugador1_cuota}/{jugador2_cuota}")
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando cuotas partido {match_id}: {e}")
+            return False
+
     def update_match_player_keys(self, match_id: int, player1_key: str, player2_key: str) -> bool:
         """
         Actualiza los player_keys de un partido
