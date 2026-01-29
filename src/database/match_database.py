@@ -515,8 +515,16 @@ class MatchDatabase:
             params["event_live"] = event_live
         
         if event_status is not None:
-            # Mapear estado de API a nuestro estado
-            if event_status.lower() == "finished":
+            # Mapear estado de API a nuestro estado (incl. Retired, Walk Over, etc.)
+            event_status_lower = event_status.lower()
+            finished_keywords = [
+                "finished", "ended", "completed", "final",
+                "walk over", "walkover", "w.o.", "wo", "w/o",
+                "retired", "ret", "retirement",
+                "defaulted", "def", "default", "awarded",
+                "cancelled", "canceled", "postponed", "suspended", "interrupted",
+            ]
+            if any(kw in event_status_lower for kw in finished_keywords):
                 updates.append("estado = 'completado'")
             elif event_live == "1":
                 updates.append("estado = 'en_juego'")
