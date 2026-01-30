@@ -73,12 +73,23 @@ class MatchUpdateService:
                 estado = m.get("estado")
                 if estado in ["pendiente", "en_juego"]:
                     return True
-                # Completados sin ganador o sin marcador detallado
+                # Completados sin ganador, sin marcador, o con marcador solo en sets (0-3, 2-1) para intentar rellenar juegos
                 if estado == "completado":
                     if not m.get("resultado_ganador"):
                         return True
-                    if not m.get("resultado_marcador"):
+                    marcador = (m.get("resultado_marcador") or "").strip()
+                    if not marcador:
                         return True
+                    # Si el marcador parece solo sets (ej. "0-3", "2-1"), intentar get_events para juegos por set
+                    if "-" in marcador and "," not in marcador:
+                        try:
+                            parts = marcador.replace(" ", "").split("-")
+                            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                                a, b = int(parts[0]), int(parts[1])
+                                if a <= 3 and b <= 3:
+                                    return True  # Re-procesar para intentar obtener juegos
+                        except (ValueError, TypeError):
+                            pass
                 return False
             
             matches_to_check = [m for m in matches if needs_update(m)]

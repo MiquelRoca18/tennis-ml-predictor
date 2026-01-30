@@ -8,7 +8,7 @@ predicciones versionadas y tracking de apuestas.
 
 import sys
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time as dt_time, timedelta
 from typing import Optional
 import logging
 import asyncio
@@ -421,7 +421,25 @@ async def get_matches_by_date(
                 match_date = match_date.date()
             elif not isinstance(match_date, date):
                 match_date = today
+            # Partido futuro: fecha > hoy, o mismo día pero hora_inicio aún no ha llegado
             is_future = match_date > today
+            if not is_future and match_date == today:
+                hora_inicio_val = p.get("hora_inicio")
+                if hora_inicio_val is not None:
+                    try:
+                        if isinstance(hora_inicio_val, dt_time):
+                            start_dt = datetime.combine(match_date, hora_inicio_val)
+                        elif isinstance(hora_inicio_val, str):
+                            parts = hora_inicio_val.strip().split(":")
+                            h = int(parts[0]) if len(parts) > 0 else 0
+                            m = int(parts[1]) if len(parts) > 1 else 0
+                            start_dt = datetime.combine(match_date, dt_time(h, m, 0))
+                        else:
+                            start_dt = None
+                        if start_dt is not None and start_dt > datetime.now():
+                            is_future = True
+                    except (ValueError, TypeError):
+                        pass
             effective_estado = "pendiente" if is_future else p.get("estado", "pendiente")
 
             # Construir jugadores
