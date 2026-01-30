@@ -12,6 +12,7 @@ flask-cors==4.0.0
 # FastAPI (API v2)
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+websocket-client==1.8.0
 python-dotenv==1.0.1
 requests==2.32.3
 pandas==2.2.3

@@ -529,9 +529,11 @@ class MatchDatabase:
         scores: str = None,
         event_live: str = None,
         event_status: str = None,
-        event_final_result: str = None
+        event_final_result: str = None,
+        event_game_result: str = None,
+        event_serve: str = None,
     ):
-        """Actualiza datos en vivo de un partido"""
+        """Actualiza datos en vivo de un partido (marcador, sets ganados, juego actual, quién saca)."""
         updates = []
         params = {"match_id": match_id}
         
@@ -563,6 +565,13 @@ class MatchDatabase:
         if event_final_result is not None:
             updates.append("event_final_result = :event_final_result")
             params["event_final_result"] = event_final_result
+
+        if event_game_result is not None:
+            updates.append("event_game_result = :event_game_result")
+            params["event_game_result"] = event_game_result
+        if event_serve is not None:
+            updates.append("event_serve = :event_serve")
+            params["event_serve"] = event_serve
         
         if updates:
             query = f"UPDATE matches SET {', '.join(updates)} WHERE id = :match_id"

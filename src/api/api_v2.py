@@ -2203,11 +2203,11 @@ async def startup_event():
             replace_existing=True,
         )
         
-        # Job 1.5: Actualizar estados de partidos existentes (cada 5 min)
+        # Job 1.5: Actualizar estados de partidos existentes (cada 2 min para menos atraso en vivo)
         if match_update_service:
             scheduler.add_job(
                 func=lambda: match_update_service.update_recent_matches(days=7),
-                trigger=IntervalTrigger(minutes=5),
+                trigger=IntervalTrigger(minutes=2),
                 id="update_match_status_job",
                 name="Actualización de estados de partidos",
                 replace_existing=True,
@@ -2239,54 +2239,19 @@ async def startup_event():
                 replace_existing=True,
             )
         
-        # Job 1.7: Sincronizar datos de partidos EN VIVO (cada 60 segundos)
-        if pbp_service:
-            def sync_live_matches():
-                """Sincroniza datos punto por punto de partidos en vivo"""
-                try:
-                    from src.services.live_match_data_service import LiveMatchDataService
-                    
-                    live_service = LiveMatchDataService(db.conn, api_client, pbp_service)
-                    result = live_service.sync_live_matches()
-                    
-                    if result.get("success") and result.get("matches_live", 0) > 0:
-                        logger.info(
-                            f"🔴 LIVE: {result['matches_live']} partidos, "
-                            f"{result['points_stored']} puntos, {result['games_stored']} juegos guardados"
-                        )
-                except Exception as e:
-                    logger.error(f"❌ Error sincronizando partidos en vivo: {e}")
-            
-            scheduler.add_job(
-                func=sync_live_matches,
-                trigger=IntervalTrigger(seconds=60),
-                id="sync_live_matches_job",
-                name="Sincronización de partidos en vivo (tiempo real)",
-                replace_existing=True,
-            )
-
-
-
-
-        # DISABLED: LiveEventsService requires websocket_client which was removed
-        # IMPORTANTE: Ejecutar en thread separado para no bloquear el servidor
-        # from src.services.live_events_service import LiveEventsService
-
-        
-        # global live_events_service
-        # live_events_service = LiveEventsService(db, api_client)
-        
-        # def run_websocket():
-        #     """Ejecutar WebSocket en thread separado"""
-        #     loop = asyncio.new_event_loop()
-        #     asyncio.set_event_loop(loop)
-        #     loop.run_until_complete(live_events_service.start())
-        
-        # # Iniciar en background thread
-        # ws_thread = threading.Thread(target=run_websocket, daemon=True)
-        # ws_thread.start()
-        # logger.info("✅ WebSocket de live results iniciado en background (tiempo real)")
-        logger.info("ℹ️  WebSocket live events disabled (websocket_client removed)")
+        # WebSocket: datos en vivo en cuanto la API los envía (única fuente para live)
+        try:
+            from src.services.live_events_service import LiveEventsService
+            global live_events_service
+            live_events_service = LiveEventsService(db, api_client.api_key if api_client else None)
+            live_events_service.start()
+            logger.info("✅ WebSocket live events iniciado (tiempo real)")
+        except ImportError as e:
+            logger.info("ℹ️  WebSocket no disponible (pip install websocket-client): %s", e)
+            live_events_service = None
+        except Exception as e:
+            logger.warning("⚠️  WebSocket live no iniciado: %s", e)
+            live_events_service = None
 
         # Job 3: Verificar commits en TML-Database (cada hora)
         def check_github_commits():
@@ -2502,10 +2467,10 @@ async def startup_event():
         scheduler.start()
         logger.info("✅ Scheduler iniciado:")
         logger.info("   - Actualizaciones de cuotas: cada 5 minutos")
-        logger.info("   - Actualización de estados: cada 5 minutos")
+        logger.info("   - Actualización de estados: cada 2 minutos")
         if not db.is_postgres:
             logger.info("   - Sincronización de cuotas multi-bookmaker: cada 5 minutos")
-        logger.info("   - Sincronización de partidos en vivo: cada 60 segundos")
+        logger.info("   - Live: WebSocket (tiempo real)")
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
         logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")
@@ -2523,9 +2488,9 @@ async def shutdown_event():
     """Limpieza al cerrar la API"""
     global live_events_service
     
-    # Detener WebSocket
+    # Detener WebSocket (sync)
     if live_events_service:
-        await live_events_service.stop()
+        live_events_service.stop()
     
     # Detener scheduler
     if scheduler.running:

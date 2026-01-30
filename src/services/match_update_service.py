@@ -294,12 +294,19 @@ class MatchUpdateService:
                     if ganador:
                         update_data["resultado_ganador"] = ganador
 
-                # Para partidos en vivo, actualizar marcador parcial
+                # Para partidos en vivo: solo sets completados (el set en curso no cuenta hasta que termine)
                 elif nuevo_estado == "en_juego":
-                    # Obtener marcador en vivo
-                    live_score = self._extract_live_score(api_match)
+                    swap = not self._api_first_is_our_jugador1(api_match, match)
+                    live_score = self._extract_live_score(
+                        api_match, event_final_result=event_final_result or "", swap_order=swap
+                    )
                     if live_score:
                         update_data["resultado_marcador"] = live_score
+                    # Guardar score del juego actual y quién saca para el frontend
+                    if api_match.get("event_game_result") is not None:
+                        update_data["event_game_result"] = api_match.get("event_game_result")
+                    if api_match.get("event_serve") is not None:
+                        update_data["event_serve"] = api_match.get("event_serve")
 
                 # Actualizar en DB
                 self.db.update_match_live_data(
@@ -308,6 +315,8 @@ class MatchUpdateService:
                     event_status=update_data.get("event_status"),
                     event_final_result=update_data.get("event_final_result"),
                     scores=update_data.get("resultado_marcador"),
+                    event_game_result=update_data.get("event_game_result"),
+                    event_serve=update_data.get("event_serve"),
                 )
                 
                 # Actualizar hora si cambió
@@ -438,31 +447,49 @@ class MatchUpdateService:
             logger.debug(f"Error construyendo marcador detallado: {e}")
             return None
 
-    def _extract_live_score(self, api_match: Dict) -> Optional[str]:
+    def _completed_sets_count(self, event_final_result: str) -> Optional[int]:
         """
-        Extrae el marcador en vivo de un partido
+        Número de sets ya terminados (ganados por alguien) según event_final_result.
+        Ej: "2-1" -> 3, "1-0" -> 1. Así no mezclamos el set en curso con los finales.
+        """
+        if not event_final_result or event_final_result.strip() == "-":
+            return None
+        try:
+            parts = event_final_result.replace(" ", "").strip().split("-")
+            if len(parts) != 2:
+                return None
+            a, b = int(parts[0]), int(parts[1])
+            return a + b
+        except (ValueError, TypeError):
+            return None
 
-        Args:
-            api_match: Datos del partido de la API
-
-        Returns:
-            Marcador formateado o None
+    def _extract_live_score(
+        self, api_match: Dict, event_final_result: Optional[str] = None, swap_order: bool = False
+    ) -> Optional[str]:
+        """
+        Extrae el marcador en vivo. Para partidos en directo solo incluye sets COMPLETADOS:
+        el set en curso no debe sumar al resultado final hasta que termine.
         """
         try:
-            # PRIORIDAD 1: Usar scores detallados (caller must pass swap if needed; live has no match context here)
             scores = api_match.get("scores", [])
             if scores:
-                detailed = self._build_detailed_score(scores, swap_order=False)
+                n_completed = self._completed_sets_count(event_final_result or "")
+                if n_completed is not None and n_completed >= 1:
+                    sorted_scores = sorted(scores, key=lambda x: int(x.get("score_set", 0)))
+                    completed_only = sorted_scores[:n_completed]
+                    if completed_only:
+                        detailed = self._build_detailed_score(completed_only, swap_order=swap_order)
+                        if detailed:
+                            return detailed
+                # Sin event_final_result o sin coincidencia: usar todos (comportamiento legacy)
+                detailed = self._build_detailed_score(scores, swap_order=swap_order)
                 if detailed:
                     return detailed
-            
-            # PRIORIDAD 2: Fallback a home/away final result
+
             home_score = api_match.get("event_home_final_result", "")
             away_score = api_match.get("event_away_final_result", "")
-            
             if home_score and away_score:
                 return f"{home_score} - {away_score}"
-            
             return None
         except Exception as e:
             logger.debug(f"Error extrayendo marcador en vivo: {e}")

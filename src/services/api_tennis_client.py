@@ -334,43 +334,6 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo H2H: {e}")
             return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
 
-    def get_livescore(self) -> List[Dict]:
-        """
-        Obtiene partidos ATP Singles en vivo
-        
-        Returns:
-            Lista de partidos en vivo con pointbypoint
-        """
-        if not self.api_key:
-            logger.error("❌ API_TENNIS_API_KEY no configurada")
-            return []
-            
-        try:
-            logger.info("🔴 Consultando partidos en vivo...")
-            
-            data = self._make_request("get_livescore", {})
-            
-            if not data:
-                logger.warning("⚠️  No se obtuvieron partidos en vivo")
-                return []
-                
-            matches = data.get("result", [])
-            
-            # Filtrar solo ATP Singles (flexible)
-            def is_atp_match(m):
-                event_type = (m.get("event_type") or m.get("event_type_type") or "").upper()
-                return "ATP" in event_type and "DOUBLES" not in event_type and "WTA" not in event_type
-            
-            atp_matches = [m for m in matches if is_atp_match(m)]
-            
-            logger.info(f"✅ {len(atp_matches)} partidos ATP en vivo (de {len(matches)} totales)")
-            
-            return atp_matches
-            
-        except Exception as e:
-            logger.error(f"❌ Error obteniendo livescore: {e}")
-            return []
-
     def get_tournaments(self) -> List[Dict]:
         """
         Obtiene lista de torneos ATP disponibles
