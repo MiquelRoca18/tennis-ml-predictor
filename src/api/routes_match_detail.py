@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from src.api.models_match_detail import (
     BookmakerOdds,
     H2HData,
+    LiveScore,
     MatchFullResponse,
     MatchInfo,
     MatchOdds,
@@ -47,6 +48,14 @@ stats_calculator = MatchStatsCalculator()
 # Referencias a db y api_client (se configuran al registrar el router)
 _db: Any = None
 _api_client: Any = None
+
+
+def _is_set_completed(p1: int, p2: int) -> bool:
+    """True si el set está terminado (6-4, 7-5, 7-6, etc.)."""
+    lo, hi = min(p1, p2), max(p1, p2)
+    if hi < 6:
+        return False
+    return (hi - lo >= 2) or (lo >= 6)
 
 
 def configure_dependencies(db, api_client):
@@ -172,14 +181,19 @@ async def get_match_full(match_id: int):
                     sets = []
                     p1_sets = 0
                     p2_sets = 0
+                    estado = match.get("estado", "pendiente")
+                    # En partidos en vivo solo contar sets COMPLETADOS para sets_won (no el set en curso)
+                    count_all = estado != "en_juego"
                     for s in sets_db:
                         p1 = s.get("player1_score", 0)
                         p2 = s.get("player2_score", 0)
                         winner = 1 if p1 > p2 else 2 if p2 > p1 else None
-                        if winner == 1:
-                            p1_sets += 1
-                        elif winner == 2:
-                            p2_sets += 1
+                        completed = _is_set_completed(p1, p2)
+                        if count_all or completed:
+                            if winner == 1:
+                                p1_sets += 1
+                            elif winner == 2:
+                                p2_sets += 1
                         sets.append(SetScore(
                             set_number=s.get("set_number", len(sets) + 1),
                             player1_games=p1,
@@ -219,6 +233,21 @@ async def get_match_full(match_id: int):
                         logger.debug(f"✅ Sets_won de event_final_result: {p1_sets}-{p2_sets}")
                 except Exception:
                     pass
+        
+        # Datos en vivo: set actual, puntos del juego, quién saca (solo si partido en juego)
+        estado = match.get("estado", "pendiente")
+        if scores and estado == "en_juego":
+            serve_raw = (match.get("event_serve") or "").strip().lower()
+            current_server = 1 if serve_raw == "first player" else 2
+            current_set = len(scores.sets) if scores.sets else 1
+            is_tiebreak = "tiebreak" in (match.get("event_status") or "").lower()
+            live = LiveScore(
+                current_game=match.get("event_game_result") or "0-0",
+                current_server=current_server,
+                current_set=current_set,
+                is_tiebreak=is_tiebreak,
+            )
+            scores = MatchScores(sets_won=scores.sets_won, sets=scores.sets, live=live)
         
         # 5. Obtener estadísticas y timeline de la BD (si existen pre-calculadas)
         stats, timeline = _load_stats_from_db(db, match_id)

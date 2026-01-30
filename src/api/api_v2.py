@@ -239,6 +239,14 @@ async def keepalive():
 # FUNCIONES AUXILIARES PARA SCORES
 # ============================================================
 
+def _is_set_completed(p1: int, p2: int) -> bool:
+    """True si el set está terminado (alguien llegó a 6 con ventaja de 2, o 7-6/6-7)."""
+    lo, hi = min(p1, p2), max(p1, p2)
+    if hi < 6:
+        return False
+    return (hi - lo >= 2) or (lo >= 6)
+
+
 def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
     """
     Construye el objeto MatchScores con los datos del partido.
@@ -279,9 +287,19 @@ def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
             pass
         
         # Calcular resultado en sets (2-0, 2-1, etc.)
-        sets_result = match_data.get("event_final_result")
+        # En partidos en vivo NO usar event_final_result: la API puede enviar "2-3"
+        # contando el set en curso para el que va ganando. Solo contar sets COMPLETADOS.
+        sets_result = None
+        if estado == "en_juego" and sets_data:
+            completed = [s for s in sets_data if _is_set_completed(s.player1_score, s.player2_score)]
+            if completed:
+                p1_sets = sum(1 for s in completed if s.player1_score > s.player2_score)
+                p2_sets = sum(1 for s in completed if s.player2_score > s.player1_score)
+                sets_result = f"{p1_sets}-{p2_sets}"
+        if sets_result is None:
+            sets_result = match_data.get("event_final_result")
         if not sets_result and sets_data:
-            # Calcular desde los sets
+            # Calcular desde todos los sets (partido completado)
             p1_sets = sum(1 for s in sets_data if s.player1_score > s.player2_score)
             p2_sets = sum(1 for s in sets_data if s.player2_score > s.player1_score)
             sets_result = f"{p1_sets}-{p2_sets}"
@@ -1450,17 +1468,17 @@ async def get_pending_matches():
 @app.post("/admin/detect-new-matches", tags=["Admin"])
 async def detect_new_matches_manual():
     """
-    Detecta manualmente partidos nuevos en The Odds API
+    Detecta manualmente partidos nuevos en la API (get_all_matches_with_odds)
+    y los crea en la BD con predicción si tienen cuotas.
 
-    Útil para testing y debugging. Busca partidos nuevos en The Odds API
-    y los crea automáticamente en la base de datos.
-
-    Returns:
-        Resultado de la detección
+    Útil para testing. En producción la detección automática la hace el job
+    cada 2h (DailyMatchFetcher.fetch_and_store_matches).
     """
     try:
         logger.info("🔧 Detección manual de partidos nuevos solicitada")
-        result = match_update_service.detect_new_matches()
+        if not odds_service or not odds_service.odds_client:
+            return {"success": False, "partidos_nuevos": 0, "mensaje": "API de cuotas no disponible"}
+        result = odds_service.detect_new_matches()
         return result
     except Exception as e:
         logger.error(f"❌ Error en detección manual: {e}", exc_info=True)
