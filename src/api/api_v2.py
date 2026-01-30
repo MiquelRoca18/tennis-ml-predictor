@@ -532,6 +532,18 @@ async def get_matches_by_date(
                         )
                 except Exception:
                     pass
+            # Garantía: si es en_juego y no tenemos scores (p. ej. excepción arriba), forzar mínimo para que la card muestre 0-0
+            if effective_estado == "en_juego" and match_scores is None and not is_future:
+                match_scores = MatchScores(
+                    sets_result="0-0",
+                    sets=[],
+                    live=LiveData(
+                        current_game_score=p.get("event_game_result"),
+                        current_server=p.get("event_serve"),
+                        current_set=1,
+                        is_tiebreak=False
+                    )
+                )
             
             # Construir resultado (solo para completados o en juego, nunca para fecha futura)
             resultado = None
