@@ -334,6 +334,28 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo H2H: {e}")
             return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
 
+    def get_livescore(self) -> List[Dict]:
+        """
+        Obtiene partidos en vivo (get_livescore). Usado como fallback cuando WebSocket no está o para refresco periódico.
+        Returns:
+            Lista de partidos en vivo con scores, event_final_result, etc.
+        """
+        if not self.api_key:
+            logger.error("❌ API_TENNIS_API_KEY no configurada")
+            return []
+        try:
+            data = self._make_request("get_livescore", {})
+            if not data:
+                return []
+            matches = data.get("result", [])
+            def is_atp_singles(m):
+                t = (m.get("event_type") or m.get("event_type_type") or "").upper()
+                return "ATP" in t and "DOUBLES" not in t and "WTA" not in t
+            return [m for m in matches if is_atp_singles(m)]
+        except Exception as e:
+            logger.debug(f"Error get_livescore: {e}")
+            return []
+
     def get_tournaments(self) -> List[Dict]:
         """
         Obtiene lista de torneos ATP disponibles

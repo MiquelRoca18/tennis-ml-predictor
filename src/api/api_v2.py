@@ -2239,7 +2239,7 @@ async def startup_event():
                 replace_existing=True,
             )
         
-        # WebSocket: datos en vivo en cuanto la API los envía (única fuente para live)
+        # WebSocket: datos en vivo en cuanto la API los envía
         try:
             from src.services.live_events_service import LiveEventsService
             global live_events_service
@@ -2252,6 +2252,24 @@ async def startup_event():
         except Exception as e:
             logger.warning("⚠️  WebSocket live no iniciado: %s", e)
             live_events_service = None
+
+        # Fallback: get_livescore cada 60 s para que los datos en vivo se actualicen aunque el WebSocket falle o no empuje
+        if api_client:
+            def sync_live_via_livescore():
+                try:
+                    from src.services.live_events_service import LiveEventsService
+                    live_service = LiveEventsService(db, api_client.api_key)
+                    for api_match in api_client.get_livescore():
+                        live_service.process_match_update(api_match)
+                except Exception as e:
+                    logger.debug("Sync live (get_livescore): %s", e)
+            scheduler.add_job(
+                func=sync_live_via_livescore,
+                trigger=IntervalTrigger(seconds=60),
+                id="sync_live_livescore_job",
+                name="Live: get_livescore fallback cada 60s",
+                replace_existing=True,
+            )
 
         # Job 3: Verificar commits en TML-Database (cada hora)
         def check_github_commits():
@@ -2470,7 +2488,7 @@ async def startup_event():
         logger.info("   - Actualización de estados: cada 2 minutos")
         if not db.is_postgres:
             logger.info("   - Sincronización de cuotas multi-bookmaker: cada 5 minutos")
-        logger.info("   - Live: WebSocket (tiempo real)")
+        logger.info("   - Live: WebSocket + get_livescore fallback cada 60s")
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
         logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")

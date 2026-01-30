@@ -24,6 +24,28 @@ except ImportError:
     websocket = None
 
 
+def _parse_score_value(s: Optional[str]) -> tuple:
+    """
+    Parsea score_first/score_second de la API. Acepta "6", "7.7" (juegos.puntos_tiebreak).
+    Returns (games_int, tb_point_str_or_none). Ej: "7.7" -> (7, "7"), "6" -> (6, None).
+    """
+    if s is None or str(s).strip() == "":
+        return (0, None)
+    s = str(s).strip()
+    if "." in s:
+        parts = s.split(".", 1)
+        try:
+            games = int(parts[0])
+            tb = parts[1] if len(parts) > 1 else None
+            return (games, tb)
+        except (ValueError, TypeError):
+            return (0, None)
+    try:
+        return (int(s), None)
+    except (ValueError, TypeError):
+        return (0, None)
+
+
 def _normalize_name(name: Optional[str]) -> str:
     if not name:
         return ""
@@ -64,7 +86,7 @@ def _completed_sets_count(event_final_result: Optional[str]) -> Optional[int]:
 
 
 def _build_marcador_from_scores(scores: List[Dict], swap: bool, only_completed: Optional[int]) -> Optional[str]:
-    """Construye string tipo '6-4, 7-5' desde scores. Si only_completed, solo primeros N sets."""
+    """Construye string tipo '6-4, 7-6(7)' desde scores. Acepta formato API 7.7 / 6.5 (tiebreak)."""
     if not scores:
         return None
     try:
@@ -73,28 +95,33 @@ def _build_marcador_from_scores(scores: List[Dict], swap: bool, only_completed: 
             sorted_scores = sorted_scores[:only_completed]
         parts = []
         for sc in sorted_scores:
-            p1 = str(sc.get("score_first", "0")).strip()
-            p2 = str(sc.get("score_second", "0")).strip()
+            g1, tb1 = _parse_score_value(sc.get("score_first"))
+            g2, tb2 = _parse_score_value(sc.get("score_second"))
             if swap:
-                p1, p2 = p2, p1
-            if p1 and p2:
-                parts.append(f"{p1}-{p2}")
+                g1, g2 = g2, g1
+                tb1, tb2 = tb2, tb1
+            seg = f"{g1}-{g2}"
+            if tb1 or tb2:
+                seg += f"({tb1 or 0}-{tb2 or 0})"
+            parts.append(seg)
         return ", ".join(parts) if parts else None
     except Exception:
         return None
 
 
 def _scores_to_sets_data(scores: List[Dict], swap: bool) -> List[Dict]:
-    """Convierte scores API a lista para save_match_sets."""
+    """Convierte scores API a lista para save_match_sets. Acepta 7.7 / 6.5 (tiebreak)."""
     out = []
     for sc in sorted(scores, key=lambda x: int(x.get("score_set", 0))):
         set_number = int(sc.get("score_set", 0))
-        p_first = int(sc.get("score_first", 0))
-        p_second = int(sc.get("score_second", 0))
+        p_first, tb_first = _parse_score_value(sc.get("score_first"))
+        p_second, tb_second = _parse_score_value(sc.get("score_second"))
         player1_score = p_second if swap else p_first
         player2_score = p_first if swap else p_second
         tiebreak = None
-        if (player1_score == 7 and player2_score == 6) or (player1_score == 6 and player2_score == 7):
+        if tb_first is not None or tb_second is not None:
+            tiebreak = f"{tb_first or 0}-{tb_second or 0}"
+        elif (player1_score == 7 and player2_score == 6) or (player1_score == 6 and player2_score == 7):
             tiebreak = f"{player1_score}-{player2_score}"
         out.append({
             "set_number": set_number,
@@ -190,6 +217,14 @@ class LiveEventsService:
             logger.debug("WebSocket message no JSON: %s", e)
         except Exception as e:
             logger.debug("Error procesando mensaje WebSocket: %s", e)
+
+    def process_match_update(self, api_match: Dict) -> bool:
+        """
+        Actualiza la BD con un partido (desde WebSocket o get_livescore).
+        Puede ser llamado desde fuera para refresco por polling.
+        Returns True si se actualizó un partido nuestro.
+        """
+        return self._process_match(api_match)
 
     def _process_match(self, api_match: Dict):
         """Actualiza la BD con un partido recibido por WebSocket."""

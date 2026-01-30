@@ -418,28 +418,43 @@ class MatchUpdateService:
                 return True
         return False
 
+    @staticmethod
+    def _parse_score_cell(s) -> tuple:
+        """Parsea score_first/score_second de la API. Acepta '6', '7.7' (juegos.puntos_tiebreak). Returns (games_int, tb_point_str_or_none)."""
+        if s is None or str(s).strip() == "":
+            return (0, None)
+        s = str(s).strip()
+        if "." in s:
+            parts = s.split(".", 1)
+            try:
+                return (int(parts[0]), parts[1] if len(parts) > 1 else None)
+            except (ValueError, TypeError):
+                return (0, None)
+        try:
+            return (int(s), None)
+        except (ValueError, TypeError):
+            return (0, None)
+
     def _build_detailed_score(self, scores: List[Dict], swap_order: bool = False) -> Optional[str]:
         """
         Construye el marcador detallado desde los scores por set.
-        Siempre en orden jugador1 - jugador2 (nuestro partido).
-        
-        Args:
-            scores: Lista de scores desde API (score_first, score_second, score_set)
-            swap_order: Si True, first<->second para que quede jugador1-jugador2
+        Acepta formato API 7.7 / 6.5 (tiebreak). Siempre jugador1 - jugador2.
         """
         if not scores:
             return None
-        
         try:
             sorted_scores = sorted(scores, key=lambda x: int(x.get("score_set", 0)))
             set_scores = []
             for score in sorted_scores:
-                p1 = score.get("score_first", "0")
-                p2 = score.get("score_second", "0")
+                g1, tb1 = self._parse_score_cell(score.get("score_first"))
+                g2, tb2 = self._parse_score_cell(score.get("score_second"))
                 if swap_order:
-                    p1, p2 = p2, p1
-                if p1 and p2:
-                    set_scores.append(f"{p1}-{p2}")
+                    g1, g2 = g2, g1
+                    tb1, tb2 = tb2, tb1
+                seg = f"{g1}-{g2}"
+                if tb1 is not None or tb2 is not None:
+                    seg += f"({tb1 or 0}-{tb2 or 0})"
+                set_scores.append(seg)
             if set_scores:
                 return ", ".join(set_scores)
             return None
@@ -521,18 +536,15 @@ class MatchUpdateService:
             sets_data = []
             for score in scores:
                 set_number = int(score.get("score_set", 0))
-                p_first = int(score.get("score_first", 0))
-                p_second = int(score.get("score_second", 0))
+                p_first, tb_first = self._parse_score_cell(score.get("score_first"))
+                p_second, tb_second = self._parse_score_cell(score.get("score_second"))
                 player1_score = p_second if swap else p_first
                 player2_score = p_first if swap else p_second
-                
-                # Detectar tiebreak
                 tiebreak_score = None
-                if (player1_score == 7 and player2_score == 6) or \
-                   (player1_score == 6 and player2_score == 7):
-                    # Podría ser tiebreak, la API no siempre da el detalle
+                if tb_first is not None or tb_second is not None:
+                    tiebreak_score = f"{tb_first or 0}-{tb_second or 0}"
+                elif (player1_score == 7 and player2_score == 6) or (player1_score == 6 and player2_score == 7):
                     tiebreak_score = f"{player1_score}-{player2_score}"
-                
                 sets_data.append({
                     "set_number": set_number,
                     "player1_score": player1_score,
