@@ -2271,7 +2271,7 @@ async def startup_event():
             logger.warning("⚠️  WebSocket live no iniciado: %s", e)
             live_events_service = None
 
-        # Fallback: get_livescore cada 60 s para que los datos en vivo se actualicen aunque el WebSocket falle o no empuje
+        # Fallback: get_livescore cada 15 s para reducir retraso respecto al resultado real (WebSocket puede no empujar a tiempo)
         if api_client:
             def sync_live_via_livescore():
                 try:
@@ -2283,9 +2283,9 @@ async def startup_event():
                     logger.debug("Sync live (get_livescore): %s", e)
             scheduler.add_job(
                 func=sync_live_via_livescore,
-                trigger=IntervalTrigger(seconds=60),
+                trigger=IntervalTrigger(seconds=15),
                 id="sync_live_livescore_job",
-                name="Live: get_livescore fallback cada 60s",
+                name="Live: get_livescore fallback cada 15s",
                 replace_existing=True,
             )
 
@@ -2506,7 +2506,7 @@ async def startup_event():
         logger.info("   - Actualización de estados: cada 2 minutos")
         if not db.is_postgres:
             logger.info("   - Sincronización de cuotas multi-bookmaker: cada 5 minutos")
-        logger.info("   - Live: WebSocket + get_livescore fallback cada 60s")
+        logger.info("   - Live: WebSocket + get_livescore fallback cada 15s")
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
         logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")
