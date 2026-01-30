@@ -458,7 +458,10 @@ async def get_matches_by_date(
                             is_future = True
                     except (ValueError, TypeError):
                         pass
-            effective_estado = "pendiente" if is_future else p.get("estado", "pendiente")
+            # Si la BD ya tiene "en_juego", no sobrescribir con "pendiente" (el detalle usa solo la BD;
+            # así la card y el detalle coinciden aunque la hora del servidor diga is_future).
+            db_estado = p.get("estado", "pendiente")
+            effective_estado = "pendiente" if (is_future and db_estado != "en_juego") else db_estado
 
             # Construir jugadores
             jugador1 = JugadorInfo(
