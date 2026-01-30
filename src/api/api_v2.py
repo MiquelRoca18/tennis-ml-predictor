@@ -498,10 +498,10 @@ async def get_matches_by_date(
                     kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
                 )
 
-            # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador)
-            # Así todos los partidos usan la misma variable/fuente y se muestran igual
+            # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador).
+            # Para en_juego SIEMPRE intentar construir (aunque no haya marcador aún), así la card puede mostrar 0-0 o sets en curso.
             match_scores = None
-            if not is_future and (p.get("resultado_marcador") or p.get("event_final_result")):
+            if not is_future and (p.get("resultado_marcador") or p.get("event_final_result") or effective_estado == "en_juego"):
                 try:
                     match_scores = _build_match_scores(p, db)
                     if match_scores is None and p.get("event_final_result"):
@@ -518,6 +518,18 @@ async def get_matches_by_date(
                                     is_tiebreak=False
                                 ) if effective_estado == "en_juego" else None
                             )
+                    # En vivo sin scores aún: devolver al menos sets_result "0-0" y live para que la card no muestre @2.00
+                    if match_scores is None and effective_estado == "en_juego":
+                        match_scores = MatchScores(
+                            sets_result="0-0",
+                            sets=[],
+                            live=LiveData(
+                                current_game_score=p.get("event_game_result"),
+                                current_server=p.get("event_serve"),
+                                current_set=1,
+                                is_tiebreak=False
+                            )
+                        )
                 except Exception:
                     pass
             
