@@ -423,9 +423,10 @@ async def get_match_stats(match_id: int):
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # 1. Intentar cargar de BD
+        # 1. Intentar cargar de BD (caché match_pointbypoint_cache)
         stats, _ = _load_stats_from_db(db, match_id)
         if stats and stats.has_detailed_stats:
+            logger.debug(f"Stats match {match_id}: desde caché")
             return stats
         
         # 2. No hay datos - lazy loading desde API (get_fixtures requiere date_start/date_stop)
@@ -455,15 +456,15 @@ async def get_match_stats(match_id: int):
                 
                 if not api_data or not api_data.get("pointbypoint"):
                     keys = list(api_data.keys()) if api_data else []
-                    logger.info(f"📊 API get_fixtures match {match_id} (event_key={event_key}): sin pointbypoint. Keys respuesta: {keys}")
+                    logger.warning(f"📊 Stats match {match_id} (event_key={event_key}): API sin pointbypoint. Keys: {keys}")
                 if api_data and api_data.get("pointbypoint"):
-                    _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
-                    # Calcular scores primero
+                    pbp = api_data["pointbypoint"]
+                    logger.info(f"📊 Stats match {match_id}: API devolvió {len(pbp)} juegos pointbypoint")
+                    _save_pointbypoint_to_db(db, match_id, pbp)
                     scores = None
                     if api_data.get("scores"):
                         scores = stats_calculator.calculate_scores(api_data["scores"], api_data)
-                    
-                    stats = stats_calculator.calculate_stats(api_data["pointbypoint"], scores)
+                    stats = stats_calculator.calculate_stats(pbp, scores)
                     if stats:
                         return stats
         except Exception as e:
@@ -791,7 +792,7 @@ async def get_match_h2h(match_id: int):
         try:
             db._execute(
                 """
-                INSERT INTO head_to_head (player1_key, player2_key, player1_wins, player2_wins,
+                INSERT INTO h2h_cache (player1_key, player2_key, player1_wins, player2_wins,
                     hard_p1_wins, hard_p2_wins, clay_p1_wins, clay_p2_wins, grass_p1_wins, grass_p2_wins,
                     updated_at)
                 VALUES (:p1_key, :p2_key, :p1_wins, :p2_wins, :hard_p1, :hard_p2, :clay_p1, :clay_p2, 
@@ -1120,16 +1121,16 @@ def _get_h2h_from_db(db, match: dict) -> Optional[H2HData]:
         if not p1_key or not p2_key:
             return None
         
-        # Buscar en tabla head_to_head
+        # Buscar en tabla h2h_cache (por player keys API)
         h2h_record = db._fetchone(
             """
-            SELECT * FROM head_to_head 
+            SELECT * FROM h2h_cache
             WHERE (player1_key = :p1 AND player2_key = :p2)
                OR (player1_key = :p2 AND player2_key = :p1)
             ORDER BY updated_at DESC
             LIMIT 1
             """,
-            {"p1": p1_key, "p2": p2_key}
+            {"p1": str(p1_key), "p2": str(p2_key)}
         )
         
         if not h2h_record:

@@ -114,7 +114,13 @@ class MatchDatabase:
                 # PostgreSQL: Execute using SQLAlchemy
                 from sqlalchemy import text
                 import re
-                
+                # Drop vista antes de recrear (evita error "cannot change name of view column")
+                try:
+                    with self.engine.connect() as conn:
+                        conn.execute(text("DROP VIEW IF EXISTS matches_with_latest_prediction CASCADE"))
+                        conn.commit()
+                except Exception:
+                    pass
                 # Convert SQLite schema to PostgreSQL-compatible
                 pg_schema = schema_script
                 
@@ -230,6 +236,8 @@ class MatchDatabase:
             self._migrate_add_event_status()
             # Migración: tabla match_pointbypoint_cache para caché JSON (stats/timeline)
             self._migrate_pointbypoint_cache_table()
+            # Migración: tabla h2h_cache para H2H por player keys (API) - no confundir con head_to_head
+            self._migrate_h2h_cache_table()
 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
@@ -289,6 +297,51 @@ class MatchDatabase:
         except Exception as e:
             if "already exists" not in str(e).lower():
                 logger.warning(f"Migración match_pointbypoint_cache: {e}")
+
+    def _migrate_h2h_cache_table(self):
+        """Crea tabla h2h_cache para H2H por player keys (API). No confundir con head_to_head (player ids)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS h2h_cache (
+                            player1_key VARCHAR(50) NOT NULL,
+                            player2_key VARCHAR(50) NOT NULL,
+                            player1_wins INTEGER NOT NULL DEFAULT 0,
+                            player2_wins INTEGER NOT NULL DEFAULT 0,
+                            hard_p1_wins INTEGER NOT NULL DEFAULT 0,
+                            hard_p2_wins INTEGER NOT NULL DEFAULT 0,
+                            clay_p1_wins INTEGER NOT NULL DEFAULT 0,
+                            clay_p2_wins INTEGER NOT NULL DEFAULT 0,
+                            grass_p1_wins INTEGER NOT NULL DEFAULT 0,
+                            grass_p2_wins INTEGER NOT NULL DEFAULT 0,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (player1_key, player2_key)
+                        )
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS h2h_cache (
+                        player1_key VARCHAR(50) NOT NULL,
+                        player2_key VARCHAR(50) NOT NULL,
+                        player1_wins INTEGER NOT NULL DEFAULT 0,
+                        player2_wins INTEGER NOT NULL DEFAULT 0,
+                        hard_p1_wins INTEGER NOT NULL DEFAULT 0,
+                        hard_p2_wins INTEGER NOT NULL DEFAULT 0,
+                        clay_p1_wins INTEGER NOT NULL DEFAULT 0,
+                        clay_p2_wins INTEGER NOT NULL DEFAULT 0,
+                        grass_p1_wins INTEGER NOT NULL DEFAULT 0,
+                        grass_p2_wins INTEGER NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (player1_key, player2_key)
+                    )
+                """)
+                self.conn.commit()
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Migración h2h_cache: {e}")
 
     # ============================================================
     # DATABASE ABSTRACTION LAYER

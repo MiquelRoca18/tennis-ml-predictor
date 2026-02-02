@@ -299,6 +299,22 @@ CREATE TABLE IF NOT EXISTS match_pointbypoint (
 CREATE INDEX IF NOT EXISTS idx_pbp_match ON match_pointbypoint(match_id);
 
 
+-- Caché H2H por player keys (API) - no confundir con head_to_head (player ids)
+CREATE TABLE IF NOT EXISTS h2h_cache (
+    player1_key VARCHAR(50) NOT NULL,
+    player2_key VARCHAR(50) NOT NULL,
+    player1_wins INTEGER NOT NULL DEFAULT 0,
+    player2_wins INTEGER NOT NULL DEFAULT 0,
+    hard_p1_wins INTEGER NOT NULL DEFAULT 0,
+    hard_p2_wins INTEGER NOT NULL DEFAULT 0,
+    clay_p1_wins INTEGER NOT NULL DEFAULT 0,
+    clay_p2_wins INTEGER NOT NULL DEFAULT 0,
+    grass_p1_wins INTEGER NOT NULL DEFAULT 0,
+    grass_p2_wins INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (player1_key, player2_key)
+);
+
 -- Caché JSON de pointbypoint para stats/timeline (evita re-parsear)
 CREATE TABLE IF NOT EXISTS match_pointbypoint_cache (
     match_id INTEGER PRIMARY KEY,
