@@ -1646,6 +1646,140 @@ async def admin_debug_predictor():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/debug-prediction-flow", tags=["Admin"])
+async def admin_debug_prediction_flow():
+    """
+    Diagnóstico paso a paso: por qué no se generan predicciones.
+    
+    Ejecuta el flujo completo de predicción para UN partido y devuelve
+    en qué paso falla (si falla).
+    """
+    from datetime import date, timedelta
+    steps = []
+    
+    try:
+        today = date.today()
+        end_date = today + timedelta(days=2)
+        
+        # Paso 1: ¿Hay partidos pendientes con event_key?
+        pending = db._fetchall(
+            """
+            SELECT id, event_key, jugador1_nombre, jugador2_nombre, superficie, fecha_partido
+            FROM matches
+            WHERE estado = 'pendiente'
+            AND fecha_partido >= :today AND fecha_partido <= :end
+            AND event_key IS NOT NULL AND TRIM(COALESCE(event_key, '')) != ''
+            ORDER BY fecha_partido ASC
+            LIMIT 5
+            """,
+            {"today": today, "end": end_date},
+        )
+        steps.append({"step": 1, "name": "pending_matches", "ok": bool(pending), "count": len(pending or [])})
+        if not pending:
+            return {"steps": steps, "diagnosis": "No hay partidos pendientes con event_key en hoy+2 días"}
+        
+        # Paso 2: ¿OddsService y API client disponibles?
+        if not odds_service or not odds_service.odds_client:
+            steps.append({"step": 2, "name": "odds_service", "ok": False, "error": "OddsUpdateService o API client no disponible"})
+            return {"steps": steps, "diagnosis": "API de cuotas no disponible (API_TENNIS_API_KEY?)"}
+        steps.append({"step": 2, "name": "odds_service", "ok": True})
+        
+        # Paso 3: ¿Obtenemos cuotas de la API?
+        all_odds = {}
+        for d in range((end_date - today).days + 1):
+            day = today + timedelta(days=d)
+            batch = odds_service.odds_client.get_all_odds_batch(day.strftime("%Y-%m-%d"), day.strftime("%Y-%m-%d"))
+            if batch:
+                all_odds.update(batch)
+        
+        first_match = pending[0]
+        event_key = str(first_match.get("event_key", ""))
+        best = odds_service.odds_client.extract_best_odds(all_odds, event_key) if all_odds else None
+        
+        steps.append({
+            "step": 3, "name": "get_odds",
+            "ok": bool(best and best.get("player1_odds") and best.get("player2_odds")),
+            "odds_found": bool(best),
+            "player1_odds": best.get("player1_odds") if best else None,
+            "player2_odds": best.get("player2_odds") if best else None,
+        })
+        if not best or not best.get("player1_odds") or not best.get("player2_odds"):
+            return {
+                "steps": steps,
+                "diagnosis": "La API no devuelve cuotas para estos partidos. Probar GET /admin/debug-odds-sync",
+            }
+        
+        j1 = float(best["player1_odds"])
+        j2 = float(best["player2_odds"])
+        
+        # Paso 4: ¿Podemos cargar el predictor?
+        predictor = None
+        try:
+            from src.prediction.predictor_calibrado import PredictorCalibrado
+            from src.config.settings import Config
+            predictor = PredictorCalibrado(Config.MODEL_PATH)
+            steps.append({"step": 4, "name": "load_predictor", "ok": True})
+        except Exception as e:
+            steps.append({"step": 4, "name": "load_predictor", "ok": False, "error": str(e)})
+            return {"steps": steps, "diagnosis": f"Error cargando modelo: {e}"}
+        
+        # Paso 5: ¿FeatureGeneratorService se inicializa? (se usa en predecir_partido)
+        try:
+            from src.prediction.feature_generator_service import FeatureGeneratorService
+            fgs = FeatureGeneratorService.get_instance()
+            hist_count = len(fgs.df_historico) if hasattr(fgs, "df_historico") and fgs.df_historico is not None else 0
+            steps.append({"step": 5, "name": "feature_generator", "ok": True, "historical_matches": hist_count})
+        except Exception as e:
+            steps.append({"step": 5, "name": "feature_generator", "ok": False, "error": str(e)})
+            return {"steps": steps, "diagnosis": f"Error en FeatureGeneratorService (datos históricos): {e}"}
+        
+        # Paso 6: ¿predecir_partido funciona?
+        match_id = first_match["id"]
+        try:
+            resultado = predictor.predecir_partido(
+                jugador1=first_match.get("jugador1_nombre", ""),
+                jugador2=first_match.get("jugador2_nombre", ""),
+                superficie=first_match.get("superficie") or "Hard",
+                cuota=j1,
+            )
+            steps.append({
+                "step": 6, "name": "predict",
+                "ok": True,
+                "probabilidad": resultado.get("probabilidad"),
+                "expected_value": resultado.get("expected_value"),
+            })
+        except Exception as e:
+            steps.append({"step": 6, "name": "predict", "ok": False, "error": str(e)})
+            return {"steps": steps, "diagnosis": f"Error en predicción: {e}"}
+        
+        # Paso 7: ¿add_prediction guarda en BD?
+        try:
+            from src.services.prediction_runner import run_prediction_and_save
+            ok = run_prediction_and_save(
+                db=db,
+                predictor=predictor,
+                match_id=match_id,
+                player1_name=first_match.get("jugador1_nombre", ""),
+                player2_name=first_match.get("jugador2_nombre", ""),
+                surface=first_match.get("superficie") or "Hard",
+                player1_odds=j1,
+                player2_odds=j2,
+            )
+            steps.append({"step": 7, "name": "save_prediction", "ok": ok})
+            if ok:
+                return {"steps": steps, "diagnosis": "✅ Flujo completo OK. La predicción se generó correctamente."}
+            else:
+                return {"steps": steps, "diagnosis": "run_prediction_and_save retornó False (revisar logs)"}
+        except Exception as e:
+            steps.append({"step": 7, "name": "save_prediction", "ok": False, "error": str(e)})
+            return {"steps": steps, "diagnosis": f"Error guardando predicción: {e}"}
+            
+    except Exception as e:
+        logger.error(f"❌ Error en debug-prediction-flow: {e}", exc_info=True)
+        steps.append({"step": "error", "error": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin/debug-odds-sync", tags=["Admin"])
 async def admin_debug_odds_sync():
     """
@@ -2748,6 +2882,7 @@ async def startup_event():
                 id="sync_odds_and_predictions_job",
                 name="Sincronizar cuotas y predicciones (cada 4h)",
                 replace_existing=True,
+                next_run_time=datetime.now(),  # Ejecutar al arrancar (no esperar 4h)
             )
 
         # Job 5: Limpieza automática de partidos antiguos (2:00 AM cada día)
