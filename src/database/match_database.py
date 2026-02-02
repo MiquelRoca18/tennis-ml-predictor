@@ -532,8 +532,11 @@ class MatchDatabase:
         event_final_result: str = None,
         event_game_result: str = None,
         event_serve: str = None,
+        force_estado: str = None,
     ):
-        """Actualiza datos en vivo de un partido (marcador, sets ganados, juego actual, quién saca)."""
+        """Actualiza datos en vivo de un partido (marcador, sets ganados, juego actual, quién saca).
+        force_estado: si se proporciona, se usa en lugar de derivar de event_live/event_status (para corregir en_juego erróneo en partidos futuros).
+        """
         updates = []
         params = {"match_id": match_id}
         
@@ -548,7 +551,12 @@ class MatchDatabase:
         if event_status is not None:
             updates.append("event_status = :event_status")
             params["event_status"] = event_status
-            # Mapear estado de API a nuestro estado (incl. Retired, Walk Over, etc.)
+        
+        # Estado: force_estado tiene prioridad (para corregir partidos futuros marcados en_juego por error)
+        if force_estado is not None:
+            updates.append("estado = :force_estado")
+            params["force_estado"] = force_estado
+        elif event_status is not None:
             event_status_lower = event_status.lower()
             finished_keywords = [
                 "finished", "ended", "completed", "final",
@@ -577,6 +585,53 @@ class MatchDatabase:
             query = f"UPDATE matches SET {', '.join(updates)} WHERE id = :match_id"
             self._execute(query, params)
             logger.debug(f"Actualizado partido en vivo {match_id}")
+
+    def correct_future_matches_marked_live(self) -> int:
+        """
+        Corrige partidos que tienen estado='en_juego' pero aún no han empezado (fecha/hora en el futuro).
+        Devuelve el número de partidos corregidos.
+        """
+        from datetime import datetime, date, time as dt_time
+        now = datetime.now()
+        today = date.today()
+        matches = self._fetchall(
+            "SELECT id, fecha_partido, hora_inicio FROM matches WHERE estado = 'en_juego'",
+            {},
+        )
+        corrected = 0
+        for m in matches or []:
+            match_date = m.get("fecha_partido")
+            hora = m.get("hora_inicio")
+            if not match_date:
+                continue
+            try:
+                if isinstance(match_date, str):
+                    match_date_val = datetime.strptime(str(match_date)[:10], "%Y-%m-%d").date()
+                else:
+                    match_date_val = match_date.date() if hasattr(match_date, "date") else match_date
+                if match_date_val > today:
+                    is_future = True
+                elif match_date_val == today and hora:
+                    if isinstance(hora, str):
+                        parts = str(hora).strip().split(":")
+                        h, m = int(parts[0]) if parts else 0, int(parts[1]) if len(parts) > 1 else 0
+                        start_dt = datetime.combine(match_date_val, dt_time(h, m, 0))
+                    else:
+                        start_dt = datetime.combine(match_date_val, hora)
+                    is_future = start_dt > now
+                else:
+                    is_future = False
+                if is_future:
+                    self._execute(
+                        "UPDATE matches SET estado = 'pendiente', event_live = '0' WHERE id = :id",
+                        {"id": m["id"]},
+                    )
+                    corrected += 1
+            except (ValueError, TypeError):
+                pass
+        if corrected > 0:
+            logger.info(f"🔧 Corregidos {corrected} partidos marcados en_juego pero aún no empezados")
+        return corrected
 
     def get_match_by_event_key(self, event_key: str) -> Optional[Dict]:
         """

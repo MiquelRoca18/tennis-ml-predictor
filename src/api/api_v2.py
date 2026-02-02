@@ -458,10 +458,10 @@ async def get_matches_by_date(
                             is_future = True
                     except (ValueError, TypeError):
                         pass
-            # Si la BD ya tiene "en_juego", no sobrescribir con "pendiente" (el detalle usa solo la BD;
-            # así la card y el detalle coinciden aunque la hora del servidor diga is_future).
+            # Si el partido es futuro (fecha o hora_inicio), SIEMPRE mostrar pendiente.
+            # No confiar en db_estado="en_juego" para partidos futuros (API-Tennis puede tener bugs).
             db_estado = p.get("estado", "pendiente")
-            effective_estado = "pendiente" if (is_future and db_estado != "en_juego") else db_estado
+            effective_estado = "pendiente" if is_future else db_estado
 
             # Construir jugadores
             jugador1 = JugadorInfo(
@@ -2257,6 +2257,22 @@ async def startup_event():
                 name="Actualización de estados de partidos",
                 replace_existing=True,
             )
+
+        # Job 1.5b: Corregir partidos marcados en_juego que aún no han empezado (cada 5 min)
+        def correct_future_live_matches():
+            try:
+                n = db.correct_future_matches_marked_live()
+                if n > 0:
+                    logger.info(f"🔧 Corregidos {n} partidos en_juego erróneos (aún no empezados)")
+            except Exception as e:
+                logger.debug("Error corrigiendo partidos futuros: %s", e)
+        scheduler.add_job(
+            func=correct_future_live_matches,
+            trigger=IntervalTrigger(minutes=5),
+            id="correct_future_live_job",
+            name="Corregir partidos en_juego que aún no empezaron",
+            replace_existing=True,
+        )
         
         # Job 1.6: Sincronizar cuotas multi-bookmaker (cada 5 min)
         # NOTA: Deshabilitado temporalmente - no compatible con PostgreSQL
@@ -2528,6 +2544,13 @@ async def startup_event():
             )
 
         scheduler.start()
+        # Corrección inmediata al arrancar: partidos en_juego que aún no empezaron
+        try:
+            n = db.correct_future_matches_marked_live()
+            if n > 0:
+                logger.info(f"🔧 Al arrancar: corregidos {n} partidos marcados en_juego erróneamente")
+        except Exception as e:
+            logger.debug("Error corrección inicial: %s", e)
         logger.info("✅ Scheduler iniciado:")
         logger.info("   - Actualizaciones de cuotas: cada 5 minutos")
         logger.info("   - Actualización de estados: cada 2 minutos")

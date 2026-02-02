@@ -11,9 +11,38 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, date, time as dt_time
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _has_match_started(match: Dict) -> bool:
+    """
+    Verifica si el partido ya ha empezado según fecha_partido + hora_inicio.
+    Evita marcar como en_juego partidos que API-Tennis indica como live pero aún no han empezado.
+    """
+    fecha = match.get("fecha_partido")
+    hora = match.get("hora_inicio")
+    if not fecha or not hora:
+        return False
+    try:
+        if isinstance(fecha, str):
+            match_date = datetime.strptime(str(fecha)[:10], "%Y-%m-%d").date()
+        elif hasattr(fecha, "date"):
+            match_date = fecha.date() if callable(fecha.date) else fecha
+        else:
+            return False
+        if isinstance(hora, str):
+            parts = str(hora).strip().split(":")
+            h = int(parts[0]) if len(parts) > 0 else 0
+            m = int(parts[1]) if len(parts) > 1 else 0
+            start_dt = datetime.combine(match_date, dt_time(h, m, 0))
+        else:
+            start_dt = datetime.combine(match_date, hora if hasattr(hora, "hour") else dt_time(0, 0, 0))
+        return start_dt <= datetime.now()
+    except (ValueError, TypeError):
+        return False
 
 # Optional: only import when available
 try:
@@ -244,6 +273,14 @@ class LiveEventsService:
         event_serve = api_match.get("event_serve")
 
         estado = self._determine_estado(event_live, event_final_result, event_status)
+        # Si API dice en_juego pero el partido no ha empezado (hora_inicio), no confiar: API-Tennis puede tener bugs
+        event_live_to_save = event_live
+        force_estado = None
+        if estado == "en_juego" and not _has_match_started(match):
+            event_live_to_save = "0"
+            force_estado = "pendiente"
+            logger.debug("WebSocket: partido %s marcado en_juego por API pero no ha empezado (hora_inicio), forzando pendiente", match_id)
+
         scores = api_match.get("scores") or []
         swap = not _api_first_is_our_jugador1(api_match, match)
         n_completed = _completed_sets_count(event_final_result)
@@ -252,11 +289,12 @@ class LiveEventsService:
         self.db.update_match_live_data(
             match_id=match_id,
             scores=marcador,
-            event_live=event_live,
+            event_live=event_live_to_save,
             event_status=event_status,
             event_final_result=event_final_result,
             event_game_result=event_game_result,
             event_serve=event_serve,
+            force_estado=force_estado,
         )
         if event_winner and estado == "completado":
             self.db.update_match_ganador(match_id, event_winner)

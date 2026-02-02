@@ -209,8 +209,9 @@ class MatchUpdateService:
             event_status = api_match.get("event_status", "")
             event_time = api_match.get("event_time")
 
-            # Si el partido es en fecha futura, no confiar en event_live=1 (bug API o timezone)
-            from datetime import date as date_type
+            # Si el partido es en fecha futura o hora_inicio aún no llegó, no confiar en event_live=1 (bug API o timezone)
+            from datetime import date as date_type, time as dt_time
+            force_estado_pendiente = False
             match_date_val = match_date
             if hasattr(match_date_val, "date"):
                 match_date_val = match_date_val.date()
@@ -221,9 +222,30 @@ class MatchUpdateService:
                     match_date_val = date_type.today()
             if match_date_val > date_type.today():
                 event_live = "0"
+                force_estado_pendiente = True
                 if not (event_final_result and event_final_result != "-"):
                     event_status = ""  # forzar pendiente si no hay resultado
                 logger.debug(f"📅 Partido {match_id} es futuro ({match_date_val}), forzando event_live=0")
+            elif match_date_val == date_type.today():
+                # Mismo día: verificar si hora_inicio ya pasó
+                hora_inicio_val = match.get("hora_inicio") or event_time
+                if hora_inicio_val:
+                    try:
+                        if isinstance(hora_inicio_val, str):
+                            parts = str(hora_inicio_val).strip().split(":")
+                            h = int(parts[0]) if len(parts) > 0 else 0
+                            m = int(parts[1]) if len(parts) > 1 else 0
+                            start_dt = datetime.combine(match_date_val, dt_time(h, m, 0))
+                        else:
+                            start_dt = datetime.combine(match_date_val, hora_inicio_val)
+                        if start_dt > datetime.now():
+                            event_live = "0"
+                            force_estado_pendiente = True
+                            if not (event_final_result and event_final_result != "-"):
+                                event_status = ""
+                            logger.debug(f"📅 Partido {match_id} hora_inicio {hora_inicio_val} aún no llegó, forzando event_live=0")
+                    except (ValueError, TypeError):
+                        pass
 
             # Determinar nuevo estado
             nuevo_estado = self._determine_estado(event_live, event_final_result, event_status)
@@ -308,7 +330,7 @@ class MatchUpdateService:
                     if api_match.get("event_serve") is not None:
                         update_data["event_serve"] = api_match.get("event_serve")
 
-                # Actualizar en DB
+                # Actualizar en DB (force_estado corrige en_juego erróneo en partidos futuros)
                 self.db.update_match_live_data(
                     match_id=match_id,
                     event_live=update_data.get("event_live"),
@@ -317,6 +339,7 @@ class MatchUpdateService:
                     scores=update_data.get("resultado_marcador"),
                     event_game_result=update_data.get("event_game_result"),
                     event_serve=update_data.get("event_serve"),
+                    force_estado="pendiente" if force_estado_pendiente else None,
                 )
                 
                 # Actualizar hora si cambió

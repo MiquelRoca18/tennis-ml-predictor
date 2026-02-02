@@ -12,7 +12,7 @@ Endpoints:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, date, time as dt_time
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -56,6 +56,36 @@ def _is_set_completed(p1: int, p2: int) -> bool:
     if hi < 6:
         return False
     return (hi - lo >= 2) or (lo >= 6)
+
+
+def _is_match_future(match: dict) -> bool:
+    """True si el partido aún no ha empezado (fecha o hora_inicio en el futuro)."""
+    match_date = match.get("fecha_partido")
+    if not match_date:
+        return False
+    try:
+        if isinstance(match_date, str):
+            match_date_val = datetime.strptime(str(match_date)[:10], "%Y-%m-%d").date()
+        elif hasattr(match_date, "date"):
+            match_date_val = match_date.date() if callable(match_date.date) else match_date
+        else:
+            return False
+        if match_date_val > date.today():
+            return True
+        if match_date_val == date.today():
+            hora = match.get("hora_inicio")
+            if hora:
+                if isinstance(hora, str):
+                    parts = str(hora).strip().split(":")
+                    h = int(parts[0]) if len(parts) > 0 else 0
+                    m = int(parts[1]) if len(parts) > 1 else 0
+                    start_dt = datetime.combine(match_date_val, dt_time(h, m, 0))
+                else:
+                    start_dt = datetime.combine(match_date_val, hora)
+                return start_dt > datetime.now()
+        return False
+    except (ValueError, TypeError):
+        return False
 
 
 def configure_dependencies(db, api_client):
@@ -106,9 +136,11 @@ async def get_match_full(match_id: int):
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
         # 2. Construir información del partido
-        estado = match.get("estado", "pendiente")
-        if estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
-            estado = "pendiente"
+        db_estado = match.get("estado", "pendiente")
+        if db_estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
+            db_estado = "pendiente"
+        # Si el partido es futuro, no mostrar en_juego (API-Tennis puede tener bugs)
+        estado = "pendiente" if _is_match_future(match) else db_estado
         
         superficie_raw = match.get("superficie", "Hard")
         superficie_map = {
@@ -181,7 +213,6 @@ async def get_match_full(match_id: int):
                     sets = []
                     p1_sets = 0
                     p2_sets = 0
-                    estado = match.get("estado", "pendiente")
                     # En partidos en vivo solo contar sets COMPLETADOS para sets_won (no el set en curso)
                     count_all = estado != "en_juego"
                     for s in sets_db:
@@ -235,7 +266,6 @@ async def get_match_full(match_id: int):
                     pass
         
         # Datos en vivo: set actual, puntos del juego, quién saca (solo si partido en juego)
-        estado = match.get("estado", "pendiente")
         if scores and estado == "en_juego":
             serve_raw = (match.get("event_serve") or "").strip().lower()
             current_server = 1 if serve_raw == "first player" else 2
