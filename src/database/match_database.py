@@ -228,7 +228,9 @@ class MatchDatabase:
             
             # Migración: columna event_status (Retired, Walk Over, etc.)
             self._migrate_add_event_status()
-                
+            # Migración: tabla match_pointbypoint_cache para caché JSON (stats/timeline)
+            self._migrate_pointbypoint_cache_table()
+
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
             # Don't fail completely, tables might already exist
@@ -259,6 +261,34 @@ class MatchDatabase:
             else:
                 logger.warning(f"Migración event_status: {e}")
 
+    def _migrate_pointbypoint_cache_table(self):
+        """Crea tabla match_pointbypoint_cache para caché JSON de pointbypoint (stats/timeline)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS match_pointbypoint_cache (
+                            match_id INTEGER PRIMARY KEY,
+                            data TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+                        )
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS match_pointbypoint_cache (
+                        match_id INTEGER PRIMARY KEY,
+                        data TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+                    )
+                """)
+                self.conn.commit()
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Migración match_pointbypoint_cache: {e}")
 
     # ============================================================
     # DATABASE ABSTRACTION LAYER
@@ -632,6 +662,25 @@ class MatchDatabase:
         if corrected > 0:
             logger.info(f"🔧 Corregidos {corrected} partidos marcados en_juego pero aún no empezados")
         return corrected
+
+    def save_pointbypoint_cache(self, match_id: int, pointbypoint_data: list) -> bool:
+        """Guarda pointbypoint como JSON en match_pointbypoint_cache para stats/timeline."""
+        try:
+            import json
+            data_json = json.dumps(pointbypoint_data)
+            self._execute(
+                """
+                INSERT INTO match_pointbypoint_cache (match_id, data, created_at)
+                VALUES (:match_id, :data, CURRENT_TIMESTAMP)
+                ON CONFLICT (match_id) DO UPDATE SET data = :data, created_at = CURRENT_TIMESTAMP
+                """,
+                {"match_id": match_id, "data": data_json}
+            )
+            logger.debug(f"Pointbypoint cache guardado para match {match_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Error guardando pointbypoint cache: {e}")
+            return False
 
     def get_match_by_event_key(self, event_key: str) -> Optional[Dict]:
         """

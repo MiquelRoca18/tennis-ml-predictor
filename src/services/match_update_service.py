@@ -357,6 +357,11 @@ class MatchUpdateService:
                 if nuevo_estado == "completado":
                     # Guardar scores por set (orden jugador1-jugador2)
                     self._save_match_sets_from_api(match_id, api_match, match)
+                    # Guardar pointbypoint en caché para stats/timeline (Grand Slams, etc.)
+                    pbp = api_match.get("pointbypoint", [])
+                    if pbp:
+                        self.db.save_pointbypoint_cache(match_id, pbp)
+                        logger.debug(f"✅ Pointbypoint cache guardado para match {match_id} ({len(pbp)} juegos)")
                     # Guardar estadísticas detalladas (juegos y puntos)
                     self._store_detailed_stats(match_id, event_key)
 

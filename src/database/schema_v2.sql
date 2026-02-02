@@ -299,6 +299,15 @@ CREATE TABLE IF NOT EXISTS match_pointbypoint (
 CREATE INDEX IF NOT EXISTS idx_pbp_match ON match_pointbypoint(match_id);
 
 
+-- Caché JSON de pointbypoint para stats/timeline (evita re-parsear)
+CREATE TABLE IF NOT EXISTS match_pointbypoint_cache (
+    match_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+);
+
+
 -- ============================================================
 -- VISTAS ÚTILES
 -- ============================================================

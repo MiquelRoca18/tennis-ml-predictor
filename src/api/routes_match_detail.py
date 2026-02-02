@@ -139,8 +139,14 @@ async def get_match_full(match_id: int):
         db_estado = match.get("estado", "pendiente")
         if db_estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
             db_estado = "pendiente"
-        # Si el partido es futuro, no mostrar en_juego (API-Tennis puede tener bugs)
-        estado = "pendiente" if _is_match_future(match) else db_estado
+        # Si el partido es futuro, no mostrar en_juego (API-Tennis puede tener bugs).
+        # NUNCA sobrescribir "completado": partidos terminados siempre muestran stats/timeline.
+        if db_estado == "completado":
+            estado = "completado"
+        elif _is_match_future(match) and db_estado == "en_juego":
+            estado = "pendiente"
+        else:
+            estado = db_estado
         
         superficie_raw = match.get("superficie", "Hard")
         superficie_map = {
@@ -355,21 +361,33 @@ async def get_match_timeline(match_id: int):
         if timeline and timeline.total_games > 0:
             return timeline
         
-        # 2. No hay datos - lazy loading desde API
+        # 2. No hay datos - lazy loading desde API (get_fixtures requiere date_start/date_stop)
         event_key = match.get("event_key")
         if not event_key:
             return MatchTimeline()
         
         try:
-            response = api_client._make_request("get_fixtures", {"match_key": event_key})
+            fecha = match.get("fecha_partido")
+            date_str = (fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]) if fecha else None
+            if not date_str:
+                return MatchTimeline()
+            params = {"date_start": date_str, "date_stop": date_str, "match_key": event_key}
+            response = api_client._make_request("get_fixtures", params)
             if response and response.get("result"):
                 results = response["result"]
-                api_data = results[0] if isinstance(results, list) else results
+                api_data = None
+                if isinstance(results, list):
+                    for m in results:
+                        if str(m.get("event_key")) == str(event_key):
+                            api_data = m
+                            break
+                    if not api_data and results:
+                        api_data = results[0]
+                else:
+                    api_data = results
                 
-                if api_data.get("pointbypoint"):
-                    # Guardar en BD para caché
+                if api_data and api_data.get("pointbypoint"):
                     _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
-                    
                     timeline = stats_calculator.calculate_timeline(api_data["pointbypoint"])
                     return timeline
         except Exception as e:
@@ -410,21 +428,36 @@ async def get_match_stats(match_id: int):
         if stats and stats.has_detailed_stats:
             return stats
         
-        # 2. No hay datos - lazy loading desde API
+        # 2. No hay datos - lazy loading desde API (get_fixtures requiere date_start/date_stop)
         event_key = match.get("event_key")
         if not event_key:
             return {"has_detailed_stats": False, "message": "No hay estadísticas disponibles"}
         
         try:
-            response = api_client._make_request("get_fixtures", {"match_key": event_key})
+            fecha = match.get("fecha_partido")
+            date_str = (fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]) if fecha else None
+            if not date_str:
+                return {"has_detailed_stats": False, "message": "No hay estadísticas disponibles"}
+            params = {"date_start": date_str, "date_stop": date_str, "match_key": event_key}
+            response = api_client._make_request("get_fixtures", params)
             if response and response.get("result"):
                 results = response["result"]
-                api_data = results[0] if isinstance(results, list) else results
+                api_data = None
+                if isinstance(results, list):
+                    for m in results:
+                        if str(m.get("event_key")) == str(event_key):
+                            api_data = m
+                            break
+                    if not api_data and results:
+                        api_data = results[0]
+                else:
+                    api_data = results
                 
-                if api_data.get("pointbypoint"):
-                    # Guardar en BD para caché
+                if not api_data or not api_data.get("pointbypoint"):
+                    keys = list(api_data.keys()) if api_data else []
+                    logger.info(f"📊 API get_fixtures match {match_id} (event_key={event_key}): sin pointbypoint. Keys respuesta: {keys}")
+                if api_data and api_data.get("pointbypoint"):
                     _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
-                    
                     # Calcular scores primero
                     scores = None
                     if api_data.get("scores"):
@@ -466,16 +499,30 @@ async def get_point_by_point(
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # Intentar obtener de API con lazy loading
+        # Intentar obtener de API con lazy loading (get_fixtures requiere date_start/date_stop)
         event_key = match.get("event_key")
         if event_key:
             try:
-                response = api_client._make_request("get_fixtures", {"match_key": event_key})
+                fecha = match.get("fecha_partido")
+                date_str = (fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]) if fecha else None
+                if date_str:
+                    params = {"date_start": date_str, "date_stop": date_str, "match_key": event_key}
+                    response = api_client._make_request("get_fixtures", params)
+                else:
+                    response = None
                 if response and response.get("result"):
                     results = response["result"]
-                    api_data = results[0] if isinstance(results, list) else results
-                    
-                    if api_data.get("pointbypoint"):
+                    api_data = None
+                    if isinstance(results, list):
+                        for m in results:
+                            if str(m.get("event_key")) == str(event_key):
+                                api_data = m
+                                break
+                        if not api_data and results:
+                            api_data = results[0]
+                    else:
+                        api_data = results
+                    if api_data and api_data.get("pointbypoint"):
                         return stats_calculator.extract_point_by_point(
                             api_data["pointbypoint"],
                             set_filter=set_number
@@ -793,43 +840,38 @@ async def get_match_h2h(match_id: int):
 
 def _save_pointbypoint_to_db(db, match_id: int, pointbypoint_data: list):
     """
-    Guarda datos pointbypoint en la BD para caché.
+    Guarda datos pointbypoint en la BD para caché (tabla match_pointbypoint_cache).
     Esto permite que futuras requests sean instantáneas.
     """
     try:
         import json
-        
-        # Guardar como JSON en la tabla match_pointbypoint
+        data_json = json.dumps(pointbypoint_data)
+        params = {"match_id": match_id, "data": data_json}
         db._execute(
             """
-            INSERT INTO match_pointbypoint (match_id, data, created_at)
+            INSERT INTO match_pointbypoint_cache (match_id, data, created_at)
             VALUES (:match_id, :data, CURRENT_TIMESTAMP)
-            ON CONFLICT (match_id) DO UPDATE SET 
-                data = :data,
-                created_at = CURRENT_TIMESTAMP
+            ON CONFLICT (match_id) DO UPDATE SET data = :data, created_at = CURRENT_TIMESTAMP
             """,
-            {"match_id": match_id, "data": json.dumps(pointbypoint_data)}
+            params
         )
-        logger.info(f"✅ Pointbypoint guardado en caché para match {match_id}")
+        logger.info(f"✅ Pointbypoint guardado en caché para match {match_id} ({len(pointbypoint_data)} juegos)")
     except Exception as e:
         logger.warning(f"Error guardando pointbypoint en BD: {e}")
 
 
 def _load_pointbypoint_from_db(db, match_id: int) -> Optional[list]:
-    """Carga datos pointbypoint de la BD si existen"""
+    """Carga datos pointbypoint de la BD (tabla match_pointbypoint_cache) si existen"""
     try:
         import json
-        
         result = db._fetchone(
-            "SELECT data FROM match_pointbypoint WHERE match_id = :match_id",
+            "SELECT data FROM match_pointbypoint_cache WHERE match_id = :match_id",
             {"match_id": match_id}
         )
-        
         if result and result.get("data"):
             return json.loads(result["data"])
     except Exception as e:
         logger.warning(f"Error cargando pointbypoint de BD: {e}")
-    
     return None
 
 
