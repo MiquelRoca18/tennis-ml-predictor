@@ -128,7 +128,12 @@ class APITennisClient:
             today = datetime.now()
             date_to = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-            params = {"date_start": today.strftime("%Y-%m-%d"), "date_stop": date_to}
+            # timezone=Europe/Madrid para que event_date coincida con España (evitar desfases)
+            params = {
+                "date_start": today.strftime("%Y-%m-%d"),
+                "date_stop": date_to,
+                "timezone": "Europe/Madrid",
+            }
 
             data = self._make_request("get_fixtures", params)
 

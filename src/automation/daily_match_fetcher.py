@@ -185,7 +185,7 @@ class DailyMatchFetcher:
                 logger.info(f"ℹ️  Fetching historical date: {date_str}")
                 # Modificar temporalmente para obtener esa fecha
                 matches_raw = []
-                params = {"date_start": date_str, "date_stop": date_str}
+                params = {"date_start": date_str, "date_stop": date_str, "timezone": "Europe/Madrid"}
                 data = self.api_client._make_request("get_fixtures", params)
                 if data:
                     matches_raw = data.get("result", [])
@@ -261,6 +261,7 @@ class DailyMatchFetcher:
                 data = self.api_client._make_request("get_fixtures", {
                     "date_start": date_str,
                     "date_stop": date_str,
+                    "timezone": "Europe/Madrid",
                 })
                 if not data or "result" not in data:
                     continue
@@ -422,6 +423,7 @@ class DailyMatchFetcher:
         # ===== Continuar con procesamiento normal =====
         
         match_date_str = match_data.get("date")
+        event_key = match_data.get("event_key")
 
         # Parse date
         try:
@@ -430,7 +432,24 @@ class DailyMatchFetcher:
             logger.warning(f"⚠️  Invalid date format: {match_date_str}, using today")
             match_date = date.today()
 
-        # Check if match already exists
+        # PRIORIDAD 1: Si tiene event_key, verificar si ya existe (evitar duplicados por timezone)
+        if event_key:
+            existing = self.db.get_match_by_event_key(str(event_key))
+            if existing:
+                existing_id = existing.get("id")
+                existing_fecha = existing.get("fecha_partido")
+                if isinstance(existing_fecha, str):
+                    try:
+                        existing_fecha = datetime.strptime(existing_fecha[:10], "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        existing_fecha = None
+                if existing_fecha and existing_fecha != match_date:
+                    # La API puede tener la fecha correcta; actualizar la nuestra
+                    self.db.update_match_fecha_hora(existing_id, match_date, match_data.get("time"))
+                    logger.info(f"📅 Partido {existing_id} (event_key={event_key}): fecha corregida {existing_fecha} → {match_date}")
+                return {"created": False, "match_info": None, "prediction_generated": False, "filtered": False}
+
+        # PRIORIDAD 2: Verificar por (jugadores, fecha) por compatibilidad
         if self.db.match_exists(player1_name, player2_name, match_date):
             logger.debug(f"ℹ️  Match already exists: {player1_name} vs {player2_name}")
             return {"created": False, "match_info": None, "prediction_generated": False, "filtered": False}

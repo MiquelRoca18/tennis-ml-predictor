@@ -1534,6 +1534,35 @@ class MatchDatabase:
     # HELPER METHODS FOR SERVICES (PostgreSQL compatible)
     # ============================================================
 
+    def update_match_fecha_hora(self, match_id: int, fecha_partido: date, hora_inicio: Optional[str] = None) -> bool:
+        """
+        Actualiza la fecha y/o hora de un partido (útil para corregir fechas de la API).
+        
+        Args:
+            match_id: ID del partido
+            fecha_partido: Nueva fecha del partido
+            hora_inicio: Nueva hora (opcional)
+            
+        Returns:
+            True si se actualizó correctamente
+        """
+        try:
+            if hora_inicio is not None:
+                self._execute(
+                    "UPDATE matches SET fecha_partido = :fecha, hora_inicio = :hora WHERE id = :match_id",
+                    {"fecha": fecha_partido, "hora": hora_inicio, "match_id": match_id}
+                )
+            else:
+                self._execute(
+                    "UPDATE matches SET fecha_partido = :fecha WHERE id = :match_id",
+                    {"fecha": fecha_partido, "match_id": match_id}
+                )
+            logger.info(f"✅ Partido {match_id}: fecha actualizada a {fecha_partido}")
+            return True
+        except Exception as e:
+            logger.error(f"Error actualizando fecha partido {match_id}: {e}")
+            return False
+
     def update_match_hora_inicio(self, match_id: int, hora_inicio: str) -> bool:
         """
         Actualiza la hora de inicio de un partido
