@@ -1769,7 +1769,37 @@ async def admin_debug_prediction_flow():
             if ok:
                 return {"steps": steps, "diagnosis": "✅ Flujo completo OK. La predicción se generó correctamente."}
             else:
-                return {"steps": steps, "diagnosis": "run_prediction_and_save retornó False (revisar logs)"}
+                # Si falló, intentar add_prediction directamente para capturar el error real
+                try:
+                    prob_j1 = resultado["probabilidad"]
+                    prob_j2 = 1 - prob_j1
+                    ev_j1 = resultado["expected_value"]
+                    ev_j2 = (prob_j2 * j2) - 1
+                    db.add_prediction(
+                        match_id=match_id,
+                        jugador1_cuota=j1,
+                        jugador2_cuota=j2,
+                        jugador1_probabilidad=prob_j1,
+                        jugador2_probabilidad=prob_j2,
+                        jugador1_ev=ev_j1,
+                        jugador2_ev=ev_j2,
+                        recomendacion="NO APOSTAR",
+                        mejor_opcion=None,
+                        confianza="Baja",
+                        jugador1_edge=resultado.get("edge"),
+                        jugador2_edge=None,
+                        kelly_stake_jugador1=None,
+                        kelly_stake_jugador2=None,
+                        confidence_level=resultado.get("confidence_level"),
+                        confidence_score=resultado.get("confidence_score"),
+                        player1_known=resultado.get("player1_known"),
+                        player2_known=resultado.get("player2_known"),
+                    )
+                    steps[-1] = {"step": 7, "name": "save_prediction", "ok": True}
+                    return {"steps": steps, "diagnosis": "✅ Flujo completo OK (save vía debug)."}
+                except Exception as e2:
+                    steps[-1] = {"step": 7, "name": "save_prediction", "ok": False, "error": str(e2)}
+                    return {"steps": steps, "diagnosis": f"Error en add_prediction: {e2}"}
         except Exception as e:
             steps.append({"step": 7, "name": "save_prediction", "ok": False, "error": str(e)})
             return {"steps": steps, "diagnosis": f"Error guardando predicción: {e}"}

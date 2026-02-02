@@ -243,6 +243,8 @@ class MatchDatabase:
             self._migrate_h2h_cache_table()
             # Migración: columnas jugador1_cuota/jugador2_cuota en matches (para sync de odds)
             self._migrate_add_match_odds_columns()
+            # Migración: columnas confidence en predictions (para BD creadas antes de schema_v2 completo)
+            self._migrate_add_predictions_confidence_columns()
             # Migración: recrear vista matches_with_latest_prediction (evitar DuplicateColumn tras añadir cuotas a matches)
             self._migrate_recreate_matches_view()
 
@@ -303,6 +305,36 @@ class MatchDatabase:
                     logger.debug(f"Columna {col} ya existe en matches")
                 else:
                     logger.warning(f"Migración {col}: {e}")
+
+    def _migrate_add_predictions_confidence_columns(self):
+        """Añade confidence_level, confidence_score, player1_known, player2_known a predictions si no existen."""
+        columns_to_add = [
+            ("confidence_level", "VARCHAR(20)", "VARCHAR(20)"),
+            ("confidence_score", "REAL", "REAL"),
+            ("player1_known", "BOOLEAN DEFAULT FALSE", "INTEGER DEFAULT 0"),
+            ("player2_known", "BOOLEAN DEFAULT FALSE", "INTEGER DEFAULT 0"),
+        ]
+        for col, pg_type, sqlite_type in columns_to_add:
+            try:
+                if self.is_postgres:
+                    from sqlalchemy import text
+                    with self.engine.connect() as conn:
+                        r = conn.execute(text("""
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public' AND table_name = 'predictions' AND column_name = :col
+                        """), {"col": col})
+                        if r.fetchone() is None:
+                            conn.execute(text(f"ALTER TABLE predictions ADD COLUMN {col} {pg_type}"))
+                        conn.commit()
+                else:
+                    self.conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {sqlite_type}")
+                    self.conn.commit()
+                logger.debug(f"Migración: columna {col} añadida a predictions")
+            except Exception as e:
+                if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                    logger.debug(f"Columna {col} ya existe en predictions")
+                else:
+                    logger.warning(f"Migración predictions.{col}: {e}")
 
     def _migrate_recreate_matches_view(self):
         """Recrea matches_with_latest_prediction para evitar DuplicateColumn (m.* y p.jugador1_cuota)."""

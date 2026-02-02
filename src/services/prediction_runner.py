@@ -123,5 +123,5 @@ def run_prediction_and_save(
         return True
 
     except Exception as e:
-        logger.error(f"❌ Error generating prediction for match {match_id}: {e}")
+        logger.error(f"❌ Error generating prediction for match {match_id}: {e}", exc_info=True)
         return False
