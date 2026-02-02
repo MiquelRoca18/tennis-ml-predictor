@@ -1537,6 +1537,99 @@ async def admin_check_predictions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/check-model", tags=["Admin"])
+async def admin_check_model():
+    """
+    Verifica si el modelo de predicción existe y puede cargarse.
+    Útil para diagnosticar por qué no se generan predicciones.
+    """
+    import os
+    from pathlib import Path
+    try:
+        model_path = Config.MODEL_PATH
+        # Resolver ruta absoluta (desde /app en Docker)
+        if not os.path.isabs(model_path):
+            base = Path("/app" if Path("/app").exists() else ".")
+            full_path = (base / model_path).resolve()
+        else:
+            full_path = Path(model_path)
+
+        exists = full_path.exists()
+        result = {
+            "model_path": model_path,
+            "full_path": str(full_path),
+            "file_exists": exists,
+            "file_size": full_path.stat().st_size if exists else None,
+        }
+
+        if exists:
+            try:
+                import joblib
+                model = joblib.load(full_path)
+                result["load_ok"] = True
+                result["model_type"] = type(model).__name__
+            except Exception as e:
+                result["load_ok"] = False
+                result["load_error"] = str(e)
+        else:
+            result["load_ok"] = False
+            result["load_error"] = "Archivo no encontrado"
+
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error en check-model: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/debug-predictor", tags=["Admin"])
+async def admin_debug_predictor():
+    """
+    Diagnóstico: verifica si el modelo existe y puede cargarse.
+    Útil para entender por qué no se generan predicciones.
+    """
+    import os
+    from pathlib import Path
+    try:
+        model_path = Config.MODEL_PATH
+        path_obj = Path(model_path)
+        abs_path = path_obj.resolve()
+        exists = path_obj.exists()
+        is_file = path_obj.is_file() if exists else False
+        size_bytes = path_obj.stat().st_size if exists and is_file else None
+        cwd = os.getcwd()
+
+        load_ok = False
+        load_error = None
+        if exists and is_file:
+            try:
+                import joblib
+                model = joblib.load(path_obj)
+                load_ok = True
+            except Exception as e:
+                load_error = str(e)
+
+        return {
+            "model_path": model_path,
+            "model_path_resolved": str(abs_path),
+            "cwd": cwd,
+            "file_exists": exists,
+            "is_file": is_file,
+            "size_bytes": size_bytes,
+            "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else None,
+            "load_ok": load_ok,
+            "load_error": load_error,
+            "diagnosis": (
+                "Modelo OK - predictor debería funcionar"
+                if load_ok else
+                f"Modelo no cargable: {load_error}" if load_error else
+                f"Archivo no encontrado en {abs_path}"
+            ),
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en debug-predictor: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin/debug-odds-sync", tags=["Admin"])
 async def admin_debug_odds_sync():
     """
