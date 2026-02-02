@@ -243,6 +243,8 @@ class MatchDatabase:
             self._migrate_h2h_cache_table()
             # Migración: columnas jugador1_cuota/jugador2_cuota en matches (para sync de odds)
             self._migrate_add_match_odds_columns()
+            # Migración: recrear vista matches_with_latest_prediction (evitar DuplicateColumn tras añadir cuotas a matches)
+            self._migrate_recreate_matches_view()
 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
@@ -301,6 +303,46 @@ class MatchDatabase:
                     logger.debug(f"Columna {col} ya existe en matches")
                 else:
                     logger.warning(f"Migración {col}: {e}")
+
+    def _migrate_recreate_matches_view(self):
+        """Recrea matches_with_latest_prediction para evitar DuplicateColumn (m.* y p.jugador1_cuota)."""
+        view_sql = """
+            SELECT 
+                m.id, m.event_key, m.fecha_partido, m.hora_inicio, m.torneo, m.tournament_season, m.ronda, m.superficie,
+                m.jugador1_nombre, m.jugador1_ranking, m.jugador1_logo, m.jugador2_nombre, m.jugador2_ranking, m.jugador2_logo,
+                m.event_live, m.event_qualification, m.event_game_result, m.event_serve, m.event_status_detail,
+                m.resultado_ganador, m.resultado_marcador, m.event_final_result, m.event_status,
+                m.estado, m.created_at, m.updated_at,
+                m.jugador1_key, m.jugador2_key, m.tournament_key,
+                COALESCE(p.jugador1_cuota, m.jugador1_cuota) as jugador1_cuota,
+                COALESCE(p.jugador2_cuota, m.jugador2_cuota) as jugador2_cuota,
+                p.version as prediction_version,
+                p.timestamp as prediction_timestamp,
+                p.jugador1_probabilidad, p.jugador2_probabilidad,
+                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
+                b.resultado as bet_resultado, b.ganancia
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            LEFT JOIN bets b ON m.id = b.match_id AND b.estado = 'activa'
+        """
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("DROP VIEW IF EXISTS matches_with_latest_prediction CASCADE"))
+                    conn.execute(text("CREATE VIEW matches_with_latest_prediction AS" + view_sql))
+                    conn.commit()
+            else:
+                self.conn.execute("DROP VIEW IF EXISTS matches_with_latest_prediction")
+                self.conn.execute("CREATE VIEW matches_with_latest_prediction AS" + view_sql)
+                self.conn.commit()
+            logger.debug("Vista matches_with_latest_prediction recreada (sin DuplicateColumn)")
+        except Exception as e:
+            if "does not exist" not in str(e).lower() and "no such table" not in str(e).lower():
+                logger.warning(f"Migración vista matches_with_latest_prediction: {e}")
 
     def _migrate_pointbypoint_cache_table(self):
         """Crea tabla match_pointbypoint_cache para caché JSON de pointbypoint (stats/timeline)."""

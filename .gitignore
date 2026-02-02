@@ -59,6 +59,8 @@ datos/raw/archive/
 # Modelos entrenados (NO subir modelos, son muy grandes)
 modelos/*.pkl
 modelos/*.joblib
+# Excepción: modelo de producción necesario para predicciones en Railway
+!modelos/random_forest_calibrado.pkl
 modelos/production/
 modelos/archive/
 modelos/backups/
