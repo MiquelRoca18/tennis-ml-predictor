@@ -11,7 +11,7 @@
 #   docker run -p 8000:8000 -v $(pwd)/modelos:/app/modelos tennis-ml-api
 
 # Stage 1: Builder
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -48,6 +48,10 @@ COPY scripts/ ./scripts/
 # Copiar modelos entrenados
 COPY modelos/ ./modelos/
 
+# Script de arranque
+COPY start.sh ./start.sh
+RUN chmod +x start.sh
+
 # Crear directorios necesarios
 RUN mkdir -p logs datos resultados
 
@@ -64,10 +68,9 @@ USER tennisml
 # Asegurar que los scripts de Python están en PATH
 ENV PATH=/home/tennisml/.local/bin:$PATH
 
-# Exponer puerto
+# Exponer puerto (Railway usa $PORT dinámico)
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+# Comando por defecto
+CMD ["./start.sh"]
 
