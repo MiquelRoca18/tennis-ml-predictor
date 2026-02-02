@@ -1204,8 +1204,13 @@ class MatchDatabase:
                 "player1_known": player1_known,
                 "player2_known": player2_known,
             }
-            result = self._execute(query, params)
-            prediction_id = result.fetchone()[0]
+            # CRITICAL: Fetch prediction_id dentro del contexto de conexión
+            # (_execute cierra la conexión al salir; result.fetchone() falla con "cursor already closed")
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params)
+                prediction_id = result.fetchone()[0]
+                conn.commit()
         else:
             cursor = self.conn.cursor()
             cursor.execute(
@@ -1325,8 +1330,11 @@ class MatchDatabase:
                 "cuota_apostada": cuota_apostada,
                 "stake": stake,
             }
-            result = self._execute(query, params)
-            bet_id = result.fetchone()[0]
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params)
+                bet_id = result.fetchone()[0]
+                conn.commit()
         else:
             cursor = self.conn.cursor()
             cursor.execute(
