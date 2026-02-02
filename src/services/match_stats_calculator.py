@@ -35,6 +35,14 @@ from src.api.models_match_detail import (
 logger = logging.getLogger(__name__)
 
 
+def _is_set_completed(p1: int, p2: int) -> bool:
+    """True si el set está terminado (6-4, 7-5, 7-6, etc.). No contar sets en curso (ej. 3-1)."""
+    lo, hi = min(p1, p2), max(p1, p2)
+    if hi < 6:
+        return False
+    return (hi - lo >= 2) or (lo >= 6)
+
+
 class MatchStatsCalculator:
     """
     Calculador de estadísticas de partido.
@@ -79,14 +87,16 @@ class MatchStatsCalculator:
                 p2_games = int(score.get("score_second", 0))
                 set_num = int(score.get("score_set", len(sets) + 1))
                 
-                # Determinar ganador del set
+                # Determinar ganador del set (solo si el set está COMPLETADO)
                 winner = None
-                if p1_games > p2_games:
-                    winner = 1
-                    p1_sets += 1
-                elif p2_games > p1_games:
-                    winner = 2
-                    p2_sets += 1
+                completed = _is_set_completed(p1_games, p2_games)
+                if completed:
+                    if p1_games > p2_games:
+                        winner = 1
+                        p1_sets += 1
+                    elif p2_games > p1_games:
+                        winner = 2
+                        p2_sets += 1
                 
                 # Detectar tiebreak (si hay 7-6 o 6-7)
                 tiebreak = None
@@ -161,13 +171,16 @@ class MatchStatsCalculator:
                     p1_games = int(p1_str.strip())
                     p2_games = int(p2_str.strip())
                     
+                    # Solo contar sets COMPLETADOS (6-4, 7-5, 7-6, etc.). No contar 3-1 en curso.
                     winner = None
-                    if p1_games > p2_games:
-                        winner = 1
-                        p1_sets += 1
-                    elif p2_games > p1_games:
-                        winner = 2
-                        p2_sets += 1
+                    completed = _is_set_completed(p1_games, p2_games)
+                    if completed:
+                        if p1_games > p2_games:
+                            winner = 1
+                            p1_sets += 1
+                        elif p2_games > p1_games:
+                            winner = 2
+                            p2_sets += 1
                     
                     sets.append(SetScore(
                         set_number=i,

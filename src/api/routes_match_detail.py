@@ -270,8 +270,10 @@ async def get_match_full(match_id: int):
                     except Exception as e:
                         logger.debug(f"Error parseando marcador: {e}")
         
-        # PRIORIDAD 3: Usar event_final_result para sets_won si no hay scores detallados
-        if not scores or not scores.sets:
+        # PRIORIDAD 3: Usar event_final_result para sets_won SOLO si partido completado
+        # En vivo NO usar event_final_result: la API puede enviar "2-0" como sets actuales
+        # aunque el set 2 siga en curso (ej. 3-1 en juegos).
+        if (not scores or not scores.sets) and estado != "en_juego":
             event_final_result = match.get("event_final_result")
             if event_final_result and "-" in event_final_result:
                 try:

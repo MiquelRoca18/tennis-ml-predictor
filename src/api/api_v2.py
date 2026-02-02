@@ -296,13 +296,21 @@ def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
                 p1_sets = sum(1 for s in completed if s.player1_score > s.player2_score)
                 p2_sets = sum(1 for s in completed if s.player2_score > s.player1_score)
                 sets_result = f"{p1_sets}-{p2_sets}"
-        if sets_result is None:
+        if sets_result is None and estado != "en_juego":
+            # Solo usar event_final_result si NO está en vivo (en vivo puede ser incorrecto)
             sets_result = match_data.get("event_final_result")
         if not sets_result and sets_data:
-            # Calcular desde todos los sets (partido completado)
-            p1_sets = sum(1 for s in sets_data if s.player1_score > s.player2_score)
-            p2_sets = sum(1 for s in sets_data if s.player2_score > s.player1_score)
+            # Calcular desde todos los sets (partido completado) o solo completados (en vivo)
+            if estado == "en_juego":
+                completed = [s for s in sets_data if _is_set_completed(s.player1_score, s.player2_score)]
+                p1_sets = sum(1 for s in completed if s.player1_score > s.player2_score)
+                p2_sets = sum(1 for s in completed if s.player2_score > s.player1_score)
+            else:
+                p1_sets = sum(1 for s in sets_data if s.player1_score > s.player2_score)
+                p2_sets = sum(1 for s in sets_data if s.player2_score > s.player1_score)
             sets_result = f"{p1_sets}-{p2_sets}"
+        if not sets_result and estado == "en_juego":
+            sets_result = "0-0"  # En vivo sin datos de sets: mostrar 0-0
         
         # Construir datos en vivo si está en juego
         live_data = None
