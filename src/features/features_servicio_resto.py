@@ -71,6 +71,11 @@ class ServicioRestoCalculator:
         if len(partidos_ganados) == 0 and len(partidos_perdidos) == 0:
             return self._servicio_default()
 
+        # Si el df no tiene columnas de stats (ej. datos desde DB sin w_svpt), usar defaults
+        required = ["w_svpt", "l_svpt", "w_ace", "l_ace", "w_df", "l_df"]
+        if not all(c in self.df.columns for c in required):
+            return self._servicio_default()
+
         # Agregar estadísticas (w_ para ganados, l_ para perdidos)
         total_puntos_servicio = (
             partidos_ganados["w_svpt"].fillna(0).sum() + partidos_perdidos["l_svpt"].fillna(0).sum()
@@ -177,6 +182,10 @@ class ServicioRestoCalculator:
         if len(partidos_ganados) == 0 and len(partidos_perdidos) == 0:
             return self._resto_default()
 
+        # Si el df no tiene columnas de stats (ej. datos desde DB sin w_bpFaced), usar defaults
+        if not all(c in self.df.columns for c in ["l_bpFaced", "l_bpSaved", "w_bpFaced", "w_bpSaved"]):
+            return self._resto_default()
+
         # Break points CONVERTIDOS (cuando rompe el servicio del rival)
         # Cuando gana: los BP que enfrentó el rival menos los que salvó
         # Cuando pierde: los BP que enfrentó el rival menos los que salvó
@@ -222,14 +231,18 @@ class ServicioRestoCalculator:
         serv_j1 = self.calcular_estadisticas_servicio(jugador1_nombre, fecha_partido)
         resto_j2 = self.calcular_estadisticas_resto(jugador2_nombre, fecha_partido)
 
-        # Ventaja en servicio (simplified score)
-        serve_power_j1 = (
-            serv_j1["aces_pct"] * 0.3
-            + serv_j1["first_serve_won_pct"] * 0.5
-            + serv_j1["bp_saved_pct"] * 0.2
-        )
+        # Ventaja en servicio (simplified score) - defensivo ante None/NaN
+        def _f(x, d=0):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return d
+            return float(x)
 
-        return_power_j2 = resto_j2["bp_conversion_pct"]
+        serve_power_j1 = (
+            _f(serv_j1.get("aces_pct"), 0.08) * 0.3
+            + _f(serv_j1.get("first_serve_won_pct"), 0.68) * 0.5
+            + _f(serv_j1.get("bp_saved_pct"), 0.60) * 0.2
+        )
+        return_power_j2 = _f(resto_j2.get("bp_conversion_pct"), 0.35)
 
         ventaja = {
             "j1_serve_power": serve_power_j1,

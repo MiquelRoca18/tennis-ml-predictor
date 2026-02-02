@@ -86,6 +86,14 @@ class SuperficieSpecializationCalculator:
 
         return win_rates
 
+    def _normalizar_superficie(self, superficie):
+        """Mapea superficies a Hard/Clay/Grass (evita KeyError con Carpet/Indoor/Outdoor)."""
+        if not superficie:
+            return "Hard"
+        s = str(superficie).strip().lower()
+        m = {"outdoor": "hard", "indoor": "hard", "carpet": "hard", "hard": "hard", "clay": "clay", "grass": "grass"}
+        return m.get(s, "hard")
+
     def calcular_ventaja_superficie(
         self, jugador1_nombre, jugador2_nombre, fecha_partido, superficie
     ):
@@ -101,21 +109,28 @@ class SuperficieSpecializationCalculator:
         Returns:
             dict con ventajas de superficie
         """
-
+        sup = self._normalizar_superficie(superficie)
         esp_j1 = self.calcular_especializacion(jugador1_nombre, fecha_partido)
         esp_j2 = self.calcular_especializacion(jugador2_nombre, fecha_partido)
 
-        win_rate_j1 = esp_j1[f"win_rate_{superficie.lower()}"]
-        win_rate_j2 = esp_j2[f"win_rate_{superficie.lower()}"]
+        win_rate_j1 = esp_j1.get(f"win_rate_{sup}", 0.5)
+        win_rate_j2 = esp_j2.get(f"win_rate_{sup}", 0.5)
+        # Defensivo ante None/NaN (p. ej. si el dict tiene valores nulos)
+        if win_rate_j1 is None or (isinstance(win_rate_j1, float) and pd.isna(win_rate_j1)):
+            win_rate_j1 = 0.5
+        if win_rate_j2 is None or (isinstance(win_rate_j2, float) and pd.isna(win_rate_j2)):
+            win_rate_j2 = 0.5
 
-        ventaja = win_rate_j1 - win_rate_j2
+        ventaja = float(win_rate_j1) - float(win_rate_j2)
 
+        fav_j1 = (esp_j1.get("superficie_favorita") or "Hard").lower()
+        fav_j2 = (esp_j2.get("superficie_favorita") or "Hard").lower()
         return {
             "ventaja_superficie": ventaja,
             "win_rate_j1_superficie": win_rate_j1,
             "win_rate_j2_superficie": win_rate_j2,
-            "es_superficie_favorita_j1": 1 if esp_j1["superficie_favorita"] == superficie else 0,
-            "es_superficie_favorita_j2": 1 if esp_j2["superficie_favorita"] == superficie else 0,
+            "es_superficie_favorita_j1": 1 if fav_j1 == sup else 0,
+            "es_superficie_favorita_j2": 1 if fav_j2 == sup else 0,
         }
 
     def _especializacion_default(self):

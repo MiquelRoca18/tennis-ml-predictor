@@ -285,9 +285,13 @@ class FeatureGeneratorService:
         if len(partidos) > 0:
             ultimo = partidos.iloc[0]
             if ultimo["winner_name"] == jugador:
-                return ultimo.get("winner_rank", 999)
+                r = ultimo.get("winner_rank", 999)
             else:
-                return ultimo.get("loser_rank", 999)
+                r = ultimo.get("loser_rank", 999)
+            # Evitar None/NaN (pandas puede devolverlos)
+            if r is None or (isinstance(r, float) and pd.isna(r)):
+                return 999
+            return int(r) if r == r else 999  # NaN != NaN
         return 999
 
     def actualizar_con_partido(
@@ -399,11 +403,16 @@ class FeatureGeneratorService:
         )
         features = {}
 
-        # 1. ELO (7 features)
-        elo_j = self.elo_system.get_rating(jugador_normalizado)
-        elo_o = self.elo_system.get_rating(oponente_normalizado)
-        elo_j_surf = self.elo_system.get_rating(jugador_normalizado, superficie)
-        elo_o_surf = self.elo_system.get_rating(oponente_normalizado, superficie)
+        # 1. ELO (7 features) - defensivo ante None/NaN
+        def _num(x, d=0):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return d
+            return float(x)
+
+        elo_j = _num(self.elo_system.get_rating(jugador_normalizado), 1500)
+        elo_o = _num(self.elo_system.get_rating(oponente_normalizado), 1500)
+        elo_j_surf = _num(self.elo_system.get_rating(jugador_normalizado, superficie), 1500)
+        elo_o_surf = _num(self.elo_system.get_rating(oponente_normalizado, superficie), 1500)
 
         features["jugador_elo"] = elo_j
         features["oponente_elo"] = elo_o
@@ -418,6 +427,8 @@ class FeatureGeneratorService:
         # 2. Rankings (4 features)
         rank_j = self._obtener_ranking(jugador_normalizado, fecha)
         rank_o = self._obtener_ranking(oponente_normalizado, fecha)
+        rank_j = _num(rank_j, 999)
+        rank_o = _num(rank_o, 999)
 
         features["jugador_rank"] = rank_j
         features["oponente_rank"] = rank_o
@@ -427,10 +438,9 @@ class FeatureGeneratorService:
         # 3. Forma reciente (1 feature)
         forma_j = self.forma_calc.calcular_forma(jugador_normalizado, fecha, ventana_dias=60)
         forma_o = self.forma_calc.calcular_forma(oponente_normalizado, fecha, ventana_dias=60)
-
-        features["diff_win_rate_60d"] = forma_j.get("win_rate_60d", 0.5) - forma_o.get(
-            "win_rate_60d", 0.5
-        )
+        wr_j = _num(forma_j.get("win_rate_60d"), 0.5)
+        wr_o = _num(forma_o.get("win_rate_60d"), 0.5)
+        features["diff_win_rate_60d"] = wr_j - wr_o
 
         # 4. Servicio y Resto (14 features)
         serv_j = self.servicio_calc.calcular_estadisticas_servicio(jugador_normalizado, fecha)
@@ -454,19 +464,20 @@ class FeatureGeneratorService:
         features["j1_return_return_quality_score"] = resto_j.get("return_quality_score", 0.5)
 
         matchup = self.servicio_calc.calcular_matchup_servicio_resto(jugador_normalizado, oponente_normalizado, fecha)
-        features["serve_vs_return_advantage"] = matchup.get("serve_vs_return_advantage", 0)
+        features["serve_vs_return_advantage"] = _num(matchup.get("serve_vs_return_advantage"), 0)
 
-        # 5. Superficie (1 feature)
+        # 5. Superficie (1 feature) - pasar superficie normalizada (Hard/Clay/Grass)
         try:
+            sup_norm = self._normalizar_superficie(superficie)
             ventaja_sup = self.superficie_calc.calcular_ventaja_superficie(
-                jugador_normalizado, oponente_normalizado, fecha, superficie
+                jugador_normalizado, oponente_normalizado, fecha, sup_norm
             )
-            features["ventaja_superficie"] = ventaja_sup.get("ventaja_superficie", 0)
-        except:
+            features["ventaja_superficie"] = _num(ventaja_sup.get("ventaja_superficie"), 0)
+        except Exception:
             features["ventaja_superficie"] = 0
 
         # 6. Interacciones (3 features)
-        features["rank_diff_x_forma"] = features["rank_diff"] * forma_j.get("win_rate_60d", 0.5)
+        features["rank_diff_x_forma"] = features["rank_diff"] * wr_j
         features["elo_x_forma"] = features["elo_diff"] * features["diff_win_rate_60d"]
         features["superficie_x_rank"] = features["ventaja_superficie"] * features["rank_diff"]
         
