@@ -454,9 +454,15 @@ async def get_match_stats(match_id: int):
                 else:
                     api_data = results
                 
-                if not api_data or not api_data.get("pointbypoint"):
+                pbp_val = api_data.get("pointbypoint") if api_data else None
+                if not api_data or not pbp_val:
                     keys = list(api_data.keys()) if api_data else []
-                    logger.warning(f"📊 Stats match {match_id} (event_key={event_key}): API sin pointbypoint. Keys: {keys}")
+                    pbp_type = type(pbp_val).__name__ if pbp_val is not None else "None"
+                    pbp_len = len(pbp_val) if hasattr(pbp_val, "__len__") and pbp_val else 0
+                    logger.warning(
+                        f"📊 Stats match {match_id} (event_key={event_key}): pointbypoint vacío o ausente. "
+                        f"Keys: {keys}, pointbypoint type={pbp_type}, len={pbp_len}"
+                    )
                 if api_data and api_data.get("pointbypoint"):
                     pbp = api_data["pointbypoint"]
                     logger.info(f"📊 Stats match {match_id}: API devolvió {len(pbp)} juegos pointbypoint")
@@ -705,13 +711,19 @@ async def get_match_h2h(match_id: int):
         # 1. Intentar obtener de BD (instantáneo)
         h2h_from_db = _get_h2h_from_db(db, match)
         if h2h_from_db and h2h_from_db.total_matches > 0:
+            # H2HData usa hard_record, clay_record, grass_record (no surface_records)
+            surface_records = {
+                "Hard": h2h_from_db.hard_record,
+                "Clay": h2h_from_db.clay_record,
+                "Grass": h2h_from_db.grass_record,
+            }
             return {
                 "success": True,
                 "total_matches": h2h_from_db.total_matches,
                 "player1_wins": h2h_from_db.player1_wins,
                 "player2_wins": h2h_from_db.player2_wins,
-                "surface_records": h2h_from_db.surface_records,
-                "recent_matches": [m.model_dump() for m in h2h_from_db.recent_matches] if h2h_from_db.recent_matches else []
+                "surface_records": surface_records,
+                "recent_matches": [m.model_dump() for m in h2h_from_db.matches] if h2h_from_db.matches else []
             }
         
         # 2. No hay datos en BD - llamar a API (lazy loading)
@@ -1136,25 +1148,31 @@ def _get_h2h_from_db(db, match: dict) -> Optional[H2HData]:
         if not h2h_record:
             return None
         
-        # Construir H2HData desde el registro
+        # Construir H2HData desde el registro (H2HData usa hard_record, clay_record, grass_record)
         p1_wins = h2h_record.get("player1_wins", 0)
         p2_wins = h2h_record.get("player2_wins", 0)
+        hard_p1 = h2h_record.get("hard_p1_wins", 0)
+        hard_p2 = h2h_record.get("hard_p2_wins", 0)
+        clay_p1 = h2h_record.get("clay_p1_wins", 0)
+        clay_p2 = h2h_record.get("clay_p2_wins", 0)
+        grass_p1 = h2h_record.get("grass_p1_wins", 0)
+        grass_p2 = h2h_record.get("grass_p2_wins", 0)
         
-        # Si las keys están invertidas en el registro, invertir los wins
-        if h2h_record.get("player1_key") != p1_key:
+        # Si las keys están invertidas en el registro, invertir wins y records
+        if h2h_record.get("player1_key") != str(p1_key):
             p1_wins, p2_wins = p2_wins, p1_wins
+            hard_p1, hard_p2 = hard_p2, hard_p1
+            clay_p1, clay_p2 = clay_p2, clay_p1
+            grass_p1, grass_p2 = grass_p2, grass_p1
         
         return H2HData(
             total_matches=p1_wins + p2_wins,
             player1_wins=p1_wins,
             player2_wins=p2_wins,
-            # Records por superficie si están disponibles
-            surface_records={
-                "Hard": [h2h_record.get("hard_p1_wins", 0), h2h_record.get("hard_p2_wins", 0)],
-                "Clay": [h2h_record.get("clay_p1_wins", 0), h2h_record.get("clay_p2_wins", 0)],
-                "Grass": [h2h_record.get("grass_p1_wins", 0), h2h_record.get("grass_p2_wins", 0)],
-            },
-            recent_matches=[]  # Los partidos recientes se pueden cargar por separado si necesario
+            hard_record=[hard_p1, hard_p2],
+            clay_record=[clay_p1, clay_p2],
+            grass_record=[grass_p1, grass_p2],
+            matches=[],
         )
     except Exception as e:
         logger.warning(f"Error obteniendo H2H de BD: {e}")
