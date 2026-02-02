@@ -1395,7 +1395,9 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
         # Campos pueden venir con diferentes nombres
         prob1 = match.get("jugador1_probabilidad") or match.get("probabilidad_jugador1")
         prob2 = match.get("jugador2_probabilidad") or match.get("probabilidad_jugador2")
-        confianza = match.get("confidence_score") or match.get("confianza")
+        confidence_score = match.get("confidence_score")
+        confidence_level = match.get("confidence_level")
+        confianza_legacy = match.get("confianza")
         
         if not prob1 and not prob2:
             logger.info(f"🤖 No hay predicción para este partido")
@@ -1405,7 +1407,26 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
         prob2 = float(prob2) if prob2 else 0.5
         
         predicted_winner = 1 if prob1 > prob2 else 2
-        confidence = float(confianza) if confianza else max(prob1, prob2) * 100
+        
+        # Confianza en % (0-100) - coherente con MatchCard que usa confidence_level
+        # confidence_score viene en 0-1 (HIGH=1.0, MEDIUM=0.5, LOW=0.0)
+        # confidence_level: HIGH/MEDIUM/LOW
+        if confidence_level:
+            level_to_pct = {"HIGH": 100, "MEDIUM": 50, "LOW": 0, "UNKNOWN": 25}
+            confidence = level_to_pct.get(str(confidence_level).upper(), 50)
+        elif confidence_score is not None:
+            val = float(confidence_score)
+            confidence = val * 100 if val <= 1 else val  # 0-1 → 0-100
+        elif confianza_legacy:
+            # Legacy: "Alta"/"Media"/"Baja" o número
+            if isinstance(confianza_legacy, str):
+                legacy_map = {"alta": 100, "media": 50, "baja": 0}
+                confidence = legacy_map.get(str(confianza_legacy).lower(), 50)
+            else:
+                val = float(confianza_legacy)
+                confidence = val * 100 if val <= 1 else val
+        else:
+            confidence = max(prob1, prob2) * 100  # Fallback: certeza del modelo
         
         # Calcular value bet
         value_bet = None
