@@ -1725,8 +1725,8 @@ async def admin_debug_prediction_flow():
         
         # Paso 5: ¿FeatureGeneratorService se inicializa? (se usa en predecir_partido)
         try:
-            from src.prediction.feature_generator_service import FeatureGeneratorService
-            fgs = FeatureGeneratorService.get_instance()
+            from src.prediction.feature_generator_service import get_instance as get_fgs_instance
+            fgs = get_fgs_instance()
             hist_count = len(fgs.df_historico) if hasattr(fgs, "df_historico") and fgs.df_historico is not None else 0
             steps.append({"step": 5, "name": "feature_generator", "ok": True, "historical_matches": hist_count})
         except Exception as e:

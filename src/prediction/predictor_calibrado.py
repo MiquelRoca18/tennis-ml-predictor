@@ -101,12 +101,12 @@ class PredictorCalibrado:
         Returns:
             dict con predicción y análisis
         """
-        from src.prediction.feature_generator_service import FeatureGeneratorService
+        from src.prediction.feature_generator_service import get_instance as get_feature_service
         from src.config.settings import Config
         from datetime import datetime
 
         # Obtener servicio de generación de features (singleton, igual que backtesting)
-        feature_service = FeatureGeneratorService.get_instance()
+        feature_service = get_feature_service()
 
         # PREDICCIÓN BIDIRECCIONAL (igual que backtesting)
         # Generar features para jugador1 (como 'jugador')
