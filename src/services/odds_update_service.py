@@ -483,6 +483,7 @@ class OddsUpdateService:
         odds_updated = 0
         predictions_generated = 0
         predictor = None
+        predictor_load_failed = False
 
         for match in to_process:
             match_id = match.get("id")
@@ -510,26 +511,27 @@ class OddsUpdateService:
                 need_prediction = abs(p1 - j1) > 0.005 or abs(p2 - j2) > 0.005
 
             if need_prediction:
-                if predictor is None:
+                if predictor is None and not predictor_load_failed:
                     try:
                         from src.prediction.predictor_calibrado import PredictorCalibrado
                         from src.config.settings import Config
                         predictor = PredictorCalibrado(Config.MODEL_PATH)
                     except Exception as e:
                         logger.warning(f"⚠️  Predictor not available: {e}")
-                        break
-                from src.services.prediction_runner import run_prediction_and_save
-                if run_prediction_and_save(
-                    db=self.db,
-                    predictor=predictor,
-                    match_id=match_id,
-                    player1_name=match.get("jugador1_nombre", ""),
-                    player2_name=match.get("jugador2_nombre", ""),
-                    surface=match.get("superficie") or "Hard",
-                    player1_odds=j1,
-                    player2_odds=j2,
-                ):
-                    predictions_generated += 1
+                        predictor_load_failed = True
+                if predictor is not None:
+                    from src.services.prediction_runner import run_prediction_and_save
+                    if run_prediction_and_save(
+                        db=self.db,
+                        predictor=predictor,
+                        match_id=match_id,
+                        player1_name=match.get("jugador1_nombre", ""),
+                        player2_name=match.get("jugador2_nombre", ""),
+                        surface=match.get("superficie") or "Hard",
+                        player1_odds=j1,
+                        player2_odds=j2,
+                    ):
+                        predictions_generated += 1
 
         logger.info(
             f"✅ Sync odds: {len(to_process)} checked, {odds_updated} odds updated, "

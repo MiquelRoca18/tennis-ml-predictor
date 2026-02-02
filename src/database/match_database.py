@@ -241,6 +241,8 @@ class MatchDatabase:
             self._migrate_pointbypoint_cache_table()
             # Migración: tabla h2h_cache para H2H por player keys (API) - no confundir con head_to_head
             self._migrate_h2h_cache_table()
+            # Migración: columnas jugador1_cuota/jugador2_cuota en matches (para sync de odds)
+            self._migrate_add_match_odds_columns()
 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
@@ -271,6 +273,34 @@ class MatchDatabase:
                 logger.debug("Columna event_status ya existe")
             else:
                 logger.warning(f"Migración event_status: {e}")
+
+    def _migrate_add_match_odds_columns(self):
+        """Añade jugador1_cuota y jugador2_cuota a matches si no existen (para sync de odds)."""
+        for col in ("jugador1_cuota", "jugador2_cuota"):
+            try:
+                if self.is_postgres:
+                    from sqlalchemy import text
+                    with self.engine.connect() as conn:
+                        conn.execute(text(f"""
+                            DO $$ BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_schema = 'public' AND table_name = 'matches' AND column_name = '{col}'
+                            ) THEN
+                                ALTER TABLE matches ADD COLUMN {col} REAL;
+                            END IF;
+                            END $$
+                        """))
+                        conn.commit()
+                else:
+                    self.conn.execute(f"ALTER TABLE matches ADD COLUMN {col} REAL")
+                    self.conn.commit()
+                logger.debug(f"Migración: columna {col} añadida a matches")
+            except Exception as e:
+                if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                    logger.debug(f"Columna {col} ya existe en matches")
+                else:
+                    logger.warning(f"Migración {col}: {e}")
 
     def _migrate_pointbypoint_cache_table(self):
         """Crea tabla match_pointbypoint_cache para caché JSON de pointbypoint (stats/timeline)."""
@@ -503,6 +533,7 @@ class MatchDatabase:
                     fecha_partido, hora_inicio, torneo, ronda, superficie,
                     jugador1_nombre, jugador1_ranking, jugador1_logo,
                     jugador2_nombre, jugador2_ranking, jugador2_logo,
+                    jugador1_cuota, jugador2_cuota,
                     event_key, jugador1_key, jugador2_key,
                     tournament_key, tournament_season,
                     event_live, event_qualification,
@@ -511,6 +542,7 @@ class MatchDatabase:
                     :fecha_partido, :hora_inicio, :torneo, :ronda, :superficie,
                     :jugador1_nombre, :jugador1_ranking, :jugador1_logo,
                     :jugador2_nombre, :jugador2_ranking, :jugador2_logo,
+                    :jugador1_cuota, :jugador2_cuota,
                     :event_key, :jugador1_key, :jugador2_key,
                     :tournament_key, :tournament_season,
                     :event_live, :event_qualification,
@@ -529,6 +561,8 @@ class MatchDatabase:
                 "jugador2_nombre": jugador2_nombre,
                 "jugador2_ranking": jugador2_ranking,
                 "jugador2_logo": jugador2_logo,
+                "jugador1_cuota": jugador1_cuota or None,
+                "jugador2_cuota": jugador2_cuota or None,
                 "event_key": event_key,
                 "jugador1_key": jugador1_key,
                 "jugador2_key": jugador2_key,
@@ -553,11 +587,12 @@ class MatchDatabase:
                     fecha_partido, hora_inicio, torneo, ronda, superficie,
                     jugador1_nombre, jugador1_ranking, jugador1_logo,
                     jugador2_nombre, jugador2_ranking, jugador2_logo,
+                    jugador1_cuota, jugador2_cuota,
                     event_key, jugador1_key, jugador2_key,
                     tournament_key, tournament_season,
                     event_live, event_qualification,
                     estado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     fecha_partido,
@@ -571,6 +606,8 @@ class MatchDatabase:
                     jugador2_nombre,
                     jugador2_ranking,
                     jugador2_logo,
+                    jugador1_cuota or None,
+                    jugador2_cuota or None,
                     event_key,
                     jugador1_key,
                     jugador2_key,
