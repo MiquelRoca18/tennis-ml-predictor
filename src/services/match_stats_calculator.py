@@ -378,7 +378,8 @@ class MatchStatsCalculator:
             sets=set_timelines,
             total_games=total_games,
             total_breaks=0,  # Desconocido
-            momentum_shifts=0
+            momentum_shifts=0,
+            from_scores_only=True,  # Orden de juegos desconocido - no mostrar como secuencia
         )
     
     # ============================================================
@@ -539,7 +540,25 @@ class MatchStatsCalculator:
                 return float(s)
             except (ValueError, TypeError):
                 return 0.0
-        
+
+        def parse_speed_kmh(val) -> Optional[float]:
+            """Parsea '189 km/h' -> 189.0"""
+            if val is None:
+                return None
+            s = str(val).replace("km/h", "").replace(" ", "").strip()
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return None
+
+        def parse_int_safe(val, default: int = 0) -> int:
+            if val is None:
+                return default
+            s = str(val).strip()
+            if s.isdigit():
+                return int(s)
+            return default
+
         def build_player(player_key: str) -> PlayerStats:
             aces_s = get_stat(match_stats, player_key, "Aces")
             df_s = get_stat(match_stats, player_key, "Double Faults")
@@ -554,9 +573,19 @@ class MatchStatsCalculator:
             total_pts = get_stat(match_stats, player_key, "Total Points Won")
             winners_s = get_stat(match_stats, player_key, "Winners")
             ue_s = get_stat(match_stats, player_key, "Unforced errors")
-            
-            aces = int(aces_s.get("stat_value", 0)) if aces_s else 0
-            double_faults = int(df_s.get("stat_value", 0)) if df_s else 0
+            # Nuevas estadísticas de la API
+            svc_pts = get_stat(match_stats, player_key, "Service Points Won")
+            ret_pts = get_stat(match_stats, player_key, "Return Points Won")
+            first_ret_won = get_stat(match_stats, player_key, "1st return points won")
+            second_ret_won = get_stat(match_stats, player_key, "2nd return points won")
+            net_pts = get_stat(match_stats, player_key, "Net points won")
+            avg_1st_speed = get_stat(match_stats, player_key, "Average 1st serve speed")
+            avg_2nd_speed = get_stat(match_stats, player_key, "Average 2nd serve speed")
+            last_10 = get_stat(match_stats, player_key, "Last 10 balls")
+            mp_saved = get_stat(match_stats, player_key, "Match points saved")
+
+            aces = parse_int_safe(aces_s.get("stat_value") if aces_s else None)
+            double_faults = parse_int_safe(df_s.get("stat_value") if df_s else None)
             service_games_won = int(svc_games.get("stat_won", 0)) if svc_games and svc_games.get("stat_won") is not None else 0
             service_games_total = int(svc_games.get("stat_total", 0)) if svc_games and svc_games.get("stat_total") is not None else 0
             return_games_won = int(ret_games.get("stat_won", 0)) if ret_games and ret_games.get("stat_won") is not None else 0
@@ -576,9 +605,23 @@ class MatchStatsCalculator:
             if second_serve_won and second_serve_won.get("stat_total"):
                 t = int(second_serve_won.get("stat_total", 0))
                 second_serve_won_pct = (int(second_serve_won.get("stat_won", 0)) / t * 100) if t > 0 else 0
-            winners = int(winners_s.get("stat_value", 0)) if winners_s and str(winners_s.get("stat_value", "")).isdigit() else 0
-            unforced_errors = int(ue_s.get("stat_value", 0)) if ue_s and str(ue_s.get("stat_value", "")).isdigit() else 0
-            
+            winners = parse_int_safe(winners_s.get("stat_value") if winners_s else None)
+            unforced_errors = parse_int_safe(ue_s.get("stat_value") if ue_s else None)
+
+            # Service points won
+            svc_pts_won = int(svc_pts.get("stat_won", 0)) if svc_pts and svc_pts.get("stat_won") is not None else 0
+            svc_pts_total = int(svc_pts.get("stat_total", 0)) if svc_pts and svc_pts.get("stat_total") is not None else 0
+            ret_pts_won = int(ret_pts.get("stat_won", 0)) if ret_pts and ret_pts.get("stat_won") is not None else 0
+            ret_pts_total = int(ret_pts.get("stat_total", 0)) if ret_pts and ret_pts.get("stat_total") is not None else 0
+            first_ret_pct = parse_pct(first_ret_won.get("stat_value")) if first_ret_won else None
+            second_ret_pct = parse_pct(second_ret_won.get("stat_value")) if second_ret_won else None
+            net_won = int(net_pts.get("stat_won", 0)) if net_pts and net_pts.get("stat_won") is not None else None
+            net_total = int(net_pts.get("stat_total", 0)) if net_pts and net_pts.get("stat_total") is not None else None
+            avg_1st = parse_speed_kmh(avg_1st_speed.get("stat_value")) if avg_1st_speed else None
+            avg_2nd = parse_speed_kmh(avg_2nd_speed.get("stat_value")) if avg_2nd_speed else None
+            last_10_val = None if not last_10 else parse_int_safe(last_10.get("stat_value"))
+            mp_saved_val = None if not mp_saved else parse_int_safe(mp_saved.get("stat_value"))
+
             return PlayerStats(
                 serve=ServeStats(
                     aces=aces,
@@ -588,12 +631,18 @@ class MatchStatsCalculator:
                     second_serve_won_pct=round(second_serve_won_pct, 1),
                     service_games_won=service_games_won,
                     service_games_total=service_games_total if service_games_total > 0 else max(service_games_won, 1),
+                    avg_first_serve_speed_kmh=avg_1st,
+                    avg_second_serve_speed_kmh=avg_2nd,
+                    service_points_won=svc_pts_won,
+                    service_points_total=svc_pts_total if svc_pts_total > 0 else svc_pts_won,
                 ),
                 return_=ReturnStats(
-                    return_points_won=0,
-                    return_points_total=0,
+                    return_points_won=ret_pts_won,
+                    return_points_total=ret_pts_total if ret_pts_total > 0 else max(ret_pts_won, 1),
                     return_games_won=return_games_won,
                     return_games_total=return_games_total if return_games_total > 0 else max(return_games_won, 1),
+                    first_return_points_won_pct=round(first_ret_pct, 1) if first_ret_pct is not None else None,
+                    second_return_points_won_pct=round(second_ret_pct, 1) if second_ret_pct is not None else None,
                 ),
                 break_points=BreakPointStats(
                     break_points_won=bp_won,
@@ -605,6 +654,10 @@ class MatchStatsCalculator:
                 total_games_won=total_games_won,
                 winners=winners,
                 unforced_errors=unforced_errors,
+                net_points_won=net_won,
+                net_points_total=net_total,
+                last_10_balls=last_10_val,
+                match_points_saved=mp_saved_val,
             )
         
         p1_stats = build_player(first_key)

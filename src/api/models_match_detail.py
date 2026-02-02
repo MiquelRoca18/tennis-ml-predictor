@@ -138,6 +138,12 @@ class ServeStats(BaseModel):
     second_serve_won_pct: float = Field(0, description="% puntos ganados al 2do servicio")
     service_games_won: int = Field(0, description="Juegos de saque ganados")
     service_games_total: int = Field(0, description="Total juegos al saque")
+    # Velocidad de saque (API: "189 km/h" -> 189)
+    avg_first_serve_speed_kmh: Optional[float] = Field(None, description="Velocidad media 1er saque km/h")
+    avg_second_serve_speed_kmh: Optional[float] = Field(None, description="Velocidad media 2do saque km/h")
+    # Puntos de saque (API: Service Points Won)
+    service_points_won: int = Field(0, description="Puntos ganados al saque")
+    service_points_total: int = Field(0, description="Total puntos al saque")
 
 
 class ReturnStats(BaseModel):
@@ -146,6 +152,9 @@ class ReturnStats(BaseModel):
     return_points_total: int = Field(0, description="Total puntos al resto")
     return_games_won: int = Field(0, description="Juegos de resto ganados (breaks)")
     return_games_total: int = Field(0, description="Total juegos al resto")
+    # API: 1st return points won, 2nd return points won
+    first_return_points_won_pct: Optional[float] = Field(None, description="% puntos ganados al 1er resto")
+    second_return_points_won_pct: Optional[float] = Field(None, description="% puntos ganados al 2do resto")
 
 
 class BreakPointStats(BaseModel):
@@ -179,6 +188,11 @@ class PlayerStats(BaseModel):
     total_games_won: int = Field(0, description="Total juegos ganados")
     winners: int = Field(0, description="Winners (si disponible)")
     unforced_errors: int = Field(0, description="Errores no forzados (si disponible)")
+    # API: Net points won, Last 10 balls, Match points saved
+    net_points_won: Optional[int] = Field(None, description="Puntos ganados en la red")
+    net_points_total: Optional[int] = Field(None, description="Total puntos en la red")
+    last_10_balls: Optional[int] = Field(None, description="Puntos ganados en los últimos 10 (momentum)")
+    match_points_saved: Optional[int] = Field(None, description="Match points salvados")
     
     model_config = {"populate_by_name": True}
 
@@ -224,6 +238,11 @@ class MatchTimeline(BaseModel):
     total_games: int = Field(0)
     total_breaks: int = Field(0)
     momentum_shifts: int = Field(0, description="Cambios de momentum (breaks consecutivos)")
+    from_scores_only: bool = Field(
+        False,
+        description="True si el timeline se generó solo desde scores (sin pointbypoint). "
+        "En ese caso el orden de juegos es desconocido y no debe mostrarse como secuencia.",
+    )
 
 
 # ============================================================
