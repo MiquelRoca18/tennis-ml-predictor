@@ -1447,6 +1447,177 @@ async def manual_sync_odds_and_predictions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/check-predictions", tags=["Admin"])
+async def admin_check_predictions():
+    """
+    Verifica el estado de las predicciones en la base de datos.
+    
+    Útil para diagnosticar por qué no se muestran predicciones en la app.
+    Devuelve conteos y ejemplos de partidos con/sin predicción.
+    """
+    from datetime import date, timedelta
+    try:
+        today = date.today()
+        end_date = today + timedelta(days=7)
+
+        # Conteos básicos
+        total_matches = db._fetchone("SELECT COUNT(*) as c FROM matches", {})
+        total_matches = total_matches["c"] if total_matches else 0
+
+        total_predictions = db._fetchone("SELECT COUNT(*) as c FROM predictions", {})
+        total_predictions = total_predictions["c"] if total_predictions else 0
+
+        matches_with_pred = db._fetchone(
+            "SELECT COUNT(DISTINCT match_id) as c FROM predictions", {}
+        )
+        matches_with_pred = matches_with_pred["c"] if matches_with_pred else 0
+        matches_without_pred = total_matches - matches_with_pred
+
+        # Pendientes próximos 7 días
+        pending = db._fetchall(
+            """
+            SELECT m.id, m.jugador1_nombre, m.jugador2_nombre, m.fecha_partido,
+                   m.event_key,
+                   p.id as pred_id, p.jugador1_probabilidad, p.jugador2_probabilidad
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            WHERE m.estado = 'pendiente'
+            AND m.fecha_partido >= :today
+            AND m.fecha_partido <= :end
+            ORDER BY m.fecha_partido ASC, m.id ASC
+            LIMIT 30
+            """,
+            {"today": today, "end": end_date},
+        )
+        pending_with_pred = [r for r in (pending or []) if r.get("pred_id")]
+        pending_without_pred = [r for r in (pending or []) if not r.get("pred_id")]
+
+        # Últimas predicciones
+        recent_preds = db._fetchall(
+            """
+            SELECT p.id, p.match_id, p.timestamp, p.jugador1_probabilidad, p.jugador2_probabilidad,
+                   m.jugador1_nombre, m.jugador2_nombre, m.fecha_partido
+            FROM predictions p
+            JOIN matches m ON m.id = p.match_id
+            ORDER BY p.timestamp DESC
+            LIMIT 5
+            """,
+            {},
+        )
+
+        return {
+            "database_type": "PostgreSQL" if db.is_postgres else "SQLite",
+            "summary": {
+                "total_matches": total_matches,
+                "total_predictions": total_predictions,
+                "matches_with_prediction": matches_with_pred,
+                "matches_without_prediction": matches_without_pred,
+                "pct_with_prediction": round(100 * matches_with_pred / total_matches, 1) if total_matches > 0 else 0,
+            },
+            "pending_next_7_days": {
+                "total_sample": len(pending or []),
+                "with_prediction": len(pending_with_pred),
+                "without_prediction": len(pending_without_pred),
+                "examples_without": [
+                    {"id": m["id"], "match": f"{m.get('jugador1_nombre')} vs {m.get('jugador2_nombre')}",
+                     "date": str(m.get("fecha_partido")), "event_key": m.get("event_key")}
+                    for m in (pending_without_pred or [])[:5]
+                ],
+            },
+            "last_predictions": [
+                {"match_id": r["match_id"], "match": f"{r.get('jugador1_nombre')} vs {r.get('jugador2_nombre')}",
+                 "timestamp": str(r.get("timestamp")), "prob": f"{r.get('jugador1_probabilidad',0):.0%}/{r.get('jugador2_probabilidad',0):.0%}"}
+                for r in (recent_preds or [])
+            ],
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en check-predictions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/debug-odds-sync", tags=["Admin"])
+async def admin_debug_odds_sync():
+    """
+    Diagnóstico: por qué sync-odds no encuentra cuotas.
+    
+    Compara los event_keys de partidos pendientes con las claves que devuelve
+    la API get_odds. Si no coinciden, el sync no puede generar predicciones.
+    """
+    from datetime import date, timedelta
+    try:
+        if not odds_service or not odds_service.odds_client:
+            return {"error": "OddsUpdateService o API client no disponible"}
+
+        today = date.today()
+        end_date = today + timedelta(days=2)
+
+        # 1. Partidos pendientes que necesitamos
+        pending = db._fetchall(
+            """
+            SELECT id, event_key, jugador1_nombre, jugador2_nombre, fecha_partido
+            FROM matches
+            WHERE estado = 'pendiente'
+            AND fecha_partido >= :today
+            AND fecha_partido <= :end
+            AND event_key IS NOT NULL AND TRIM(COALESCE(event_key, '')) != ''
+            ORDER BY fecha_partido ASC
+            LIMIT 20
+            """,
+            {"today": today, "end": end_date},
+        )
+        our_event_keys = [str(m["event_key"]) for m in (pending or []) if m.get("event_key")]
+
+        # 2. Llamar a la API get_odds
+        all_odds_by_key = {}
+        for d in range((end_date - today).days + 1):
+            day = today + timedelta(days=d)
+            day_str = day.strftime("%Y-%m-%d")
+            batch = odds_service.odds_client.get_all_odds_batch(day_str, day_str)
+            if batch:
+                all_odds_by_key.update(batch)
+
+        api_keys = list(all_odds_by_key.keys()) if isinstance(all_odds_by_key, dict) else []
+        api_keys_str = [str(k) for k in api_keys]
+        api_keys_set = set(api_keys_str) | {k for k in api_keys if isinstance(k, (int, str))}
+
+        # 3. Intersección
+        def key_in_api(ek):
+            return ek in api_keys_set or (ek.isdigit() and int(ek) in api_keys_set)
+        matched = [k for k in our_event_keys if key_in_api(k)]
+        not_matched = [k for k in our_event_keys if not key_in_api(k)]
+
+        # 4. Probar extract_best_odds para el primero
+        first_match_odds = None
+        if our_event_keys:
+            first_match_odds = odds_service.odds_client.extract_best_odds(
+                all_odds_by_key, our_event_keys[0]
+            )
+
+        return {
+            "today": str(today),
+            "our_event_keys_sample": our_event_keys[:10],
+            "api_odds_keys_count": len(api_keys),
+            "api_odds_keys_sample": api_keys_str[:15] if api_keys_str else [],
+            "matched_count": len(matched),
+            "not_matched_count": len(not_matched),
+            "not_matched_sample": not_matched[:5],
+            "first_match_extract_result": "OK" if first_match_odds else "None (no Home/Away)",
+            "diagnosis": (
+                "API no devuelve cuotas para estos event_keys. "
+                "Posibles causas: plan API sin odds, fechas fuera de cobertura, o formato de clave distinto."
+                if not_matched and not matched else
+                "Algunas claves coinciden. Revisar predictor o update_match_odds."
+                if matched else
+                "API devolvió 0 partidos con cuotas para el rango de fechas."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en debug-odds-sync: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin/scheduler-status", tags=["Admin"])
 async def get_scheduler_status():
     """
