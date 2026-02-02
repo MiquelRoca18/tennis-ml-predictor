@@ -101,6 +101,10 @@ class PredictionVersion(BaseModel):
     kelly_stake_jugador1: Optional[float] = None
     kelly_stake_jugador2: Optional[float] = None
 
+    # Nivel de confianza del modelo (HIGH, MEDIUM, LOW, UNKNOWN)
+    confidence_level: Optional[str] = None
+    confidence_score: Optional[float] = None
+
     class Config:
         json_schema_extra = {
             "example": {

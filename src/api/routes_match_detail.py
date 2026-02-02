@@ -132,6 +132,7 @@ async def get_match_full(match_id: int):
             SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
                 p.jugador1_cuota, p.jugador2_cuota, p.jugador1_probabilidad, p.jugador2_probabilidad,
                 p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                p.confidence_level, p.confidence_score,
                 b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
                 b.resultado as bet_resultado, b.ganancia
             FROM matches m

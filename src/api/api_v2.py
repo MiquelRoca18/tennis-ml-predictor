@@ -518,6 +518,8 @@ async def get_matches_by_date(
                     confianza=p.get("confianza"),
                     kelly_stake_jugador1=p.get("kelly_stake_jugador1"),
                     kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
+                    confidence_level=p.get("confidence_level"),
+                    confidence_score=p.get("confidence_score"),
                 )
 
             # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador).
