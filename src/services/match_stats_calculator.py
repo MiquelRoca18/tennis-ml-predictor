@@ -306,6 +306,81 @@ class MatchStatsCalculator:
         
         return shifts
     
+    def calculate_timeline_from_scores(self, scores: MatchScores) -> MatchTimeline:
+        """
+        Genera un timeline simplificado desde los scores por set cuando no hay pointbypoint.
+        
+        Útil como fallback: la API Tennis no siempre proporciona datos punto por punto
+        (especialmente Grand Slams como Australian Open). Con los scores podemos mostrar
+        al menos la distribución de juegos por set.
+        
+        Args:
+            scores: MatchScores con sets (player1_games, player2_games por set)
+            
+        Returns:
+            MatchTimeline con juegos inferidos (orden aproximado, is_break desconocido)
+        """
+        if not scores or not scores.sets:
+            return MatchTimeline()
+        
+        set_timelines = []
+        total_games = 0
+        
+        for set_score in scores.sets:
+            p1_games = set_score.player1_games
+            p2_games = set_score.player2_games
+            set_num = set_score.set_number
+            
+            # Crear GameInfo para cada juego (orden: ganador primero, luego perdedor)
+            game_infos = []
+            winner = 1 if p1_games > p2_games else 2
+            winner_count = max(p1_games, p2_games)
+            loser_count = min(p1_games, p2_games)
+            
+            for i in range(winner_count + loser_count):
+                if i < winner_count:
+                    game_winner = winner
+                else:
+                    game_winner = 2 if winner == 1 else 1
+                game_infos.append((game_winner, set_num, i + 1))
+            
+            # Construir GameInfo con score_after acumulado
+            p1_acc, p2_acc = 0, 0
+            final_infos = []
+            for i, (game_winner, sn, gn) in enumerate(game_infos):
+                if game_winner == 1:
+                    p1_acc += 1
+                else:
+                    p2_acc += 1
+                final_infos.append(GameInfo(
+                    set_number=sn,
+                    game_number=gn,
+                    server=1,  # Desconocido sin pointbypoint
+                    winner=game_winner,
+                    is_break=False,  # Desconocido sin pointbypoint
+                    score_after=f"{p1_acc}-{p2_acc}"
+                ))
+            game_infos = final_infos
+            
+            has_tiebreak = (p1_games == 7 and p2_games == 6) or (p1_games == 6 and p2_games == 7)
+            set_timelines.append(SetTimeline(
+                set_number=set_num,
+                games=game_infos,
+                final_score=f"{p1_games}-{p2_games}",
+                has_tiebreak=has_tiebreak,
+                tiebreak_score=set_score.tiebreak_score,
+                breaks_player1=0,  # Desconocido sin pointbypoint
+                breaks_player2=0
+            ))
+            total_games += len(game_infos)
+        
+        return MatchTimeline(
+            sets=set_timelines,
+            total_games=total_games,
+            total_breaks=0,  # Desconocido
+            momentum_shifts=0
+        )
+    
     # ============================================================
     # STATISTICS
     # ============================================================

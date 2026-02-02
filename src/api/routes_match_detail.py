@@ -301,6 +301,13 @@ async def get_match_full(match_id: int):
         # 5. Obtener estadísticas y timeline de la BD (si existen pre-calculadas)
         stats, timeline = _load_stats_from_db(db, match_id)
         
+        # 5b. Fallback: si no hay timeline de pointbypoint pero sí scores, generar desde scores
+        # (La API Tennis no siempre proporciona pointbypoint - ej. Australian Open)
+        if (not timeline or timeline.total_games == 0) and scores and scores.sets:
+            timeline = stats_calculator.calculate_timeline_from_scores(scores)
+            if timeline.total_games > 0:
+                logger.debug(f"📈 Timeline fallback desde scores en /full para match {match_id}")
+        
         # 6. Obtener cuotas de la BD (rápido)
         odds = _get_match_odds(db, match_id, match)
         
@@ -369,12 +376,21 @@ async def get_match_timeline(match_id: int):
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
         
-        # 1. Intentar cargar de BD
+        # 1. Intentar cargar de BD (pointbypoint cache)
         _, timeline = _load_stats_from_db(db, match_id)
         if timeline and timeline.total_games > 0:
             return timeline
         
-        # 2. No hay datos - lazy loading desde API (get_fixtures requiere date_start/date_stop)
+        # 2. Fallback: timeline desde scores (match_sets o resultado_marcador)
+        # La API Tennis no siempre proporciona pointbypoint (ej. Grand Slams)
+        scores = _get_scores_for_match(db, match_id, match)
+        if scores and scores.sets:
+            timeline = stats_calculator.calculate_timeline_from_scores(scores)
+            if timeline.total_games > 0:
+                logger.info(f"📈 Timeline fallback desde scores para match {match_id} ({timeline.total_games} juegos)")
+                return timeline
+        
+        # 3. Lazy loading desde API (get_fixtures con match_key)
         event_key = match.get("event_key")
         if not event_key:
             return MatchTimeline()
@@ -403,6 +419,11 @@ async def get_match_timeline(match_id: int):
                     _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
                     timeline = stats_calculator.calculate_timeline(api_data["pointbypoint"])
                     return timeline
+                # API devolvió partido pero sin pointbypoint - intentar desde scores de API
+                if api_data and api_data.get("scores"):
+                    scores_api = stats_calculator.calculate_scores(api_data["scores"], api_data)
+                    if scores_api and scores_api.sets:
+                        return stats_calculator.calculate_timeline_from_scores(scores_api)
         except Exception as e:
             logger.warning(f"Error obteniendo timeline de API: {e}")
         
@@ -863,6 +884,50 @@ async def get_match_h2h(match_id: int):
 # ============================================================
 # FUNCIONES AUXILIARES
 # ============================================================
+
+def _get_scores_for_match(db, match_id: int, match: dict):
+    """
+    Obtiene MatchScores para un partido desde match_sets o resultado_marcador.
+    Usado para fallback de timeline cuando no hay pointbypoint.
+    """
+    scores = None
+    try:
+        if hasattr(db, 'get_match_sets'):
+            sets_db = db.get_match_sets(match_id)
+            if sets_db:
+                sets = []
+                p1_sets = 0
+                p2_sets = 0
+                for s in sets_db:
+                    p1 = s.get("player1_score", 0)
+                    p2 = s.get("player2_score", 0)
+                    winner = 1 if p1 > p2 else 2 if p2 > p1 else None
+                    if winner == 1:
+                        p1_sets += 1
+                    elif winner == 2:
+                        p2_sets += 1
+                    sets.append(SetScore(
+                        set_number=s.get("set_number", len(sets) + 1),
+                        player1_games=p1,
+                        player2_games=p2,
+                        tiebreak_score=s.get("tiebreak_score"),
+                        winner=winner
+                    ))
+                if sets:
+                    scores = MatchScores(sets_won=[p1_sets, p2_sets], sets=sets)
+    except Exception as e:
+        logger.debug(f"Error obteniendo match_sets para scores: {e}")
+    
+    if not scores or not scores.sets:
+        marcador = match.get("resultado_marcador")
+        if marcador and "-" in marcador and "," in marcador:
+            try:
+                scores = stats_calculator.parse_score_string(marcador)
+            except Exception:
+                pass
+    
+    return scores
+
 
 def _save_pointbypoint_to_db(db, match_id: int, pointbypoint_data: list):
     """
