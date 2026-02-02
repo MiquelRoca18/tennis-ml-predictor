@@ -501,6 +501,126 @@ class MatchStatsCalculator:
             "bp_faced": 0,
         }
     
+    def parse_statistics_from_api(
+        self,
+        api_statistics: List[Dict],
+        api_match: Dict,
+    ) -> Optional[MatchStats]:
+        """
+        Parsea el campo 'statistics' de la API Tennis cuando pointbypoint está vacío.
+        
+        La API devuelve statistics como array de:
+        { player_key, stat_period, stat_type, stat_name, stat_value, stat_won, stat_total }
+        
+        stat_period="match" para estadísticas del partido completo.
+        """
+        if not api_statistics or not api_match:
+            return None
+        
+        first_key = str(api_match.get("first_player_key", ""))
+        second_key = str(api_match.get("second_player_key", ""))
+        
+        # Filtrar solo stats de periodo "match"
+        match_stats = [s for s in api_statistics if str(s.get("stat_period", "")) == "match"]
+        if not match_stats:
+            return None
+        
+        def get_stat(stats_list: List[Dict], player_key: str, stat_name: str) -> Optional[Dict]:
+            for s in stats_list:
+                if str(s.get("player_key")) == player_key and (s.get("stat_name") or "").lower() == stat_name.lower():
+                    return s
+            return None
+        
+        def parse_pct(val) -> float:
+            if val is None:
+                return 0.0
+            s = str(val).replace("%", "").strip()
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return 0.0
+        
+        def build_player(player_key: str) -> PlayerStats:
+            aces_s = get_stat(match_stats, player_key, "Aces")
+            df_s = get_stat(match_stats, player_key, "Double Faults")
+            svc_games = get_stat(match_stats, player_key, "Service games won")
+            ret_games = get_stat(match_stats, player_key, "Return games won")
+            total_games = get_stat(match_stats, player_key, "Total games won")
+            bp_conv = get_stat(match_stats, player_key, "Break Points Converted")
+            bp_saved = get_stat(match_stats, player_key, "Break Points Saved")
+            first_serve_pct = get_stat(match_stats, player_key, "1st serve percentage")
+            first_serve_won = get_stat(match_stats, player_key, "1st serve points won")
+            second_serve_won = get_stat(match_stats, player_key, "2nd serve points won")
+            total_pts = get_stat(match_stats, player_key, "Total Points Won")
+            winners_s = get_stat(match_stats, player_key, "Winners")
+            ue_s = get_stat(match_stats, player_key, "Unforced errors")
+            
+            aces = int(aces_s.get("stat_value", 0)) if aces_s else 0
+            double_faults = int(df_s.get("stat_value", 0)) if df_s else 0
+            service_games_won = int(svc_games.get("stat_won", 0)) if svc_games and svc_games.get("stat_won") is not None else 0
+            service_games_total = int(svc_games.get("stat_total", 0)) if svc_games and svc_games.get("stat_total") is not None else 0
+            return_games_won = int(ret_games.get("stat_won", 0)) if ret_games and ret_games.get("stat_won") is not None else 0
+            return_games_total = int(ret_games.get("stat_total", 0)) if ret_games and ret_games.get("stat_total") is not None else 0
+            total_games_won = int(total_games.get("stat_won", 0)) if total_games and total_games.get("stat_won") is not None else 0
+            total_points_won = int(total_pts.get("stat_won", 0)) if total_pts and total_pts.get("stat_won") is not None else 0
+            bp_won = int(bp_conv.get("stat_won", 0)) if bp_conv and bp_conv.get("stat_won") is not None else 0
+            bp_total = int(bp_conv.get("stat_total", 0)) if bp_conv and bp_conv.get("stat_total") is not None else 0
+            bp_saved_val = int(bp_saved.get("stat_won", 0)) if bp_saved and bp_saved.get("stat_won") is not None else 0
+            bp_faced = int(bp_saved.get("stat_total", 0)) if bp_saved and bp_saved.get("stat_total") is not None else 0
+            first_serve_pct_val = parse_pct(first_serve_pct.get("stat_value")) if first_serve_pct else 0.0
+            first_serve_won_pct = 0.0
+            if first_serve_won and first_serve_won.get("stat_total"):
+                t = int(first_serve_won.get("stat_total", 0))
+                first_serve_won_pct = (int(first_serve_won.get("stat_won", 0)) / t * 100) if t > 0 else 0
+            second_serve_won_pct = 0.0
+            if second_serve_won and second_serve_won.get("stat_total"):
+                t = int(second_serve_won.get("stat_total", 0))
+                second_serve_won_pct = (int(second_serve_won.get("stat_won", 0)) / t * 100) if t > 0 else 0
+            winners = int(winners_s.get("stat_value", 0)) if winners_s and str(winners_s.get("stat_value", "")).isdigit() else 0
+            unforced_errors = int(ue_s.get("stat_value", 0)) if ue_s and str(ue_s.get("stat_value", "")).isdigit() else 0
+            
+            return PlayerStats(
+                serve=ServeStats(
+                    aces=aces,
+                    double_faults=double_faults,
+                    first_serve_pct=first_serve_pct_val,
+                    first_serve_won_pct=round(first_serve_won_pct, 1),
+                    second_serve_won_pct=round(second_serve_won_pct, 1),
+                    service_games_won=service_games_won,
+                    service_games_total=service_games_total if service_games_total > 0 else max(service_games_won, 1),
+                ),
+                return_=ReturnStats(
+                    return_points_won=0,
+                    return_points_total=0,
+                    return_games_won=return_games_won,
+                    return_games_total=return_games_total if return_games_total > 0 else max(return_games_won, 1),
+                ),
+                break_points=BreakPointStats(
+                    break_points_won=bp_won,
+                    break_points_total=bp_total if bp_total > 0 else bp_won,
+                    break_points_saved=bp_saved_val,
+                    break_points_faced=bp_faced if bp_faced > 0 else bp_saved_val,
+                ),
+                total_points_won=total_points_won,
+                total_games_won=total_games_won,
+                winners=winners,
+                unforced_errors=unforced_errors,
+            )
+        
+        p1_stats = build_player(first_key)
+        p2_stats = build_player(second_key)
+        
+        total_games = p1_stats.total_games_won + p2_stats.total_games_won
+        total_points = p1_stats.total_points_won + p2_stats.total_points_won
+        
+        return MatchStats(
+            player1=p1_stats,
+            player2=p2_stats,
+            total_games=total_games,
+            total_points=total_points,
+            has_detailed_stats=True,
+        )
+    
     def _build_player_stats(self, counters: Dict[str, int], total_points: int) -> PlayerStats:
         """Construye PlayerStats desde contadores"""
         return PlayerStats(

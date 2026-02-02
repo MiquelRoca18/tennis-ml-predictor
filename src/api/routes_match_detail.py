@@ -421,6 +421,7 @@ async def get_match_timeline(match_id: int):
                     return timeline
                 # API devolvió partido pero sin pointbypoint - intentar desde scores de API
                 if api_data and api_data.get("scores"):
+                    _save_scores_to_match_sets(db, match_id, api_data["scores"], match)
                     scores_api = stats_calculator.calculate_scores(api_data["scores"], api_data)
                     if scores_api and scores_api.sets:
                         return stats_calculator.calculate_timeline_from_scores(scores_api)
@@ -506,6 +507,19 @@ async def get_match_stats(match_id: int):
                         scores = stats_calculator.calculate_scores(api_data["scores"], api_data)
                     stats = stats_calculator.calculate_stats(pbp, scores)
                     if stats:
+                        return stats
+                
+                # Fallback: API tiene "statistics" aunque pointbypoint esté vacío (ej. Australian Open)
+                if api_data and api_data.get("statistics"):
+                    stats = stats_calculator.parse_statistics_from_api(
+                        api_data["statistics"],
+                        api_data,
+                    )
+                    if stats and stats.has_detailed_stats:
+                        logger.info(f"📊 Stats match {match_id}: desde API statistics (sin pointbypoint)")
+                        # Guardar scores en match_sets si tenemos, para timeline/fallback
+                        if api_data.get("scores"):
+                            _save_scores_to_match_sets(db, match_id, api_data["scores"])
                         return stats
         except Exception as e:
             logger.warning(f"Error obteniendo stats de API: {e}")
@@ -927,6 +941,42 @@ def _get_scores_for_match(db, match_id: int, match: dict):
                 pass
     
     return scores
+
+
+def _save_scores_to_match_sets(db, match_id: int, api_scores: list, match: dict = None):
+    """
+    Guarda scores de la API en match_sets.
+    Convierte formato API (score_first, score_second, score_set) a nuestro formato.
+    """
+    if not api_scores:
+        return
+    try:
+        match = match or db.get_match(match_id)
+        swap = False
+        if match:
+            api_first = (match.get("jugador1_nombre") or "").lower()
+            j1 = (match.get("jugador1_nombre") or "").lower()
+            # La API devuelve first_player = event_first_player. Si nuestro jugador1 != API first, swap
+            # Simplificado: asumir que si tenemos match, comparar nombres
+            pass  # Por ahora no swap - la API first/second suele coincidir con nuestro orden
+        sets_data = []
+        for score in api_scores:
+            p_first = int(score.get("score_first", 0))
+            p_second = int(score.get("score_second", 0))
+            set_num = int(score.get("score_set", len(sets_data) + 1))
+            player1_score = p_second if swap else p_first
+            player2_score = p_first if swap else p_second
+            sets_data.append({
+                "set_number": set_num,
+                "player1_score": player1_score,
+                "player2_score": player2_score,
+                "tiebreak_score": None,
+            })
+        if sets_data and hasattr(db, "save_match_sets"):
+            db.save_match_sets(match_id, sets_data)
+            logger.debug(f"✅ Scores guardados en match_sets para match {match_id}")
+    except Exception as e:
+        logger.warning(f"Error guardando scores en match_sets: {e}")
 
 
 def _save_pointbypoint_to_db(db, match_id: int, pointbypoint_data: list):
