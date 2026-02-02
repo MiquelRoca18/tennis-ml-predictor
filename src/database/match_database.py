@@ -1774,6 +1774,63 @@ class MatchDatabase:
             {"match_id": match_id}
         )
 
+    def get_match_sets_batch(self, match_ids: List[int]) -> Dict[int, List[Dict]]:
+        """
+        Obtiene los scores por set de múltiples partidos en una sola consulta.
+        Evita N+1 queries en listados de partidos.
+        
+        Args:
+            match_ids: Lista de IDs de partidos
+            
+        Returns:
+            Dict {match_id: [sets]} - cada set tiene set_number, player1_score, player2_score, tiebreak_score
+        """
+        if not match_ids:
+            return {}
+        result: Dict[int, List[Dict]] = {mid: [] for mid in match_ids}
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text, bindparam
+                stmt = text("""
+                    SELECT match_id, set_number, player1_score, player2_score, tiebreak_score
+                    FROM match_sets
+                    WHERE match_id IN :match_ids
+                    ORDER BY match_id, set_number ASC
+                """).bindparams(bindparam("match_ids", expanding=True))
+                with self.engine.connect() as conn:
+                    rows = conn.execute(stmt, {"match_ids": match_ids}).fetchall()
+            else:
+                placeholders = ",".join("?" * len(match_ids))
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT match_id, set_number, player1_score, player2_score, tiebreak_score
+                    FROM match_sets
+                    WHERE match_id IN ({placeholders})
+                    ORDER BY match_id, set_number ASC
+                    """,
+                    match_ids
+                )
+                rows = cursor.fetchall()
+            # Normalizar filas a dict (PostgreSQL Row._mapping, SQLite Row)
+            def _to_dict(row):
+                if hasattr(row, "_mapping"):
+                    return dict(row._mapping)
+                return dict(row) if hasattr(row, "keys") else row
+            rows = [_to_dict(r) for r in rows]
+            for r in rows:
+                mid = r.get("match_id")
+                if mid in result:
+                    result[mid].append({
+                        "set_number": r.get("set_number", 0),
+                        "player1_score": r.get("player1_score", 0),
+                        "player2_score": r.get("player2_score", 0),
+                        "tiebreak_score": r.get("tiebreak_score"),
+                    })
+        except Exception as e:
+            logger.warning(f"get_match_sets_batch: {e}")
+        return result
+
     def save_match_sets(self, match_id: int, sets_data: List[Dict]) -> int:
         """
         Guarda los scores por set de un partido

@@ -9,7 +9,7 @@ predicciones versionadas y tracking de apuestas.
 import sys
 from pathlib import Path
 from datetime import datetime, date, time as dt_time, timedelta
-from typing import Optional
+from typing import Dict, List, Optional
 import logging
 import asyncio
 import json
@@ -247,7 +247,11 @@ def _is_set_completed(p1: int, p2: int) -> bool:
     return (hi - lo >= 2) or (lo >= 6)
 
 
-def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
+def _build_match_scores(
+    match_data: dict,
+    database,
+    pre_fetched_sets: Optional[Dict[int, List[Dict]]] = None,
+) -> Optional[MatchScores]:
     """
     Construye el objeto MatchScores con los datos del partido.
     Incluye scores por set y datos en vivo si está en juego.
@@ -255,6 +259,7 @@ def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
     Args:
         match_data: Datos del partido de la BD
         database: Instancia de MatchDatabase
+        pre_fetched_sets: Opcional. Dict {match_id: [sets]} para evitar N+1 queries.
     
     Returns:
         MatchScores o None si no hay datos
@@ -263,10 +268,13 @@ def _build_match_scores(match_data: dict, database) -> Optional[MatchScores]:
         match_id = match_data.get("id")
         estado = match_data.get("estado", "pendiente")
         
-        # Obtener sets de la tabla match_sets
+        # Obtener sets: usar pre_fetched_sets si está disponible, sino consultar BD
         sets_data = []
         try:
-            sets_raw = database.get_match_sets(match_id)
+            if pre_fetched_sets is not None:
+                sets_raw = pre_fetched_sets.get(match_id, [])
+            else:
+                sets_raw = database.get_match_sets(match_id)
             for s in sets_raw:
                 sets_data.append(SetScoreSimple(
                     set_number=s.get("set_number", 0),
@@ -431,6 +439,12 @@ async def get_matches_by_date(
         db_time = time.time() - db_start
         logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
+        # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
+        match_ids_needing_scores = [
+            p["id"] for p in partidos_raw
+            if p.get("resultado_marcador") or p.get("event_final_result") or p.get("estado") == "en_juego"
+        ]
+        sets_by_match = db.get_match_sets_batch(match_ids_needing_scores) if match_ids_needing_scores else {}
 
         # Convertir a modelos Pydantic
         partidos = []
@@ -511,7 +525,7 @@ async def get_matches_by_date(
             match_scores = None
             if not is_future and (p.get("resultado_marcador") or p.get("event_final_result") or effective_estado == "en_juego"):
                 try:
-                    match_scores = _build_match_scores(p, db)
+                    match_scores = _build_match_scores(p, db, pre_fetched_sets=sets_by_match)
                     if match_scores is None and p.get("event_final_result"):
                         marcador = p.get("resultado_marcador") or p.get("event_final_result")
                         sets_data = _parse_marcador_to_sets(marcador) if marcador else []
