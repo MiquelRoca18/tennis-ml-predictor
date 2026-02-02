@@ -125,10 +125,23 @@ async def get_match_full(match_id: int):
     db = get_db()
     
     try:
-        # 1. Obtener partido de la BD (usando vista con predicciones)
-        match = db._fetchone(
+        # 1. Obtener partido de la BD (usando vista con predicciones; fallback si no existe aún)
+        match = db._fetchone_with_view_fallback(
             "SELECT * FROM matches_with_latest_prediction WHERE id = :id",
-            {"id": match_id}
+            """
+            SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
+                p.jugador1_cuota, p.jugador2_cuota, p.jugador1_probabilidad, p.jugador2_probabilidad,
+                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
+                b.resultado as bet_resultado, b.ganancia
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            LEFT JOIN bets b ON m.id = b.match_id AND b.estado = 'activa'
+            WHERE m.id = :id
+            """,
+            {"id": match_id},
         )
         if not match:
             match = db.get_match(match_id)

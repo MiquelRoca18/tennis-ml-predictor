@@ -114,13 +114,8 @@ class MatchDatabase:
                 # PostgreSQL: Execute using SQLAlchemy
                 from sqlalchemy import text
                 import re
-                # Drop vista antes de recrear (evita error "cannot change name of view column")
-                try:
-                    with self.engine.connect() as conn:
-                        conn.execute(text("DROP VIEW IF EXISTS matches_with_latest_prediction CASCADE"))
-                        conn.commit()
-                except Exception:
-                    pass
+                # No hacer DROP VIEW al inicio: crea ventana donde la vista no existe y las
+                # peticiones fallan. CREATE OR REPLACE VIEW funciona en la mayoría de casos.
                 # Convert SQLite schema to PostgreSQL-compatible
                 pg_schema = schema_script
                 
@@ -174,6 +169,14 @@ class MatchDatabase:
                 for i, statement in enumerate(statements):
                     try:
                         with self.engine.connect() as conn:
+                            # Antes de crear matches_with_latest_prediction, hacer DROP para
+                            # evitar "cannot change name of view column" al cambiar estructura
+                            if "matches_with_latest_prediction" in statement:
+                                try:
+                                    conn.execute(text("DROP VIEW IF EXISTS matches_with_latest_prediction CASCADE"))
+                                    conn.commit()
+                                except Exception:
+                                    pass
                             # Log CREATE TABLE statements for debugging
                             if statement.upper().startswith('CREATE TABLE'):
                                 table_name = statement.split()[5] if len(statement.split()) > 5 else "unknown"
@@ -367,6 +370,27 @@ class MatchDatabase:
             logger.error(f"   Params: {params}")
             raise  # Re-raise para que el llamador pueda manejar
     
+    def _fetchone_with_view_fallback(
+        self, view_query: str, fallback_query: str, params: dict = None
+    ) -> Optional[Dict]:
+        """
+        Intenta usar la vista; si no existe, usa el fallback.
+        Para consultas de un solo partido por id.
+        """
+        params = params or {}
+        try:
+            return self._fetchone(view_query, params)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "matches_with_latest_prediction" in err_str and (
+                "does not exist" in err_str or "undefined_table" in err_str
+            ):
+                logger.warning(
+                    "⚠️ Vista matches_with_latest_prediction no existe aún, usando fallback"
+                )
+                return self._fetchone(fallback_query, params)
+            raise
+
     def _fetchone(self, query: str, params: tuple = None) -> Optional[Dict]:
         """Fetch one row (works for both SQLite and PostgreSQL)"""
         try:
@@ -402,6 +426,27 @@ class MatchDatabase:
             cursor = self.conn.cursor()
             cursor.execute(query, params or ())
             return [dict(row) for row in cursor.fetchall()]
+
+    def _fetchall_with_view_fallback(
+        self, view_query: str, fallback_query: str, params: dict = None
+    ) -> List[Dict]:
+        """
+        Intenta usar la vista; si no existe (race al iniciar), usa el fallback.
+        Evita 500 cuando la vista no está creada aún en PostgreSQL.
+        """
+        params = params or {}
+        try:
+            return self._fetchall(view_query, params)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "matches_with_latest_prediction" in err_str and (
+                "does not exist" in err_str or "undefined_table" in err_str
+            ):
+                logger.warning(
+                    "⚠️ Vista matches_with_latest_prediction no existe aún, usando fallback"
+                )
+                return self._fetchall(fallback_query, params)
+            raise
     
     def _get_lastrowid(self, result) -> int:
         """Get last inserted row ID (works for both SQLite and PostgreSQL)"""
@@ -553,11 +598,25 @@ class MatchDatabase:
         Returns:
             Lista de partidos con sus predicciones y resultados
         """
-        matches = self._fetchall(
+        matches = self._fetchall_with_view_fallback(
             """
             SELECT * FROM matches_with_latest_prediction
             WHERE fecha_partido = :fecha
             ORDER BY hora_inicio ASC, id ASC
+        """,
+            """
+            SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
+                p.jugador1_cuota, p.jugador2_cuota, p.jugador1_probabilidad, p.jugador2_probabilidad,
+                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
+                b.resultado as bet_resultado, b.ganancia
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            LEFT JOIN bets b ON m.id = b.match_id AND b.estado = 'activa'
+            WHERE m.fecha_partido = :fecha
+            ORDER BY m.hora_inicio ASC, m.id ASC
         """,
             {"fecha": fecha},
         )
@@ -852,11 +911,25 @@ class MatchDatabase:
         Returns:
             Lista de partidos con predicciones
         """
-        matches = self._fetchall(
+        matches = self._fetchall_with_view_fallback(
             """
             SELECT * FROM matches_with_latest_prediction
             WHERE fecha_partido BETWEEN :start_date AND :end_date
             ORDER BY fecha_partido ASC, hora_inicio ASC, id ASC
+        """,
+            """
+            SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
+                p.jugador1_cuota, p.jugador2_cuota, p.jugador1_probabilidad, p.jugador2_probabilidad,
+                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
+                b.resultado as bet_resultado, b.ganancia
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            LEFT JOIN bets b ON m.id = b.match_id AND b.estado = 'activa'
+            WHERE m.fecha_partido BETWEEN :start_date AND :end_date
+            ORDER BY m.fecha_partido ASC, m.hora_inicio ASC, m.id ASC
         """,
             {"start_date": start_date, "end_date": end_date},
         )
