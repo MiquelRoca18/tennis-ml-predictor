@@ -61,7 +61,7 @@ class JugadorInfo(BaseModel):
 
     nombre: str
     ranking: Optional[int] = None
-    cuota: float = Field(..., ge=1.0, le=500.0)  # Permitir cuotas hasta 500
+    cuota: float = Field(..., ge=0.0, le=500.0)  # 0 = sin cuota; 1-500 = cuota válida
     logo: Optional[str] = None  # URL del logo del jugador desde API-Tennis
 
 
