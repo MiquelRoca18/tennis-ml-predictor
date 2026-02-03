@@ -153,17 +153,16 @@ except Exception as e:
 # Variable global para LiveEventsService
 live_events_service = None
 
-# Inicializar ModelRetrainingExecutor
-from src.services.model_retraining_executor import ModelRetrainingExecutor
-
-retraining_executor = ModelRetrainingExecutor()
-
-# Inicializar GitHub Polling Monitor (sin necesidad de webhooks)
-from src.services.github_polling_monitor import GitHubPollingMonitor
-
-github_monitor = GitHubPollingMonitor(repo_owner="Tennismylife", repo_name="TML-Database")
-
-scheduler = BackgroundScheduler()
+# Funciones del predictor (definidas antes de retraining_executor para el callback)
+def reset_predictor():
+    """
+    Resetea el predictor en memoria.
+    Tras un re-entrenamiento exitoso, el modelo nuevo está en disco pero el predictor
+    en memoria sigue con el viejo. Al resetear, la próxima predicción cargará el nuevo.
+    """
+    global predictor
+    predictor = None
+    logger.info("🔄 Predictor reseteado - modelo nuevo se cargará en próxima predicción")
 
 
 def get_predictor(raise_on_error: bool = True):
@@ -183,6 +182,19 @@ def get_predictor(raise_on_error: bool = True):
                 raise HTTPException(status_code=500, detail=f"Error cargando modelo: {e}")
             return None
     return predictor
+
+
+# Inicializar ModelRetrainingExecutor (con callback para resetear predictor tras re-entrenamiento)
+from src.services.model_retraining_executor import ModelRetrainingExecutor
+
+retraining_executor = ModelRetrainingExecutor(on_success_callback=reset_predictor)
+
+# Inicializar GitHub Polling Monitor (sin necesidad de webhooks)
+from src.services.github_polling_monitor import GitHubPollingMonitor
+
+github_monitor = GitHubPollingMonitor(repo_owner="Tennismylife", repo_name="TML-Database")
+
+scheduler = BackgroundScheduler()
 
 
 # ============================================================
@@ -2129,6 +2141,23 @@ async def get_retraining_status():
     except Exception as e:
         logger.error(f"❌ Error obteniendo estado de re-entrenamiento: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/reset-predictor", tags=["Admin"])
+async def admin_reset_predictor():
+    """
+    Resetea el predictor en memoria para forzar recarga del modelo desde disco.
+
+    Útil cuando se ha actualizado el archivo del modelo manualmente o tras
+    un re-entrenamiento que no pasó por el executor (ej. manual).
+    La próxima predicción cargará el modelo actual en disco.
+    """
+    reset_predictor()
+    return {
+        "status": "ok",
+        "message": "Predictor reseteado. Modelo nuevo se cargará en próxima predicción",
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 # ============================================================

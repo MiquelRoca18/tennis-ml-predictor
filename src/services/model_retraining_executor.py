@@ -10,7 +10,7 @@ import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Callable
 import json
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,17 @@ class ModelRetrainingExecutor:
     Ejecuta re-entrenamiento del modelo en background
     """
 
-    def __init__(self):
-        """Inicializa el executor"""
+    def __init__(self, on_success_callback: Optional[Callable[[], None]] = None):
+        """
+        Inicializa el executor
+
+        Args:
+            on_success_callback: Función a llamar tras re-entrenamiento exitoso.
+                Típicamente resetea el predictor en memoria para que la próxima
+                predicción cargue el modelo nuevo desde disco.
+        """
         self.is_running = False
+        self.on_success_callback = on_success_callback
         self.last_execution = None
         self.last_result = None
         self.current_thread = None
@@ -80,6 +88,14 @@ class ModelRetrainingExecutor:
                 logger.info("✅ RE-ENTRENAMIENTO COMPLETADO EXITOSAMENTE")
                 logger.info(f"⏱️  Duración: {duration:.0f} segundos ({duration/60:.1f} minutos)")
                 logger.info("=" * 70)
+
+                # Resetear predictor para que la próxima predicción cargue el modelo nuevo
+                if self.on_success_callback:
+                    try:
+                        self.on_success_callback()
+                        logger.info("🔄 Predictor reseteado - modelo nuevo se cargará en próxima predicción")
+                    except Exception as cb_err:
+                        logger.warning(f"⚠️ Callback post-reentrenamiento falló (no crítico): {cb_err}")
 
                 self.last_result = {
                     "success": True,

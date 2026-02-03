@@ -63,8 +63,6 @@ function Create-ScheduledTask {
 Write-Host "📋 Tareas a configurar:" -ForegroundColor Yellow
 Write-Host "  - 03:00 AM: Actualización de datos (diaria)" -ForegroundColor White
 Write-Host "  - 04:00 AM: Verificación de reentrenamiento (diaria)" -ForegroundColor White
-Write-Host "  - 09:00 AM: Predicciones diarias (diaria)" -ForegroundColor White
-Write-Host "  - 12:00 PM: Monitoreo del sistema (diaria)" -ForegroundColor White
 Write-Host ""
 
 # Preguntar confirmación
@@ -90,33 +88,19 @@ if ($Confirmation -eq 'S' -or $Confirmation -eq 's') {
         -ScriptPath "src\automation\model_retrainer.py" `
         -Time "04:00"
     
-    # 3. Predicciones diarias (9:00 AM)
-    $Success3 = Create-ScheduledTask `
-        -TaskName "TennisML_DailyPredict" `
-        -Description "Generación de predicciones diarias" `
-        -ScriptPath "src\automation\daily_predictor.py" `
-        -Time "09:00"
-    
-    # 4. Monitoreo del sistema (12:00 PM)
-    $Success4 = Create-ScheduledTask `
-        -TaskName "TennisML_Monitoring" `
-        -Description "Monitoreo del sistema" `
-        -ScriptPath "src\automation\monitoring.py" `
-        -Time "12:00"
-    
     Write-Host ""
     
-    if ($Success1 -and $Success2 -and $Success3 -and $Success4) {
+    if ($Success1 -and $Success2) {
         Write-Host "✅ Todas las tareas instaladas correctamente" -ForegroundColor Green
         Write-Host ""
         Write-Host "📋 Para ver las tareas instaladas:" -ForegroundColor Yellow
         Write-Host "   Get-ScheduledTask | Where-Object {`$_.TaskName -like 'TennisML_*'}" -ForegroundColor White
         Write-Host ""
         Write-Host "📋 Para ejecutar una tarea manualmente:" -ForegroundColor Yellow
-        Write-Host "   Start-ScheduledTask -TaskName 'TennisML_DailyPredict'" -ForegroundColor White
+        Write-Host "   Start-ScheduledTask -TaskName 'TennisML_DataUpdate'" -ForegroundColor White
         Write-Host ""
         Write-Host "📋 Para deshabilitar una tarea:" -ForegroundColor Yellow
-        Write-Host "   Disable-ScheduledTask -TaskName 'TennisML_DailyPredict'" -ForegroundColor White
+        Write-Host "   Disable-ScheduledTask -TaskName 'TennisML_DataUpdate'" -ForegroundColor White
         Write-Host ""
         Write-Host "📋 Para eliminar todas las tareas:" -ForegroundColor Yellow
         Write-Host "   Get-ScheduledTask | Where-Object {`$_.TaskName -like 'TennisML_*'} | Unregister-ScheduledTask -Confirm:`$false" -ForegroundColor White

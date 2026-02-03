@@ -1,10 +1,8 @@
 # Docker Compose para Tennis ML Predictor
 # ========================================
-# 
-# Orquestación de servicios:
-# - API REST
-# - Cron jobs para predicciones diarias
-# 
+#
+# Orquestación: API REST (predicciones por scheduler interno)
+#
 # Uso:
 #   docker-compose up -d
 #   docker-compose logs -f
@@ -20,16 +18,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./modelos:/app/modelos:ro  # Read-only
+      - ./modelos:/app/modelos:ro
       - ./datos:/app/datos
       - ./logs:/app/logs
-      - ./apuestas_tracker.db:/app/apuestas_tracker.db
     environment:
-      - MODEL_PATH=/app/modelos/production/random_forest_calibrado.pkl
-      - DB_PATH=/app/apuestas_tracker.db
+      - MODEL_PATH=/app/modelos/random_forest_calibrado.pkl
       - LOG_DIR=/app/logs
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -37,48 +31,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - tennis-ml-network
-
-  # Cron job para predicciones diarias (6 AM)
-  predicciones-diarias:
-    build: .
-    container_name: tennis-ml-cron-predicciones
-    volumes:
-      - ./modelos:/app/modelos:ro
-      - ./datos:/app/datos
-      - ./logs:/app/logs
-      - ./apuestas_tracker.db:/app/apuestas_tracker.db
-    environment:
-      - MODEL_PATH=/app/modelos/production/random_forest_calibrado.pkl
-      - DB_PATH=/app/apuestas_tracker.db
-      - LOG_DIR=/app/logs
-    command: >
-      sh -c "
-      echo '0 6 * * * cd /app && python scripts/predicciones_diarias.py >> /app/logs/cron_predicciones.log 2>&1' > /etc/crontabs/root &&
-      crond -f -l 2
-      "
-    restart: unless-stopped
-    networks:
-      - tennis-ml-network
-
-  # Cron job para actualizar resultados (8 AM)
-  actualizar-resultados:
-    build: .
-    container_name: tennis-ml-cron-resultados
-    volumes:
-      - ./datos:/app/datos
-      - ./logs:/app/logs
-      - ./apuestas_tracker.db:/app/apuestas_tracker.db
-    environment:
-      - DB_PATH=/app/apuestas_tracker.db
-      - LOG_DIR=/app/logs
-    command: >
-      sh -c "
-      echo '0 8 * * * cd /app && python scripts/actualizar_resultados.py >> /app/logs/cron_resultados.log 2>&1' > /etc/crontabs/root &&
-      crond -f -l 2
-      "
-    restart: unless-stopped
     networks:
       - tennis-ml-network
 
