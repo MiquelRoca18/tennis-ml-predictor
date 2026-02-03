@@ -143,7 +143,7 @@ class MatchDatabase:
                     pg_schema,
                     flags=re.DOTALL
                 )
-                
+
                 # Remove SQLite-specific triggers (PostgreSQL uses different syntax)
                 pg_schema = re.sub(r'CREATE TRIGGER.*?END;', '', pg_schema, flags=re.DOTALL)
                 
@@ -169,6 +169,12 @@ class MatchDatabase:
                 for i, statement in enumerate(statements):
                     try:
                         with self.engine.connect() as conn:
+                            # Saltar matches_with_latest_prediction del schema: usa m.* que con
+                            # jugador1_cuota/jugador2_cuota en matches causa "column specified more than once".
+                            # La migración _migrate_recreate_matches_view la crea correctamente.
+                            if "matches_with_latest_prediction" in statement and "m.*" in statement:
+                                logger.debug("Skipping schema view matches_with_latest_prediction (migration creates it)")
+                                continue
                             # Antes de crear matches_with_latest_prediction, hacer DROP para
                             # evitar "cannot change name of view column" al cambiar estructura
                             if "matches_with_latest_prediction" in statement:
