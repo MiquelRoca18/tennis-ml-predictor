@@ -70,5 +70,6 @@ temp/
 *.sqlite
 *.sqlite3
 
-# Resultados
+# Resultados (excluir todo excepto selected_features.txt, necesario para predicciones)
 resultados/
+!resultados/selected_features.txt

@@ -48,6 +48,9 @@ COPY scripts/ ./scripts/
 # Copiar modelos entrenados
 COPY modelos/ ./modelos/
 
+# Copiar lista de features (requerida por PredictorCalibrado - orden debe coincidir con modelo)
+COPY resultados/selected_features.txt ./resultados/
+
 # Script de arranque
 COPY start.sh ./start.sh
 RUN chmod +x start.sh
