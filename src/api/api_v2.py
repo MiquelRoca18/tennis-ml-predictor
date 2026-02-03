@@ -1463,6 +1463,70 @@ async def manual_sync_odds_and_predictions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/admin/regenerate-all-predictions", tags=["Admin"])
+async def admin_regenerate_all_predictions():
+    """
+    Regenera predicciones para TODOS los partidos pendientes con cuotas válidas.
+    Ignora si ya tienen predicción o si las cuotas cambiaron.
+
+    Uso: una vez tras desplegar fix de selected_features.txt para corregir
+    predicciones que se generaron con features incorrectas.
+    """
+    try:
+        pred = get_predictor()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Predictor no disponible: {e}")
+
+    today = date.today()
+    end_date = today + timedelta(days=14)
+    pending = db._fetchall(
+        """
+        SELECT id, jugador1_nombre, jugador2_nombre, superficie, jugador1_cuota, jugador2_cuota
+        FROM matches
+        WHERE estado = 'pendiente'
+        AND fecha_partido >= :today
+        AND fecha_partido <= :end_date
+        AND COALESCE(jugador1_cuota, 0) > 0
+        AND COALESCE(jugador2_cuota, 0) > 0
+        ORDER BY fecha_partido ASC, id ASC
+        """,
+        {"today": today, "end_date": end_date},
+    )
+
+    if not pending:
+        return {
+            "success": True,
+            "matches_processed": 0,
+            "predictions_regenerated": 0,
+            "message": "No hay partidos pendientes con cuotas válidas",
+        }
+
+    from src.services.prediction_runner import run_prediction_and_save
+
+    regenerated = 0
+    for match in pending:
+        ok = run_prediction_and_save(
+            db=db,
+            predictor=pred,
+            match_id=match["id"],
+            player1_name=match.get("jugador1_nombre", ""),
+            player2_name=match.get("jugador2_nombre", ""),
+            surface=match.get("superficie") or "Hard",
+            player1_odds=float(match["jugador1_cuota"]),
+            player2_odds=float(match["jugador2_cuota"]),
+        )
+        if ok:
+            regenerated += 1
+
+    logger.info(f"✅ Regeneradas {regenerated}/{len(pending)} predicciones")
+    return {
+        "success": True,
+        "matches_processed": len(pending),
+        "predictions_regenerated": regenerated,
+        "message": f"{regenerated} predicciones regeneradas de {len(pending)} partidos",
+    }
+
+
 @app.get("/admin/check-predictions", tags=["Admin"])
 async def admin_check_predictions():
     """
