@@ -489,13 +489,13 @@ async def get_matches_by_date(
             jugador1 = JugadorInfo(
                 nombre=p["jugador1_nombre"],
                 ranking=p["jugador1_ranking"],
-                cuota=p.get("jugador1_cuota", 0) or 2.0,  # Default si no hay predicción
+                cuota=p.get("jugador1_cuota") or 0,  # Sin cuota = 0, no mostrar en frontend
                 logo=p.get("jugador1_logo"),  # URL del logo desde API-Tennis
             )
             jugador2 = JugadorInfo(
                 nombre=p["jugador2_nombre"],
                 ranking=p["jugador2_ranking"],
-                cuota=p.get("jugador2_cuota", 0) or 2.0,
+                cuota=p.get("jugador2_cuota") or 0,
                 logo=p.get("jugador2_logo"),  # URL del logo desde API-Tennis
             )
 
