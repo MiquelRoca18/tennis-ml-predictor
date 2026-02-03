@@ -247,6 +247,8 @@ class MatchDatabase:
             self._migrate_add_predictions_confidence_columns()
             # Migración: recrear vista matches_with_latest_prediction (evitar DuplicateColumn tras añadir cuotas a matches)
             self._migrate_recreate_matches_view()
+            # Migración: tabla retraining_state para persistir SHA de TML-Database (sobrevive restarts en Railway)
+            self._migrate_retraining_state_table()
 
         except Exception as e:
             logger.error(f"❌ Error inicializando esquema DB: {e}")
@@ -450,6 +452,91 @@ class MatchDatabase:
         except Exception as e:
             if "already exists" not in str(e).lower():
                 logger.warning(f"Migración h2h_cache: {e}")
+
+    def _migrate_retraining_state_table(self):
+        """Crea tabla retraining_state para persistir último SHA de TML-Database (Railway: sobrevive restarts)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS retraining_state (
+                            key VARCHAR(100) PRIMARY KEY,
+                            value TEXT NOT NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS retraining_state (
+                        key VARCHAR(100) PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                self.conn.commit()
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Migración retraining_state: {e}")
+
+    def get_retraining_last_sha(self) -> Optional[str]:
+        """Obtiene el último SHA de TML-Database procesado (persistido en DB)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    result = conn.execute(
+                        text("SELECT value FROM retraining_state WHERE key = 'tml_last_commit_sha'")
+                    ).fetchone()
+                    raw = result[0] if result else None
+            else:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "SELECT value FROM retraining_state WHERE key = 'tml_last_commit_sha'"
+                )
+                row = cursor.fetchone()
+                raw = row[0] if row else None
+            if not raw:
+                return None
+            import json
+            try:
+                data = json.loads(raw)
+                return data.get("sha", raw) if isinstance(data, dict) else raw
+            except json.JSONDecodeError:
+                return raw
+        except Exception as e:
+            logger.debug(f"get_retraining_last_sha: {e}")
+            return None
+
+    def set_retraining_last_sha(self, sha: str, metadata: Optional[dict] = None):
+        """Guarda el último SHA de TML-Database procesado (persistido en DB)."""
+        try:
+            import json
+            value = json.dumps({"sha": sha, **(metadata or {})})
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(
+                        text("""
+                            INSERT INTO retraining_state (key, value, updated_at)
+                            VALUES ('tml_last_commit_sha', :val, CURRENT_TIMESTAMP)
+                            ON CONFLICT (key) DO UPDATE SET value = :val, updated_at = CURRENT_TIMESTAMP
+                        """),
+                        {"val": value}
+                    )
+                    conn.commit()
+            else:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    """INSERT INTO retraining_state (key, value, updated_at)
+                       VALUES ('tml_last_commit_sha', ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                    (value,)
+                )
+                self.conn.commit()
+        except Exception as e:
+            logger.warning(f"set_retraining_last_sha: {e}")
 
     # ============================================================
     # DATABASE ABSTRACTION LAYER

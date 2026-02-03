@@ -54,6 +54,7 @@ from src.services.match_stats_service import MatchStatsService
 # APScheduler para actualizaciones automáticas
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 # Configurar logging
 logging.basicConfig(
@@ -192,7 +193,11 @@ retraining_executor = ModelRetrainingExecutor(on_success_callback=reset_predicto
 # Inicializar GitHub Polling Monitor (sin necesidad de webhooks)
 from src.services.github_polling_monitor import GitHubPollingMonitor
 
-github_monitor = GitHubPollingMonitor(repo_owner="Tennismylife", repo_name="TML-Database")
+github_monitor = GitHubPollingMonitor(
+    repo_owner="Tennismylife",
+    repo_name="TML-Database",
+    db=db if db.is_postgres else None,  # Persistir SHA en PostgreSQL (Railway: sobrevive restarts)
+)
 
 scheduler = BackgroundScheduler()
 
@@ -2143,6 +2148,25 @@ async def get_retraining_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/admin/trigger-retraining", tags=["Admin"])
+async def admin_trigger_retraining():
+    """
+    Fuerza el re-entrenamiento del modelo manualmente.
+
+    Útil para: recuperar el commit de TML-Database que se perdió por un restart,
+    o actualizar el modelo sin esperar al domingo 2 AM.
+    """
+    result = retraining_executor.start_retraining(
+        commit_info={"trigger": "manual", "message": "Re-entrenamiento manual vía admin"}
+    )
+    return {
+        "success": result["success"],
+        "message": result.get("mensaje", "Re-entrenamiento iniciado"),
+        "retraining": result,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @app.post("/admin/reset-predictor", tags=["Admin"])
 async def admin_reset_predictor():
     """
@@ -2905,6 +2929,30 @@ async def startup_event():
             replace_existing=True,
         )
 
+        # Job 3b: Re-entrenamiento semanal programado (domingo 2:00 AM)
+        # Garantiza modelo actualizado aunque TML-Database no haga commits
+        def scheduled_retraining():
+            """Re-entrena el modelo cada semana con datos frescos de TML-Database."""
+            try:
+                logger.info("📅 Re-entrenamiento semanal programado - iniciando...")
+                result = retraining_executor.start_retraining(
+                    commit_info={"trigger": "scheduled_weekly", "message": "Re-entrenamiento semanal"}
+                )
+                if result["success"]:
+                    logger.info("✅ Re-entrenamiento semanal iniciado")
+                else:
+                    logger.info(f"ℹ️  Re-entrenamiento semanal: {result.get('mensaje', '')}")
+            except Exception as e:
+                logger.error(f"❌ Error en re-entrenamiento semanal: {e}", exc_info=True)
+
+        scheduler.add_job(
+            func=scheduled_retraining,
+            trigger=CronTrigger(day_of_week="sun", hour=2, minute=0),  # Domingo 2:00 AM
+            id="scheduled_retraining_job",
+            name="Re-entrenamiento semanal (domingo 2 AM)",
+            replace_existing=True,
+        )
+
         # Job 3: Fetch diario de partidos (6:00 AM cada día)
         def daily_match_fetch():
             """Fetch diario de partidos desde Tennis API"""
@@ -2923,8 +2971,6 @@ async def startup_event():
 
             except Exception as e:
                 logger.error(f"❌ Error en fetch diario: {e}", exc_info=True)
-
-        from apscheduler.triggers.cron import CronTrigger
 
         scheduler.add_job(
             func=daily_match_fetch,

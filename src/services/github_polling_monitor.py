@@ -4,6 +4,9 @@ GitHub Polling Monitor
 
 Monitorea el repositorio TML-Database para detectar commits nuevos
 sin necesidad de webhooks (no requiere acceso admin al repo).
+
+En Railway: usa PostgreSQL para persistir el último SHA procesado (sobrevive restarts).
+Local: usa archivo logs/last_commit_sha.json.
 """
 
 import requests
@@ -11,7 +14,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.database.match_database import MatchDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +27,28 @@ class GitHubPollingMonitor:
     Monitorea repositorio GitHub mediante polling (sin webhooks)
     """
 
-    def __init__(self, repo_owner="Tennismylife", repo_name="TML-Database"):
+    def __init__(
+        self,
+        repo_owner="Tennismylife",
+        repo_name="TML-Database",
+        db: Optional["MatchDatabase"] = None,
+    ):
         """
         Args:
             repo_owner: Dueño del repositorio
             repo_name: Nombre del repositorio
+            db: MatchDatabase opcional. Si es PostgreSQL, persiste SHA en DB (sobrevive restarts en Railway)
         """
         self.repo_owner = repo_owner
         self.repo_name = repo_name
         self.api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits"
         self.state_file = Path("logs/last_commit_sha.json")
+        self.db = db
+        self._use_db = db is not None and getattr(db, "is_postgres", False)
 
         logger.info(f"✅ GitHubPollingMonitor inicializado: {repo_owner}/{repo_name}")
+        if self._use_db:
+            logger.info("   Persistencia: PostgreSQL (sobrevive restarts)")
 
     def get_latest_commit(self) -> Optional[Dict]:
         """
@@ -81,12 +97,13 @@ class GitHubPollingMonitor:
 
     def get_last_processed_sha(self) -> Optional[str]:
         """
-        Obtiene el SHA del último commit procesado
-
-        Returns:
-            SHA del último commit procesado o None
+        Obtiene el SHA del último commit procesado.
+        Usa PostgreSQL si disponible (persiste entre restarts en Railway).
         """
         try:
+            if self._use_db:
+                return self.db.get_retraining_last_sha()
+
             if not self.state_file.exists():
                 return None
 
@@ -100,12 +117,22 @@ class GitHubPollingMonitor:
 
     def save_processed_sha(self, commit_info: Dict):
         """
-        Guarda el SHA del commit procesado
-
-        Args:
-            commit_info: Información del commit
+        Guarda el SHA del commit procesado.
+        Usa PostgreSQL si disponible (persiste entre restarts en Railway).
         """
         try:
+            if self._use_db:
+                self.db.set_retraining_last_sha(
+                    commit_info["sha"],
+                    metadata={
+                        "short_sha": commit_info["short_sha"],
+                        "message": commit_info["message"],
+                        "processed_at": datetime.now().isoformat(),
+                    },
+                )
+                logger.info(f"💾 Estado guardado en DB: {commit_info['short_sha']}")
+                return
+
             self.state_file.parent.mkdir(exist_ok=True)
 
             data = {
