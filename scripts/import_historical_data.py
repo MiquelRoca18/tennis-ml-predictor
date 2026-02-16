@@ -82,11 +82,11 @@ def _insert_match_postgres(cursor, match_data):
 
 
 def import_csv_to_db():
-    conn, db_type = get_connection()
-    cursor = conn.cursor()
+    db_type = "pg" if DATABASE_URL else "sqlite"
     if db_type == "pg":
-        logger.info("📂 Conectado a PostgreSQL (DATABASE_URL)")
+        logger.info("📂 Usando PostgreSQL (DATABASE_URL) — una conexión por archivo para evitar timeouts")
     else:
+        conn, _ = get_connection()
         logger.info("📂 Conectado a SQLite")
 
     # Aceptar atp_matches_*.csv (ej. atp_matches_2024_tml.csv) o TML directo: 2022.csv, 2023.csv, 2024.csv
@@ -104,15 +104,22 @@ def import_csv_to_db():
         )
         return
 
-    insert_fn = _insert_match_postgres if db_type == "pg" else _insert_match_sqlite
     total_inserted = 0
 
     for file in csv_files:
+        # PostgreSQL: nueva conexión por archivo para evitar "connection already closed" (timeout proxy)
+        if db_type == "pg":
+            try:
+                conn, _ = get_connection()
+            except Exception as e:
+                logger.error(f"❌ Error reconectando a PostgreSQL antes de {file}: {e}")
+                continue
+        cursor = conn.cursor()
+        insert_fn = _insert_match_postgres if db_type == "pg" else _insert_match_sqlite
+
         logger.info(f"📂 Procesando {file}...")
         try:
             df = pd.read_csv(file)
-
-            # Columnas TML-Database / Sackmann: tourney_date, winner_name, loser_name, score, surface, round, etc.
 
             file_inserted = 0
             for _, row in df.iterrows():
@@ -149,9 +156,13 @@ def import_csv_to_db():
 
         except Exception as e:
             logger.error(f"❌ Error leyendo {file}: {e}")
+        finally:
+            cursor.close()
+            if db_type == "pg":
+                conn.close()
 
-    cursor.close()
-    conn.close()
+    if db_type == "sqlite":
+        conn.close()
     logger.info(f"🎉 Importación completada. Total partidos importados: {total_inserted}")
 
 if __name__ == "__main__":
