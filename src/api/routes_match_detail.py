@@ -132,6 +132,7 @@ async def get_match_full(match_id: int):
             SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
                 p.jugador1_cuota, p.jugador2_cuota, p.jugador1_probabilidad, p.jugador2_probabilidad,
                 p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                p.kelly_stake_jugador1, p.kelly_stake_jugador2,
                 p.confidence_level, p.confidence_score,
                 b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
                 b.resultado as bet_resultado, b.ganancia
@@ -1430,17 +1431,59 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
         
         # Calcular value bet
         value_bet = None
-        cuota1 = match.get("jugador1_cuota") or match.get("cuota_jugador1")
-        cuota2 = match.get("jugador2_cuota") or match.get("cuota_jugador2")
-        
+        cuota1_raw = match.get("jugador1_cuota") or match.get("cuota_jugador1")
+        cuota2_raw = match.get("jugador2_cuota") or match.get("cuota_jugador2")
+        cuota1 = float(cuota1_raw) if cuota1_raw else None
+        cuota2 = float(cuota2_raw) if cuota2_raw else None
+
         if cuota1 and cuota2:
-            ev1 = prob1 * float(cuota1) - 1
-            ev2 = prob2 * float(cuota2) - 1
+            ev1 = prob1 * cuota1 - 1
+            ev2 = prob2 * cuota2 - 1
             if ev1 > 0.05:  # 5% de edge mínimo
                 value_bet = 1
             elif ev2 > 0.05:
                 value_bet = 2
-        
+
+        recomendacion = match.get("recomendacion") or ""
+        mejor_opcion = match.get("mejor_opcion") or ""
+        j1_name = (match.get("jugador1_nombre") or "").strip()
+        j2_name = (match.get("jugador2_nombre") or "").strip()
+
+        # Stake sugerido (Kelly) con bankroll actual
+        kelly_j1 = None
+        kelly_j2 = None
+        bankroll_used = None
+        if cuota1 and cuota2 and cuota1 > 0 and cuota2 > 0:
+            try:
+                db = get_db()
+                bankroll_used = db.get_bankroll() if db else None
+                if bankroll_used is None:
+                    from src.config.settings import Config
+                    bankroll_used = float(Config.BANKROLL_INICIAL)
+                from src.config.settings import Config
+                from src.utils.common import compute_kelly_stake_backtesting
+                max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
+                rec_lower = recomendacion.lower()
+                if "apostar" in rec_lower and "no" not in rec_lower[:10]:
+                    if mejor_opcion == j1_name:
+                        kelly_j1 = compute_kelly_stake_backtesting(
+                            prob1, cuota1, bankroll_used,
+                            kelly_fraction=Config.KELLY_FRACTION,
+                            min_stake_eur=Config.MIN_STAKE_EUR,
+                            max_stake_pct=Config.MAX_STAKE_PCT,
+                            max_stake_eur=max_stake_eur,
+                        ) or None
+                    elif mejor_opcion == j2_name:
+                        kelly_j2 = compute_kelly_stake_backtesting(
+                            prob2, cuota2, bankroll_used,
+                            kelly_fraction=Config.KELLY_FRACTION,
+                            min_stake_eur=Config.MIN_STAKE_EUR,
+                            max_stake_pct=Config.MAX_STAKE_PCT,
+                            max_stake_eur=max_stake_eur,
+                        ) or None
+            except Exception as e:
+                logger.debug("Stake ELO en detalle: %s", e)
+
         logger.info(f"🤖 Predicción: {prob1:.0%} vs {prob2:.0%}, confianza: {confidence:.0f}%")
         return MatchPrediction(
             predicted_winner=predicted_winner,
@@ -1448,6 +1491,10 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
             probability_player1=prob1 * 100,
             probability_player2=prob2 * 100,
             value_bet=value_bet,
+            recommendation=recomendacion or None,
+            kelly_stake_jugador1=kelly_j1,
+            kelly_stake_jugador2=kelly_j2,
+            bankroll_used=bankroll_used,
         )
         
     except Exception as e:
