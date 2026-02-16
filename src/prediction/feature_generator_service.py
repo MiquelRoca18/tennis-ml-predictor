@@ -7,8 +7,12 @@ para todas las predicciones en la API.
 """
 
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import logging
+
+# Años a cargar para ELO: desde (año_actual - AÑOS_ELO_ATRAS) hasta año_actual.
+# Así, al empezar 2027 no hay que tocar código: se buscará 2027.csv automáticamente.
+AÑOS_ELO_ATRAS = 8  # ej. en 2026 cargamos 2018..2026
 
 from src.features.elo_rating_system import TennisELO
 from src.features.features_servicio_resto import ServicioRestoCalculator
@@ -29,6 +33,13 @@ def get_instance() -> "FeatureGeneratorService":
     if _instance is None:
         _instance = FeatureGeneratorService()
     return _instance
+
+
+def reset_instance() -> None:
+    """Borra la instancia singleton. La próxima get_instance() recargará desde CSV/BD (útil tras actualizar datos ELO)."""
+    global _instance
+    _instance = None
+    logger.info("🔄 FeatureGeneratorService reseteado - se recargará en próxima predicción")
 
 
 class FeatureGeneratorService:
@@ -122,7 +133,10 @@ class FeatureGeneratorService:
             return None
         for path in glob.glob(os.path.join(data_path, "atp_matches_*.csv")):
             csv_files.append(path)
-        for year in (2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026):
+        current_year = date.today().year
+        for year in range(current_year - AÑOS_ELO_ATRAS, current_year + 1):
+            if year < 2018:
+                continue
             p = os.path.join(data_path, f"{year}.csv")
             if p not in csv_files and os.path.isfile(p):
                 csv_files.append(p)
@@ -230,17 +244,30 @@ class FeatureGeneratorService:
         return df
 
     def _cargar_datos_historicos_csv_fallback(self):
-        """Método original de carga CSV (Backup)"""
+        """Método original de carga CSV (Backup). Años dinámicos: (año_actual - AÑOS_ELO_ATRAS) .. año_actual."""
+        import os
         try:
             dfs = []
-            años = [2022, 2023, 2024, 2025, 2026]
-            for año in años:
+            current_year = date.today().year
+            for año in range(current_year - AÑOS_ELO_ATRAS, current_year + 1):
+                if año < 2018:
+                    continue
                 try:
-                    file_path = f"datos/raw/atp_matches_{año}_tml.csv"
+                    # TML-Database usa 2022.csv, 2023.csv; nosotros también aceptamos atp_matches_2022_tml.csv
+                    file_path = None
+                    for p in (
+                        os.path.join("datos", "raw", f"{año}.csv"),
+                        os.path.join("datos", "raw", f"atp_matches_{año}_tml.csv"),
+                    ):
+                        if os.path.isfile(p):
+                            file_path = p
+                            break
+                    if file_path is None:
+                        continue
                     df_año = pd.read_csv(file_path)
                     df_año["tourney_date"] = pd.to_datetime(df_año["tourney_date"])
                     dfs.append(df_año)
-                except:
+                except Exception:
                     pass
             
             if not dfs:

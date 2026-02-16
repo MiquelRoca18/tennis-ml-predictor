@@ -388,6 +388,59 @@ def _parse_marcador_to_sets(marcador: str) -> list:
 
 
 # ============================================================
+# HELPERS: bankroll y stake en producción
+# ============================================================
+
+def _get_current_bankroll(database) -> float:
+    """Bankroll para cálculo de stake: DB si está definido, si no Config.BANKROLL_INICIAL."""
+    if database:
+        br = database.get_bankroll()
+        if br is not None and br >= 0:
+            return float(br)
+    return float(Config.BANKROLL_INICIAL)
+
+
+def _recompute_kelly_stakes_for_response(p_row: dict, bankroll: float):
+    """
+    Recalcula kelly_stake_jugador1 y kelly_stake_jugador2 con el bankroll actual.
+    Solo devuelve stake para el lado recomendado (APOSTAR a J1 o J2).
+    """
+    from src.utils.common import compute_kelly_stake_backtesting
+    if not p_row.get("prediction_version") or bankroll <= 0:
+        return p_row.get("kelly_stake_jugador1"), p_row.get("kelly_stake_jugador2")
+    prob1 = float(p_row.get("jugador1_probabilidad") or 0)
+    prob2 = float(p_row.get("jugador2_probabilidad") or 0)
+    cuota1 = float(p_row.get("jugador1_cuota") or 0)
+    cuota2 = float(p_row.get("jugador2_cuota") or 0)
+    if cuota1 <= 0 or cuota2 <= 0:
+        return p_row.get("kelly_stake_jugador1"), p_row.get("kelly_stake_jugador2")
+    rec = (p_row.get("recomendacion") or "").lower()
+    max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
+    k1 = k2 = None
+    if "apostar" in rec and "no" not in rec[:10]:
+        mejor = p_row.get("mejor_opcion") or ""
+        j1_name = (p_row.get("jugador1_nombre") or "").strip()
+        j2_name = (p_row.get("jugador2_nombre") or "").strip()
+        if mejor == j1_name:
+            k1 = compute_kelly_stake_backtesting(
+                prob1, cuota1, bankroll,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR,
+                max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
+            ) or None
+        elif mejor == j2_name:
+            k2 = compute_kelly_stake_backtesting(
+                prob2, cuota2, bankroll,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR,
+                max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
+            ) or None
+    return k1, k2
+
+
+# ============================================================
 # ENDPOINTS DE PARTIDOS
 # ============================================================
 
@@ -444,6 +497,8 @@ async def get_matches_by_date(
         ]
         sets_by_match = db.get_match_sets_batch(match_ids_needing_scores) if match_ids_needing_scores else {}
 
+        # Bankroll actual para recalcular stake en cada predicción
+        bankroll = _get_current_bankroll(db)
         # Convertir a modelos Pydantic
         partidos = []
         today = date.today()
@@ -497,9 +552,10 @@ async def get_matches_by_date(
                 logo=p.get("jugador2_logo"),  # URL del logo desde API-Tennis
             )
 
-            # Construir predicción si existe
+            # Construir predicción si existe (stake recalculado con bankroll actual)
             prediccion = None
             if p.get("prediction_version"):
+                kelly_j1, kelly_j2 = _recompute_kelly_stakes_for_response(p, bankroll)
                 prediccion = PredictionVersion(
                     version=p["prediction_version"],
                     timestamp=p["prediction_timestamp"],
@@ -514,8 +570,8 @@ async def get_matches_by_date(
                     recomendacion=p["recomendacion"],
                     mejor_opcion=p.get("mejor_opcion"),
                     confianza=p.get("confianza"),
-                    kelly_stake_jugador1=p.get("kelly_stake_jugador1"),
-                    kelly_stake_jugador2=p.get("kelly_stake_jugador2"),
+                    kelly_stake_jugador1=kelly_j1,
+                    kelly_stake_jugador2=kelly_j2,
                     confidence_level=p.get("confidence_level"),
                     confidence_score=p.get("confidence_score"),
                 )
@@ -618,6 +674,7 @@ async def get_matches_by_date(
                 "pendientes": pendientes,
             },
             partidos=partidos,
+            betting_config={"bankroll": bankroll},
         )
 
     except HTTPException:
@@ -866,27 +923,35 @@ async def create_match_and_predict(request: MatchCreateRequest):
         min_prob = Config.MIN_PROBABILIDAD  # 0.60
         
         # Aplicar TODOS los filtros (igual que backtesting)
+        bankroll = _get_current_bankroll(db)
+        max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
         if (ev_j1 > umbral_ev and 
             ev_j1 > ev_j2 and 
             request.jugador1_cuota < max_cuota and 
             prob_j1 > min_prob):
             # Apostar a jugador 1
+            from src.utils.common import compute_kelly_stake_backtesting
             recomendacion = f"APOSTAR a {request.jugador1_nombre}"
             mejor_opcion = request.jugador1_nombre
-            kelly_j1 = resultado_pred.get("stake_recomendado", 0)
+            kelly_j1 = compute_kelly_stake_backtesting(
+                prob=prob_j1, cuota=request.jugador1_cuota, bankroll=bankroll,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
+            ) or None
             kelly_j2 = None
         elif (ev_j2 > umbral_ev and 
               request.jugador2_cuota < max_cuota and 
               prob_j2 > min_prob):
-            # Apostar a jugador 2 (stake igual que backtesting)
             from src.utils.common import compute_kelly_stake_backtesting
             recomendacion = f"APOSTAR a {request.jugador2_nombre}"
             mejor_opcion = request.jugador2_nombre
             kelly_j1 = None
             kelly_j2 = compute_kelly_stake_backtesting(
-                prob=prob_j2, cuota=request.jugador2_cuota, bankroll=Config.BANKROLL_INICIAL,
+                prob=prob_j2, cuota=request.jugador2_cuota, bankroll=bankroll,
                 kelly_fraction=Config.KELLY_FRACTION,
                 min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
             ) or None
         else:
             recomendacion = "NO APOSTAR"
@@ -1093,28 +1158,35 @@ async def refresh_match_odds(match_id: int, jugador1_cuota: float, jugador2_cuot
         max_cuota = Config.MAX_CUOTA  # 2.0
         min_prob = Config.MIN_PROBABILIDAD  # 0.60
         
+        bankroll = _get_current_bankroll(db)
+        max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
         # Aplicar TODOS los filtros (igual que backtesting)
         if (ev_j1 > umbral_ev and 
             ev_j1 > ev_j2 and 
             jugador1_cuota < max_cuota and 
             prob_j1 > min_prob):
-            # Apostar a jugador 1
+            from src.utils.common import compute_kelly_stake_backtesting
             recomendacion_nueva = f"APOSTAR a {partido['jugador1_nombre']}"
             mejor_opcion_nueva = partido["jugador1_nombre"]
-            kelly_j1 = resultado_pred.get("stake_recomendado", 0)
+            kelly_j1 = compute_kelly_stake_backtesting(
+                prob=prob_j1, cuota=jugador1_cuota, bankroll=bankroll,
+                kelly_fraction=Config.KELLY_FRACTION,
+                min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
+            ) or None
             kelly_j2 = None
         elif (ev_j2 > umbral_ev and 
               jugador2_cuota < max_cuota and 
               prob_j2 > min_prob):
-            # Apostar a jugador 2 (stake igual que backtesting)
             from src.utils.common import compute_kelly_stake_backtesting
             recomendacion_nueva = f"APOSTAR a {partido['jugador2_nombre']}"
             mejor_opcion_nueva = partido["jugador2_nombre"]
             kelly_j1 = None
             kelly_j2 = compute_kelly_stake_backtesting(
-                prob=prob_j2, cuota=jugador2_cuota, bankroll=Config.BANKROLL_INICIAL,
+                prob=prob_j2, cuota=jugador2_cuota, bankroll=bankroll,
                 kelly_fraction=Config.KELLY_FRACTION,
                 min_stake_eur=Config.MIN_STAKE_EUR, max_stake_pct=Config.MAX_STAKE_PCT,
+                max_stake_eur=max_stake_eur,
             ) or None
         else:
             recomendacion_nueva = "NO APOSTAR"
@@ -1296,11 +1368,61 @@ async def get_daily_stats(days: int = Query(30, ge=1, le=365)):
 @app.get("/config", tags=["Config"])
 async def get_config():
     """Obtiene configuración actual"""
+    bankroll = _get_current_bankroll(db)
     return {
         "ev_threshold": Config.EV_THRESHOLD,
         "kelly_fraction": Config.KELLY_FRACTION,
         "bankroll_inicial": 1000.0,
+        "bankroll": bankroll,
         "update_frequency_minutes": 15,
+    }
+
+
+@app.get("/settings/betting", tags=["Settings"])
+async def get_settings_betting():
+    """
+    Configuración de apuestas para el frontend: bankroll actual y límites.
+    Usado para mostrar y editar bankroll y para recalcular stakes por partido.
+    """
+    bankroll = _get_current_bankroll(db)
+    return {
+        "bankroll": bankroll,
+        "min_stake_eur": Config.MIN_STAKE_EUR,
+        "max_stake_eur": getattr(Config, "MAX_STAKE_EUR", None),
+        "max_stake_pct": Config.MAX_STAKE_PCT,
+        "kelly_fraction": Config.KELLY_FRACTION,
+    }
+
+
+@app.patch("/settings/betting", tags=["Settings"])
+async def patch_settings_betting(request: Request):
+    """
+    Actualiza el bankroll del usuario. El frontend puede editar y guardar;
+    las cantidades sugeridas por partido (stake) se recalculan con este bankroll.
+    Body: { "bankroll": number }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body JSON inválido")
+    bankroll_raw = body.get("bankroll")
+    if bankroll_raw is None:
+        raise HTTPException(status_code=400, detail="Falta 'bankroll' en el body")
+    try:
+        bankroll = float(bankroll_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="'bankroll' debe ser un número")
+    if bankroll < 0:
+        raise HTTPException(status_code=400, detail="El bankroll no puede ser negativo")
+    ok = db.set_bankroll(bankroll)
+    if not ok:
+        raise HTTPException(status_code=500, detail="No se pudo guardar el bankroll")
+    return {
+        "bankroll": bankroll,
+        "min_stake_eur": Config.MIN_STAKE_EUR,
+        "max_stake_eur": getattr(Config, "MAX_STAKE_EUR", None),
+        "max_stake_pct": Config.MAX_STAKE_PCT,
+        "kelly_fraction": Config.KELLY_FRACTION,
     }
 
 
@@ -2077,6 +2199,78 @@ async def admin_reset_predictor():
     return {
         "status": "ok",
         "message": "Predictor reseteado. Se cargará en próxima predicción",
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/admin/refresh-elo-data", tags=["Admin"])
+async def admin_refresh_elo_data(
+    years: Optional[str] = Query(None, description="Años a descargar separados por coma, ej: 2025,2026. Por defecto: año actual y anterior"),
+):
+    """
+    Descarga CSV de TML-Database para los años indicados, los guarda en datos/raw/,
+    y resetea el FeatureGeneratorService y el predictor para que la próxima predicción
+    use los datos nuevos.
+
+    Útil cuando TML-Database ha actualizado los CSV (nueva temporada o correcciones).
+    En Railway sin volumen persistente, los CSV descargados se pierden al redeploy;
+    en ese caso es mejor actualizar los CSV en el repo y redeploy.
+    """
+    import os
+    import urllib.request
+
+    current_year = date.today().year
+    if years:
+        try:
+            year_list = [int(y.strip()) for y in years.split(",") if y.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Parámetro years debe ser números separados por coma (ej: 2025,2026)")
+    else:
+        year_list = [current_year - 1, current_year]
+
+    data_raw = Path("datos/raw")
+    data_raw.mkdir(parents=True, exist_ok=True)
+    base_url = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
+    downloaded = []
+    errors = []
+
+    for yr in year_list:
+        if yr < 2018 or yr > current_year + 1:
+            continue
+        url = f"{base_url}/{yr}.csv"
+        dest = data_raw / f"{yr}.csv"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "TennisML-Predictor/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                dest.write_bytes(resp.read())
+            downloaded.append(str(yr))
+            logger.info(f"✅ ELO CSV descargado: {yr}.csv")
+        except Exception as e:
+            errors.append(f"{yr}: {e}")
+            logger.warning(f"⚠️ No se pudo descargar {yr}.csv: {e}")
+
+    if not downloaded:
+        return {
+            "status": "partial",
+            "message": "No se descargó ningún CSV. Comprueba que TML-Database tenga esos años.",
+            "downloaded": [],
+            "errors": errors,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    try:
+        from src.prediction.feature_generator_service import reset_instance as reset_fgs
+        reset_fgs()
+        reset_predictor()
+        logger.info("🔄 ELO y predictor reseteados tras actualizar CSV")
+    except Exception as e:
+        logger.error(f"Error reseteando servicios ELO: {e}")
+
+    return {
+        "status": "ok",
+        "message": "CSV de TML-Database descargados y ELO/predictor reseteados. La próxima predicción usará los datos nuevos.",
+        "downloaded": downloaded,
+        "errors": errors if errors else None,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -2968,7 +3162,7 @@ async def startup_event():
         logger.info("   - Resultados en vivo: WebSocket (tiempo real)")
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
         logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")
-        logger.info("   - Verificación de commits TML: cada hora")
+        logger.info("   - ELO: desde CSV en datos/raw/ (actualizar vía POST /admin/refresh-elo-data o redeploy)")
         logger.info("   - Fetch diario de partidos: 6:00 AM")
         logger.info("   - Limpieza de partidos antiguos (>7 días): 2:00 AM")
         logger.info("   - [ELITE] Sincronización de rankings ATP: 3:00 AM")

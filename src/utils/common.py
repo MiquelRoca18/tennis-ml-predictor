@@ -7,7 +7,7 @@ Funciones comunes usadas en todo el proyecto.
 
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Optional, Any, Callable
+from typing import Tuple, Optional, Any, Callable  # Optional used in compute_kelly_stake_backtesting
 import sys
 
 
@@ -18,10 +18,12 @@ def compute_kelly_stake_backtesting(
     kelly_fraction: float = 0.05,
     min_stake_eur: float = 5.0,
     max_stake_pct: float = 0.10,
+    max_stake_eur: Optional[float] = None,
 ) -> float:
     """
     Calcula stake en € igual que backtesting_produccion_real_completo:
-    bankroll * kelly_pct, mínimo min_stake_eur, máximo max_stake_pct del bankroll.
+    bankroll * kelly_pct, mínimo min_stake_eur, máximo max_stake_pct del bankroll
+    y opcionalmente max_stake_eur (límite por apuesta de la casa).
 
     Returns:
         Stake en euros, o 0.0 si no se debe apostar.
@@ -36,6 +38,8 @@ def compute_kelly_stake_backtesting(
     stake = bankroll * kelly_pct
     if stake < min_stake_eur:
         return 0.0
+    if max_stake_eur is not None and stake > max_stake_eur:
+        stake = max_stake_eur
     return round(stake, 2)
 
 

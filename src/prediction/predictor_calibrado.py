@@ -89,7 +89,7 @@ class PredictorCalibrado:
         # Edge (ventaja sobre la casa)
         edge = prob_j1_gana - prob_implicita
 
-        # Kelly stake igual que backtesting (bankroll, min 5€, max 10%)
+        # Kelly stake igual que backtesting (bankroll, min/max €, max %)
         from src.utils.common import compute_kelly_stake_backtesting
         stake_recomendado = compute_kelly_stake_backtesting(
             prob=prob_j1_gana,
@@ -98,6 +98,7 @@ class PredictorCalibrado:
             kelly_fraction=Config.KELLY_FRACTION,
             min_stake_eur=Config.MIN_STAKE_EUR,
             max_stake_pct=Config.MAX_STAKE_PCT,
+            max_stake_eur=getattr(Config, "MAX_STAKE_EUR", None),
         )
 
         # Formatear respuesta para la API

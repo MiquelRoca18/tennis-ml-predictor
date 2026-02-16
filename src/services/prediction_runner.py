@@ -64,15 +64,37 @@ def run_prediction_and_save(
         edge_j1 = resultado_pred.get("edge", 0)
         edge_j2 = prob_j2 - (1 / player2_odds)
 
+        bankroll = (db.get_bankroll() if db else None) or Config.BANKROLL_INICIAL
         umbral_ev = Config.EV_THRESHOLD
-        min_prob = Config.MIN_PROBABILIDAD  # No recomendar si creemos que tiene < 60% de ganar
-        if ev_j1 > umbral_ev and prob_j1 >= min_prob:
+        min_prob = Config.MIN_PROBABILIDAD
+        max_cuota = Config.MAX_CUOTA
+        max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
+        if (
+            ev_j1 > umbral_ev
+            and prob_j1 >= min_prob
+            and player1_odds < max_cuota
+        ):
             recomendacion = f"APOSTAR a {player1_name}"
             mejor_opcion = player1_name
             prob_recomendado = prob_j1
-            kelly_j1 = resultado_pred.get("stake_recomendado", 0)
+            kelly_j1 = (
+                compute_kelly_stake_backtesting(
+                    prob=prob_j1,
+                    cuota=player1_odds,
+                    bankroll=bankroll,
+                    kelly_fraction=Config.KELLY_FRACTION,
+                    min_stake_eur=Config.MIN_STAKE_EUR,
+                    max_stake_pct=Config.MAX_STAKE_PCT,
+                    max_stake_eur=max_stake_eur,
+                )
+                or None
+            )
             kelly_j2 = None
-        elif ev_j2 > umbral_ev and prob_j2 >= min_prob:
+        elif (
+            ev_j2 > umbral_ev
+            and prob_j2 >= min_prob
+            and player2_odds < max_cuota
+        ):
             recomendacion = f"APOSTAR a {player2_name}"
             mejor_opcion = player2_name
             prob_recomendado = prob_j2
@@ -81,10 +103,11 @@ def run_prediction_and_save(
                 compute_kelly_stake_backtesting(
                     prob=prob_j2,
                     cuota=player2_odds,
-                    bankroll=Config.BANKROLL_INICIAL,
+                    bankroll=bankroll,
                     kelly_fraction=Config.KELLY_FRACTION,
                     min_stake_eur=Config.MIN_STAKE_EUR,
                     max_stake_pct=Config.MAX_STAKE_PCT,
+                    max_stake_eur=max_stake_eur,
                 )
                 or None
             )

@@ -2,11 +2,33 @@
 Backtesting de Producción REAL - Solo baseline ELO + mercado
 ============================================================
 
-Simula el sistema en producción con probabilidad = baseline_elo_peso * prob_elo + (1 - baseline_elo_peso) * prob_mercado.
-- Evalúa con cuotas reales (tennis-data.co.uk)
-- Aplica Kelly Criterion y filtros conservadores (EV, min prob, max cuota)
+Qué hace (mismo proceso que producción):
+1. Para cada partido con cuotas (tennis-data.co.uk): jugador_1 = Winner, jugador_2 = Loser.
+2. Predicción: prob_j1 = baseline_elo_peso * prob_elo + (1 - baseline_elo_peso) * (1/cuota_j1).
+   - prob_elo = ELO expected score con histórico solo ANTES del año de backtest.
+3. Apuesta: si EV_j1 > 10% y prob_j1 >= min_probabilidad y cuota_j1 < max_cuota → apostamos a J1.
+   Igual para J2. Kelly stake con fraction 0.05, max 10% bankroll, min 5€.
+4. Resultado: en tennis-data Winner/Loser es el resultado real; ganancia = stake*(cuota-1) o -stake.
+
+CONFIG MEJOR (guardada, usar BACKTEST_PRESET=mejor):
+- EV>3%, prob>=50%, cuota<3.0 → ~105 apuestas/año (con Kelly), ROI medio ~113% (2021-2024).
+- El ROI con Kelly sube con más apuestas por compounding; para comparar configs usar BACKTEST_FLAT_STAKE=1 (stake fijo 10€).
+
+Datos para cada predicción (sin leakage): partidos ordenados por fecha; para un partido en 12-04-2024
+se usa ELO calculado con todo el histórico antes de 2024 y con todos los partidos ya procesados en 2024
+(tras cada partido se llama actualizar_con_partido). Nunca se usa el resultado del partido que se predice.
+
+Config conservador (por defecto sin preset): EV 10%, prob 70%, cuota 2.0 (~16/año).
+Filtros opcionales DESACTIVADOS: solo_torneos_principales=False, solo_rondas_finales=False,
+  superficies_permitidas=None, min_partidos_jugador=0.
+
+Por qué pueden cambiar los resultados respecto a una run anterior:
+- Número de años: si antes eran 4 años (ej. 2021–2024) y ahora 3, el promedio cambia.
+- Datos actualizados: TML o tennis-data pueden haber añadido/corregido partidos.
+- Filtros: si en la run de 7.8% se usaron torneos principales o solo SF/Final, habría menos apuestas y distinto ROI.
 """
 
+import os
 import pandas as pd
 from pathlib import Path
 import logging
@@ -302,6 +324,11 @@ class BacktestingProduccionReal:
         baseline_elo_peso=0.6,
         solo_rondas_finales=False,
         resultados_dir=None,
+        use_flat_stake=False,
+        flat_stake_eur=10.0,
+        min_stake_eur=5.0,
+        apostar_todos_partidos=False,
+        max_stake_eur=None,
         **kwargs,  # ignora value_model_path, selected_features_path, conformal, modelo_por_superficie, etc.
     ):
         self.modelo_path = Path(modelo_path) if modelo_path else Path(".")
@@ -318,8 +345,21 @@ class BacktestingProduccionReal:
         self.solo_rondas_finales = solo_rondas_finales
         self.resultados_dir = Path(resultados_dir) if resultados_dir else Path("resultados/backtesting_produccion_real")
         self.resultados_dir.mkdir(parents=True, exist_ok=True)
+        self.use_flat_stake = use_flat_stake
+        self.flat_stake_eur = flat_stake_eur
+        self.min_stake_eur = min_stake_eur
+        self.apostar_todos_partidos = apostar_todos_partidos
+        self.max_stake_eur = max_stake_eur  # tope realista por apuesta (ej. 100€); None = sin tope
 
         logger.info(f"🎯 Backtesting de Producción REAL - BASELINE ELO + MERCADO")
+        if use_flat_stake:
+            logger.info(f"📌 Modo STAKE FIJO: {flat_stake_eur}€ por apuesta (ROI comparable entre configs)")
+        if min_stake_eur != 5.0:
+            logger.info(f"📌 Stake mínimo Kelly: {min_stake_eur}€ (por defecto 5€)")
+        if apostar_todos_partidos:
+            logger.info("📌 Modo TODOS LOS PARTIDOS: 1 apuesta por partido (lado con mayor EV), stake fijo")
+        if max_stake_eur is not None:
+            logger.info("📌 Tope realista por apuesta: %s€ (simula límites de casa)", max_stake_eur)
         logger.info(f"💰 Bankroll inicial: {bankroll_inicial}€")
         logger.info(f"📊 Kelly Fraction: {kelly_fraction*100:.1f}%")
         logger.info(f"📈 Umbral EV mínimo: {umbral_ev*100:.0f}%")
@@ -421,12 +461,18 @@ class BacktestingProduccionReal:
         kelly_pct = min(kelly_pct, 0.10)
 
         if kelly_pct <= 0.01:
+            # Con min_stake bajo, apostar mínimo en cualquier EV positivo (config "mitad partidos")
+            if self.min_stake_eur <= 1.0 and bankroll_actual >= self.min_stake_eur:
+                return self.min_stake_eur
             return 0.0
 
         stake = bankroll_actual * kelly_pct
 
-        if stake < 5.0:
-            return 0.0
+        if stake < self.min_stake_eur:
+            return self.min_stake_eur if bankroll_actual >= self.min_stake_eur else 0.0
+
+        if self.max_stake_eur is not None and stake > self.max_stake_eur:
+            stake = self.max_stake_eur
 
         return stake
 
@@ -490,6 +536,8 @@ class BacktestingProduccionReal:
         bankroll_history = [self.bankroll_inicial]
         partidos_sin_jugadores = 0
         partidos_procesados = 0
+        total_staked_flat = 0.0
+        total_profit_flat = 0.0
 
         logger.info(f"\n🔄 Procesando partidos...")
         logger.info(f"{'='*70}\n")
@@ -551,26 +599,54 @@ class BacktestingProduccionReal:
 
             partidos_procesados += 1
 
-            # 3. DECIDIR APUESTA (ESTRATEGIA CONSERVADORA)
+            # 3. DECIDIR APUESTA
             cuota_j1 = partido_odds["cuota_jugador_1"]
             cuota_j2 = partido_odds["cuota_jugador_2"]
 
             ev_j1 = self.calcular_ev(prob_j1_gana, cuota_j1)
             ev_j2 = self.calcular_ev(1 - prob_j1_gana, cuota_j2)
 
-            # Filtros conservadores: favoritos, prob mínima, EV
-            if (
+            # Modo "todos los partidos": en cada partido apostar 1€ al lado con mayor EV (sin filtros)
+            if self.apostar_todos_partidos:
+                stake = self.min_stake_eur
+                if ev_j1 >= ev_j2:
+                    ganancia = stake * (cuota_j1 - 1)
+                    bankroll_actual += ganancia
+                    apuestas_realizadas.append({
+                        "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
+                        "jugador_apostado": j1_nombre, "oponente": j2_nombre,
+                        "prob_modelo": prob_j1_gana, "cuota": cuota_j1, "ev": ev_j1,
+                        "stake": stake, "resultado": 1, "ganancia": ganancia, "bankroll_despues": bankroll_actual,
+                    })
+                else:
+                    ganancia = -stake
+                    bankroll_actual += ganancia
+                    apuestas_realizadas.append({
+                        "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
+                        "jugador_apostado": j2_nombre, "oponente": j1_nombre,
+                        "prob_modelo": 1 - prob_j1_gana, "cuota": cuota_j2, "ev": ev_j2,
+                        "stake": stake, "resultado": 0, "ganancia": ganancia, "bankroll_despues": bankroll_actual,
+                    })
+                bankroll_history.append(bankroll_actual)
+            # Filtros normales: favoritos, prob mínima, EV
+            elif (
                 ev_j1 > self.umbral_ev
                 and ev_j1 > ev_j2
                 and cuota_j1 < self.max_cuota
                 and prob_j1_gana > self.min_probabilidad
             ):
                 # Apostar a jugador 1
-                stake = self.calcular_kelly_stake(prob_j1_gana, cuota_j1, bankroll_actual)
+                if self.use_flat_stake:
+                    stake = self.flat_stake_eur
+                else:
+                    stake = self.calcular_kelly_stake(prob_j1_gana, cuota_j1, bankroll_actual)
                 if stake > 0:
                     # jugador_1 SIEMPRE es el ganador en los datos
                     ganancia = stake * (cuota_j1 - 1)
                     bankroll_actual += ganancia
+                    if self.use_flat_stake:
+                        total_staked_flat += stake
+                        total_profit_flat += ganancia
 
                     apuestas_realizadas.append(
                         {
@@ -595,11 +671,17 @@ class BacktestingProduccionReal:
                 and (1 - prob_j1_gana) > self.min_probabilidad
             ):
                 # Apostar a jugador 2
-                stake = self.calcular_kelly_stake(1 - prob_j1_gana, cuota_j2, bankroll_actual)
+                if self.use_flat_stake:
+                    stake = self.flat_stake_eur
+                else:
+                    stake = self.calcular_kelly_stake(1 - prob_j1_gana, cuota_j2, bankroll_actual)
                 if stake > 0:
                     # jugador_2 SIEMPRE es el perdedor en los datos
                     ganancia = -stake
                     bankroll_actual += ganancia
+                    if self.use_flat_stake:
+                        total_staked_flat += stake
+                        total_profit_flat += ganancia
 
                     apuestas_realizadas.append(
                         {
@@ -646,6 +728,25 @@ class BacktestingProduccionReal:
         if len(apuestas_realizadas) > 0:
             df_apuestas = pd.DataFrame(apuestas_realizadas)
             self.mostrar_resultados(df_apuestas, bankroll_history)
+            # Rachas de pérdidas y drawdown (control de riesgo con Kelly)
+            resultados = df_apuestas["resultado"].values
+            racha_actual = 0
+            max_racha_perdidas = 0
+            for r in resultados:
+                if r == 0:
+                    racha_actual += 1
+                    max_racha_perdidas = max(max_racha_perdidas, racha_actual)
+                else:
+                    racha_actual = 0
+            min_bankroll = min(bankroll_history)
+            drawdown_pct = (1 - min_bankroll / self.bankroll_inicial) * 100 if self.bankroll_inicial > 0 else 0
+            logger.info(
+                "📌 RIESGO: Máx. racha de pérdidas: %d | Bankroll mínimo: %.2f€ (drawdown %.1f%%)",
+                max_racha_perdidas, min_bankroll, drawdown_pct,
+            )
+            if self.use_flat_stake and total_staked_flat > 0:
+                roi_flat = (total_profit_flat / total_staked_flat) * 100
+                logger.info(f"📌 ROI con STAKE FIJO ({self.flat_stake_eur}€/apuesta): {roi_flat:+.2f}% (comparable entre configs)")
             self.guardar_resultados(df_apuestas, bankroll_history)
         else:
             logger.error("No se realizaron apuestas")
@@ -689,52 +790,148 @@ class BacktestingProduccionReal:
 
 def main():
     """
-    Función principal
+    Función principal. Backtesting baseline 60% ELO + 40% mercado para todos los años (2022, 2023, 2024).
+    Config que dio ROI ~7.8% promedio y ROI positivo cada año.
     """
-    # CONFIGURACIÓN: Cambiar año aquí para backtesting de diferentes años
-    AÑO_BACKTESTING = 2024  # Cambiar a 2024, 2025, etc.
+    # 4 años
+    AÑOS = [2021, 2022, 2023, 2024]
 
-    logger.info("\n" + "=" * 70)
-    logger.info(f"🎾 BACKTESTING DE PRODUCCIÓN REAL - AÑO {AÑO_BACKTESTING}")
-    logger.info("=" * 70)
+    # Parámetros: BACKTEST_PRESET=mejor | BACKTEST_MAS_APUESTAS=1 | BACKTEST_EV + MIN_PROB + MAX_CUOTA
+    ev_env = os.environ.get("BACKTEST_EV")
+    prob_env = os.environ.get("BACKTEST_MIN_PROB")
+    cuota_env = os.environ.get("BACKTEST_MAX_CUOTA")
+    preset = (os.environ.get("BACKTEST_PRESET") or "").strip().lower()
+    config_label = ""
 
-    # Descargar datos automáticamente si no existen (usa TML)
-    try:
-        historico_file, odds_file = descargar_datos_automaticamente(AÑO_BACKTESTING)
-    except Exception as e:
-        logger.error(f"❌ Error descargando datos: {e}")
-        logger.info(
-            "\n💡 Solución: Verifica tu conexión a internet y que los datos estén disponibles"
-        )
-        return
+    if preset == "mejor":
+        # Config guardada: ~105 apuestas/año, ROI medio ~113% (2021-2024)
+        umbral_ev, min_prob, max_cuota = 0.03, 0.50, 3.0
+        config_label = "CONFIG MEJOR: EV>3%, prob>=50%, cuota<3.0 (~105 apuestas/año, ROI ~113%)"
+        logger.info("📌 %s", config_label)
+    elif preset == "mitad_partidos":
+        # Apostar en >50% partidos: stake mín 1€, EV~0, prob 0, cuota 100. Requiere BACKTEST_MIN_STAKE_EUR=1
+        umbral_ev, min_prob, max_cuota = 0.0001, 0.0, 100.0
+        config_label = "MITAD PARTIDOS: EV>0.01%, prob>=0%, cuota<100 (~76-86% partidos con apuesta, stake mín 1€)"
+        logger.info("📌 %s", config_label)
+    elif preset == "todos_partidos":
+        # Apostar en el 100% de partidos procesados: 1€ al lado con mayor EV en cada partido
+        umbral_ev, min_prob, max_cuota = 0.0, 0.0, 1000.0  # no se usan; apostar_todos_partidos=True
+        config_label = "TODOS LOS PARTIDOS: 1 apuesta por partido (lado con mayor EV), stake 1€"
+        logger.info("📌 %s", config_label)
+    elif ev_env is not None and prob_env is not None and cuota_env is not None:
+        umbral_ev = float(ev_env)
+        min_prob = float(prob_env)
+        max_cuota = float(cuota_env)
+        config_label = f"CUSTOM: EV>{float(ev_env)*100:.0f}%, prob>={float(prob_env)*100:.0f}%, cuota<{cuota_env}"
+        logger.info("📌 Modo %s", config_label)
+    else:
+        mas_apuestas = os.environ.get("BACKTEST_MAS_APUESTAS", "").lower() in ("1", "true", "yes")
+        if mas_apuestas:
+            # ~125 apuestas/año, ROI medio +180% (2021-2024). Más apuestas que CONFIG_MEJOR.
+            umbral_ev, min_prob, max_cuota = 0.02, 0.45, 3.5
+            config_label = "MÁS APUESTAS: EV>2%, prob>=45%, cuota<3.5 (~125 apuestas/año, ROI ~180%)"
+            logger.info("📌 Modo %s", config_label)
+        else:
+            umbral_ev, min_prob, max_cuota = 0.10, 0.70, 2.0
+            config_label = "conservador: EV>10%, prob>=70%, cuota<2.0"
+            logger.info("📌 Modo %s", config_label)
 
-    # Solo baseline ELO + mercado (modelo_path se ignora)
+    use_flat_stake = os.environ.get("BACKTEST_FLAT_STAKE", "").lower() in ("1", "true", "yes")
+    flat_stake_eur = float(os.environ.get("BACKTEST_FLAT_STAKE_EUR", "10"))
+    # Para BACKTEST_PRESET=mitad_partidos usar BACKTEST_MIN_STAKE_EUR=1
+    min_stake_eur = float(os.environ.get("BACKTEST_MIN_STAKE_EUR", "5"))
+    if preset == "mitad_partidos" and min_stake_eur > 1:
+        min_stake_eur = 1.0
+        logger.info("📌 Preset mitad_partidos: usando BACKTEST_MIN_STAKE_EUR=1")
+    if preset == "todos_partidos":
+        min_stake_eur = 1.0  # stake fijo 1€ por partido
+
+    apostar_todos_partidos = preset == "todos_partidos"
+    max_stake_env = os.environ.get("BACKTEST_MAX_STAKE_EUR")
+    max_stake_eur = float(max_stake_env) if max_stake_env else None
+
     backtester = BacktestingProduccionReal(
         modelo_path="",
         bankroll_inicial=1000.0,
         kelly_fraction=0.05,
-        umbral_ev=0.10,
-        max_cuota=2.0,
-        min_probabilidad=0.70,  # alineado con producción
+        umbral_ev=umbral_ev,
+        max_cuota=max_cuota,
+        min_probabilidad=min_prob,
         baseline_elo_peso=0.6,
+        use_flat_stake=use_flat_stake,
+        flat_stake_eur=flat_stake_eur,
+        min_stake_eur=min_stake_eur,
+        apostar_todos_partidos=apostar_todos_partidos,
+        max_stake_eur=max_stake_eur,
     )
-
     backtester.cargar_modelo()
 
-    logger.info(f"\n📂 Cargando datos...")
-    df_odds = pd.read_csv(odds_file)
-    df_odds["fecha"] = pd.to_datetime(df_odds["fecha"])
-    logger.info(f"✅ {len(df_odds)} partidos con cuotas")
+    accumulate_bankroll = os.environ.get("BACKTEST_ACCUMULATE_BANKROLL", "").lower() in ("1", "true", "yes")
+    if accumulate_bankroll:
+        logger.info("📌 Bankroll se arrastra entre años (inicial 1000€, sin reiniciar por año)")
 
-    df_historico = pd.read_csv(historico_file)
-    df_historico["tourney_date"] = pd.to_datetime(df_historico["tourney_date"])
-    logger.info(f"✅ {len(df_historico)} partidos históricos")
+    resumen_años = []
+    for AÑO_BACKTESTING in AÑOS:
+        logger.info("\n" + "=" * 70)
+        logger.info(f"🎾 BACKTESTING DE PRODUCCIÓN REAL - AÑO {AÑO_BACKTESTING}")
+        logger.info("=" * 70)
 
-    apuestas, bankroll_history = backtester.ejecutar_backtesting(df_odds, df_historico)
+        try:
+            historico_file, odds_file = descargar_datos_automaticamente(AÑO_BACKTESTING)
+        except Exception as e:
+            logger.error(f"❌ Error descargando datos {AÑO_BACKTESTING}: {e}")
+            resumen_años.append({"año": AÑO_BACKTESTING, "apuestas": 0, "ganadas": 0, "perdidas": 0, "win_rate_%": None, "roi_%": None})
+            continue
 
-    logger.info(f"\n{'='*70}")
-    logger.info(f"✅ PROCESO COMPLETADO")
-    logger.info(f"{'='*70}")
+        logger.info(f"\n📂 Cargando datos...")
+        df_odds = pd.read_csv(odds_file)
+        df_odds["fecha"] = pd.to_datetime(df_odds["fecha"])
+        logger.info(f"✅ {len(df_odds)} partidos con cuotas")
+
+        df_historico = pd.read_csv(historico_file)
+        df_historico["tourney_date"] = pd.to_datetime(df_historico["tourney_date"])
+        logger.info(f"✅ {len(df_historico)} partidos históricos")
+
+        apuestas, bankroll_history = backtester.ejecutar_backtesting(df_odds, df_historico, año_backtest=AÑO_BACKTESTING)
+
+        if apuestas:
+            ganadas = sum(1 for a in apuestas if a.get("resultado") == 1)
+            perdidas = len(apuestas) - ganadas
+            bankroll_final = bankroll_history[-1]
+            roi = (bankroll_final - backtester.bankroll_inicial) / backtester.bankroll_inicial * 100
+            win_rate = (ganadas / len(apuestas)) * 100
+            resumen_años.append({
+                "año": AÑO_BACKTESTING, "apuestas": len(apuestas), "ganadas": ganadas, "perdidas": perdidas,
+                "win_rate_%": round(win_rate, 1), "roi_%": round(roi, 2), "bankroll_final": bankroll_final
+            })
+            if accumulate_bankroll:
+                backtester.bankroll_inicial = bankroll_final
+        else:
+            resumen_años.append({"año": AÑO_BACKTESTING, "apuestas": 0, "ganadas": 0, "perdidas": 0, "win_rate_%": None, "roi_%": 0, "bankroll_final": backtester.bankroll_inicial})
+
+    logger.info("\n" + "=" * 70)
+    logger.info("📋 RESUMEN TODOS LOS AÑOS (%s)", config_label)
+    logger.info("=" * 70)
+    for r in resumen_años:
+        roi_str = f"{r['roi_%']:+.2f}%" if r["roi_%"] is not None else "N/A"
+        if r["apuestas"] > 0:
+            logger.info(
+                f"  {r['año']}: {r['apuestas']} apuestas | {r['ganadas']} ganadas, {r['perdidas']} perdidas ({r['win_rate_%']}% aciertos) | ROI {roi_str}"
+            )
+        else:
+            logger.info(f"  {r['año']}: {r['apuestas']} apuestas, ROI {roi_str}")
+    if resumen_años and all(r["roi_%"] is not None for r in resumen_años if r["apuestas"] > 0):
+        rois = [r["roi_%"] for r in resumen_años if r["apuestas"] > 0]
+        total_apuestas = sum(r["apuestas"] for r in resumen_años)
+        total_ganadas = sum(r["ganadas"] for r in resumen_años)
+        acierto_medio = (total_ganadas / total_apuestas * 100) if total_apuestas else 0
+        logger.info(f"  → ROI promedio: {sum(rois)/len(rois):+.2f}% | Total: {total_ganadas}/{total_apuestas} aciertos ({acierto_medio:.1f}%)")
+    if accumulate_bankroll and resumen_años:
+        br_final = resumen_años[-1].get("bankroll_final", backtester.bankroll_inicial)
+        ganancia_neta = br_final - 1000.0
+        logger.info("  💰 BANKROLL 1000€ (arrastrado 4 años): Final %.2f€ | Ganancia neta %+.2f€", br_final, ganancia_neta)
+    logger.info("=" * 70)
+    logger.info("✅ PROCESO COMPLETADO")
 
 
 if __name__ == "__main__":

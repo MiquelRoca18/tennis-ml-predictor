@@ -430,6 +430,8 @@ class MatchesDateResponse(BaseModel):
     es_hoy: bool
     resumen: dict  # total, completados, pendientes
     partidos: List[MatchResponse]
+    # Bankroll usado para los stakes mostrados (permite al frontend mostrar "según tu bankroll de X€")
+    betting_config: Optional[dict] = None
 
     class Config:
         json_schema_extra = {

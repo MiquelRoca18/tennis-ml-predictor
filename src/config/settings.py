@@ -70,18 +70,21 @@ class Config:
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")
 
     # ==================== PARÁMETROS DE APUESTA ====================
-    # CONFIGURACIÓN CONSERVADORA (alineada con backtesting exitoso)
-    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.10"))  # 10% EV mínimo (backtesting validado)
+    # Por defecto: ~125 apuestas/año, ROI ~180% (backtest 2021-2024). CONFIG_MEJOR = 0.03/0.50/3.0 (~105/año, ROI ~113%)
+    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.02"))  # 2% EV mínimo
     EV_THRESHOLD_ALERT = float(os.getenv("EV_THRESHOLD_ALERT", "0.15"))  # 15% para alertas
-    MAX_CUOTA = float(os.getenv("MAX_CUOTA", "2.0"))  # Solo favoritos (cuota < 2.0)
-    MIN_PROBABILIDAD = float(os.getenv("MIN_PROBABILIDAD", "0.60"))  # Solo cuando modelo > 60%
+    MAX_CUOTA = float(os.getenv("MAX_CUOTA", "3.5"))  # Cuota máxima recomendada
+    MIN_PROBABILIDAD = float(os.getenv("MIN_PROBABILIDAD", "0.45"))  # Prob mínima para recomendar
     BANKROLL_INICIAL = float(os.getenv("BANKROLL_INICIAL", "1000"))
 
     # ==================== KELLY CRITERION ====================
     KELLY_ENABLED = os.getenv("KELLY_ENABLED", "true").lower() == "true"
     KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.05"))  # 5% Kelly (muy conservador)
-    MIN_STAKE_EUR = float(os.getenv("MIN_STAKE_EUR", "5"))  # Mínimo 5€ (igual que backtesting)
+    MIN_STAKE_EUR = float(os.getenv("MIN_STAKE_EUR", "5"))  # Mínimo 5€ (casas suelen 0.10€–1€; 5€ conservador)
     MAX_STAKE_PCT = float(os.getenv("MAX_STAKE_PCT", "0.10"))  # Máximo 10% del bankroll
+    # Límite máximo por apuesta (€): compatible con la mayoría de casas (250k–500k ganancias máx;
+    # depósito España DGOJ 600€/24h). 250€ permite 1–2 apuestas/día sin superar límite diario.
+    MAX_STAKE_EUR = float(os.getenv("MAX_STAKE_EUR", "250"))
 
     # ==================== BOOKMAKERS ====================
     # The Odds API
@@ -286,11 +289,11 @@ MODEL_BACKUP_DIR=modelos/archive
 DATA_PATH=datos/processed/dataset_final.csv
 DATA_BACKUP_DIR=backups
 
-# Betting Parameters (CONSERVADOR - alineado con backtesting exitoso)
-EV_THRESHOLD=0.10
+# Betting Parameters (~125 apuestas/año, ROI ~180% backtest). CONFIG_MEJOR: 0.03/0.50/3.0 (~105/año, ~113%)
+EV_THRESHOLD=0.02
 EV_THRESHOLD_ALERT=0.15
-MAX_CUOTA=2.0
-MIN_PROBABILIDAD=0.60
+MAX_CUOTA=3.5
+MIN_PROBABILIDAD=0.45
 BANKROLL_INICIAL=1000
 
 # Kelly Criterion (igual que backtesting)
@@ -298,6 +301,8 @@ KELLY_ENABLED=true
 KELLY_FRACTION=0.05
 MIN_STAKE_EUR=5
 MAX_STAKE_PCT=0.10
+# Límite por apuesta (€): compatible con casas 250k–2M€ y depósito DGOJ 600€/24h
+MAX_STAKE_EUR=250
 
 # Bookmakers
 ODDS_REGIONS=eu,us

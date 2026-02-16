@@ -247,6 +247,8 @@ class MatchDatabase:
             self._migrate_pointbypoint_cache_table()
             # Migración: tabla h2h_cache para H2H por player keys (API) - no confundir con head_to_head
             self._migrate_h2h_cache_table()
+            # Migración: tabla settings (bankroll y config de apuestas por usuario)
+            self._migrate_settings_table()
             # Migración: columnas jugador1_cuota/jugador2_cuota en matches (para sync de odds)
             self._migrate_add_match_odds_columns()
             # Migración: columnas confidence en predictions (para BD creadas antes de schema_v2 completo)
@@ -357,7 +359,9 @@ class MatchDatabase:
                 p.version as prediction_version,
                 p.timestamp as prediction_timestamp,
                 p.jugador1_probabilidad, p.jugador2_probabilidad,
-                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                p.jugador1_ev, p.jugador2_ev, p.jugador1_edge, p.jugador2_edge,
+                p.recomendacion, p.mejor_opcion, p.confianza,
+                p.kelly_stake_jugador1, p.kelly_stake_jugador2,
                 p.confidence_level, p.confidence_score,
                 b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
                 b.resultado as bet_resultado, b.ganancia
@@ -456,6 +460,94 @@ class MatchDatabase:
         except Exception as e:
             if "already exists" not in str(e).lower():
                 logger.warning(f"Migración h2h_cache: {e}")
+
+    def _migrate_settings_table(self):
+        """Crea tabla settings para bankroll y configuración de apuestas (editable desde frontend)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS settings (
+                            key VARCHAR(100) PRIMARY KEY,
+                            value TEXT NOT NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                self.conn.commit()
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Migración settings: {e}")
+
+    # ============================================================
+    # SETTINGS (bankroll y config de apuestas)
+    # ============================================================
+
+    def get_setting(self, key: str) -> Optional[str]:
+        """Obtiene un valor de settings por clave. None si no existe."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    result = conn.execute(text("SELECT value FROM settings WHERE key = :key"), {"key": key})
+                    row = result.fetchone()
+                    return row[0] if row else None
+            else:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.warning(f"get_setting({key}): {e}")
+            return None
+
+    def set_setting(self, key: str, value: str) -> bool:
+        """Guarda o actualiza un valor en settings. value se guarda como string."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        INSERT INTO settings (key, value, updated_at) VALUES (:key, :value, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = :value, updated_at = CURRENT_TIMESTAMP
+                    """), {"key": key, "value": str(value)})
+                    conn.commit()
+            else:
+                self.conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP",
+                    (key, str(value), str(value)),
+                )
+                self.conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"set_setting({key}): {e}")
+            return False
+
+    def get_bankroll(self) -> Optional[float]:
+        """Bankroll actual del usuario (desde settings). None si no está definido (usar Config.BANKROLL_INICIAL)."""
+        val = self.get_setting("bankroll")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    def set_bankroll(self, bankroll: float) -> bool:
+        """Guarda el bankroll del usuario (para cálculo de stake en producción)."""
+        if bankroll < 0:
+            return False
+        return self.set_setting("bankroll", str(bankroll))
 
     # ============================================================
     # DATABASE ABSTRACTION LAYER
@@ -727,7 +819,9 @@ class MatchDatabase:
                 COALESCE(p.jugador1_cuota, m.jugador1_cuota) as jugador1_cuota,
                 COALESCE(p.jugador2_cuota, m.jugador2_cuota) as jugador2_cuota,
                 p.jugador1_probabilidad, p.jugador2_probabilidad,
-                p.jugador1_ev, p.jugador2_ev, p.recomendacion, p.mejor_opcion, p.confianza,
+                p.jugador1_ev, p.jugador2_ev, p.jugador1_edge, p.jugador2_edge,
+                p.recomendacion, p.mejor_opcion, p.confianza,
+                p.kelly_stake_jugador1, p.kelly_stake_jugador2,
                 p.confidence_level, p.confidence_score,
                 b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
                 b.resultado as bet_resultado, b.ganancia
