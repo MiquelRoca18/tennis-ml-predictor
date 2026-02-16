@@ -51,8 +51,11 @@ COPY scripts/ ./scripts/
 COPY start.sh ./start.sh
 RUN chmod +x start.sh
 
-# Crear directorios necesarios (resultados para backtesting si se ejecuta; logs para data_updater)
+# Crear directorios necesarios (resultados para backtesting; logs)
 RUN mkdir -p logs datos/raw datos/processed resultados
+
+# Para ELO desde CSV en Railway: pon los TML CSVs en datos/raw/ y descomenta la línea siguiente antes del build:
+# COPY datos/raw/ ./datos/raw/
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \

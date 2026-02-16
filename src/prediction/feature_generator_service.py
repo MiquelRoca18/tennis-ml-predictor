@@ -57,92 +57,148 @@ class FeatureGeneratorService:
 
     def _cargar_datos_historicos(self):
         """
-        Carga datos históricos desde la Base de Datos (PostgreSQL o SQLite).
-        Transforma las columnas al formato esperado por los calculadores (legacy CSV format).
+        Carga datos históricos para ELO.
+
+        Orden de preferencia:
+        1. CSV en datos/raw/ (atp_matches_*_tml.csv o 2022.csv, 2023.csv, ...) si existen.
+           Así en Railway puedes incluir los CSV en la imagen y no hace falta importar a la BD.
+        2. Si no hay CSV, desde la BD (matches WHERE estado = 'completado').
+        3. Si la BD está vacía, fallback a CSV por si acaso.
         """
         import os
-        
+        import glob
+
+        # 1) Intentar primero CSV si hay archivos en datos/raw/ (típico en Railway con CSVs en imagen)
+        df_csv = self._cargar_datos_historicos_desde_csv()
+        if df_csv is not None and len(df_csv) > 0:
+            logger.info(f"✅ Datos históricos desde CSV: {len(df_csv)} partidos (no hace falta importar a BD)")
+            # Opcional: añadir partidos completados recientes de la BD que no estén en el CSV
+            df_db_extra = self._cargar_completados_db_como_dataframe()
+            if df_db_extra is not None and len(df_db_extra) > 0:
+                df_csv = pd.concat([df_csv, df_db_extra], ignore_index=True)
+                df_csv = df_csv.drop_duplicates(subset=["tourney_date", "winner_name", "loser_name"], keep="last")
+                df_csv = df_csv.sort_values("tourney_date").reset_index(drop=True)
+                logger.info(f"   + {len(df_db_extra)} partidos completados desde BD (total {len(df_csv)})")
+            return df_csv
+
+        # 2) Sin CSV útiles: cargar desde BD
         try:
             logger.info("📂 Cargando datos históricos desde Base de Datos...")
-            
-            # Query: Seleccionar solo partidos completados
             query = """
             SELECT 
-                fecha_partido, 
-                jugador1_nombre, jugador2_nombre, 
-                resultado_ganador, 
-                superficie, 
-                torneo, tournament_season,
-                jugador1_ranking, jugador2_ranking,
-                resultado_marcador
+                fecha_partido, jugador1_nombre, jugador2_nombre, resultado_ganador,
+                superficie, torneo, tournament_season, jugador1_ranking, jugador2_ranking, resultado_marcador
             FROM matches 
-            WHERE estado = 'completado' 
-            AND resultado_ganador IS NOT NULL
+            WHERE estado = 'completado' AND resultado_ganador IS NOT NULL
             ORDER BY fecha_partido ASC
             """
-            
-            # Check for PostgreSQL (Railway)
             database_url = os.getenv("DATABASE_URL")
-            
             if database_url:
-                # PostgreSQL mode
                 df_db = self._load_from_postgres(database_url, query)
             else:
-                # SQLite mode
                 df_db = self._load_from_sqlite(query)
-            
+
             if df_db.empty:
                 logger.warning("⚠️  La base de datos está vacía o no tiene partidos completados.")
-                logger.info("🔄 Intentando fallback a CSVs...")
                 return self._cargar_datos_historicos_csv_fallback()
 
-            # Transformación de columnas DB -> Formato Legacy Calculators (Winner/Loser)
-            rows = []
-            for _, row in df_db.iterrows():
-                try:
-                    winner = row['resultado_ganador']
-                    j1 = row['jugador1_nombre']
-                    j2 = row['jugador2_nombre']
-                    
-                    if winner == j1:
-                        winner_name = j1
-                        loser_name = j2
-                        winner_rank = row['jugador1_ranking']
-                        loser_rank = row['jugador2_ranking']
-                    else:
-                        winner_name = j2
-                        loser_name = j1
-                        winner_rank = row['jugador2_ranking']
-                        loser_rank = row['jugador1_ranking']
-                        
-                    rows.append({
-                        'tourney_date': pd.to_datetime(row['fecha_partido']),
-                        'tourney_name': row['torneo'],
-                        'surface': row['superficie'],
-                        'winner_name': winner_name,
-                        'loser_name': loser_name,
-                        'winner_rank': winner_rank,
-                        'loser_rank': loser_rank,
-                        'score': row['resultado_marcador']
-                    })
-                except:
-                    continue
-            
-            df = pd.DataFrame(rows)
-            df = df.sort_values("tourney_date").reset_index(drop=True)
-            
-            # Validación
-            logger.info(f"✅ Total datos históricos cargados de DB: {len(df)} partidos")
-            
-            if len(df) < 1000:
-                logger.warning(f"⚠️  Pocos datos en DB ({len(df)}).")
-
+            df = self._db_rows_to_legacy_df(df_db)
+            logger.info(f"✅ Total datos históricos desde DB: {len(df)} partidos")
             return df
-                
         except Exception as e:
             logger.error(f"❌ Error cargando datos de DB: {e}")
-            logger.info("🔄 Intentando fallback a CSVs...")
             return self._cargar_datos_historicos_csv_fallback()
+
+    def _cargar_datos_historicos_desde_csv(self):
+        """
+        Carga partidos desde datos/raw/ (TML: atp_matches_*.csv o 2022.csv, 2023.csv, ...).
+        Devuelve DataFrame o None si no hay archivos válidos.
+        """
+        import os
+        import glob
+        csv_files = []
+        data_path = os.path.join("datos", "raw")
+        if not os.path.isdir(data_path):
+            return None
+        for path in glob.glob(os.path.join(data_path, "atp_matches_*.csv")):
+            csv_files.append(path)
+        for year in (2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026):
+            p = os.path.join(data_path, f"{year}.csv")
+            if p not in csv_files and os.path.isfile(p):
+                csv_files.append(p)
+        csv_files.sort()
+        if not csv_files:
+            return None
+        dfs = []
+        for path in csv_files:
+            try:
+                df_a = pd.read_csv(path)
+                if "tourney_date" not in df_a.columns or "winner_name" not in df_a.columns:
+                    continue
+                df_a["tourney_date"] = pd.to_datetime(df_a["tourney_date"], errors="coerce")
+                df_a = df_a.dropna(subset=["tourney_date"])
+                dfs.append(df_a)
+            except Exception:
+                continue
+        if not dfs:
+            return None
+        df = pd.concat(dfs, ignore_index=True)
+        df = df.sort_values("tourney_date").reset_index(drop=True)
+        return df
+
+    def _cargar_completados_db_como_dataframe(self):
+        """Carga partidos completados de la BD en formato legacy (para mezclar con CSV)."""
+        import os
+        try:
+            query = """
+            SELECT fecha_partido, jugador1_nombre, jugador2_nombre, resultado_ganador,
+                   superficie, torneo, tournament_season, jugador1_ranking, jugador2_ranking, resultado_marcador
+            FROM matches WHERE estado = 'completado' AND resultado_ganador IS NOT NULL
+            ORDER BY fecha_partido ASC
+            """
+            database_url = os.getenv("DATABASE_URL")
+            if database_url:
+                df_db = self._load_from_postgres(database_url, query)
+            else:
+                df_db = self._load_from_sqlite(query)
+            if df_db.empty:
+                return None
+            return self._db_rows_to_legacy_df(df_db)
+        except Exception:
+            return None
+
+    def _db_rows_to_legacy_df(self, df_db: pd.DataFrame) -> pd.DataFrame:
+        """Convierte filas de la tabla matches al formato legacy (winner_name, loser_name, tourney_date, ...)."""
+        rows = []
+        for _, row in df_db.iterrows():
+            try:
+                winner = row["resultado_ganador"]
+                j1, j2 = row["jugador1_nombre"], row["jugador2_nombre"]
+                if winner == j1:
+                    winner_name, loser_name = j1, j2
+                    winner_rank = row.get("jugador1_ranking") or 0
+                    loser_rank = row.get("jugador2_ranking") or 0
+                else:
+                    winner_name, loser_name = j2, j1
+                    winner_rank = row.get("jugador2_ranking") or 0
+                    loser_rank = row.get("jugador1_ranking") or 0
+                rows.append({
+                    "tourney_date": pd.to_datetime(row["fecha_partido"]),
+                    "tourney_name": row.get("torneo", ""),
+                    "surface": row.get("superficie", "Hard"),
+                    "winner_name": winner_name,
+                    "loser_name": loser_name,
+                    "winner_rank": winner_rank,
+                    "loser_rank": loser_rank,
+                    "score": str(row.get("resultado_marcador") or ""),
+                })
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame(columns=["tourney_date", "winner_name", "loser_name", "surface"])
+        df = pd.DataFrame(rows)
+        df = df.sort_values("tourney_date").reset_index(drop=True)
+        return df
 
     def _load_from_postgres(self, database_url: str, query: str) -> pd.DataFrame:
         """Carga datos desde PostgreSQL"""

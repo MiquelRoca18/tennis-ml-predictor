@@ -1462,42 +1462,61 @@ async def manual_sync_odds_and_predictions():
 
 
 @app.post("/admin/regenerate-all-predictions", tags=["Admin"])
-async def admin_regenerate_all_predictions():
+async def admin_regenerate_all_predictions(scope: str = "default"):
     """
-    Regenera predicciones para TODOS los partidos pendientes con cuotas válidas.
-    Ignora si ya tienen predicción o si las cuotas cambiaron.
-    Usa el predictor baseline (ELO + mercado).
+    Regenera predicciones con el predictor actual (baseline 60% ELO + 40% mercado).
+
+    - scope=default: solo partidos pendientes con cuotas en los próximos 14 días.
+    - scope=all: todos los partidos que ya tienen predicción y tienen cuotas (para sustituir
+      predicciones antiguas del modelo ML por baseline).
     """
     try:
         pred = get_predictor()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Predictor no disponible: {e}")
 
-    today = date.today()
-    end_date = today + timedelta(days=14)
-    pending = db._fetchall(
-        """
-        SELECT id, jugador1_nombre, jugador2_nombre, superficie, jugador1_cuota, jugador2_cuota
-        FROM matches
-        WHERE estado = 'pendiente'
-        AND fecha_partido >= :today
-        AND fecha_partido <= :end_date
-        AND COALESCE(jugador1_cuota, 0) > 0
-        AND COALESCE(jugador2_cuota, 0) > 0
-        ORDER BY fecha_partido ASC, id ASC
-        """,
-        {"today": today, "end_date": end_date},
-    )
+    from src.services.prediction_runner import run_prediction_and_save
+
+    if scope == "all":
+        # Todos los partidos con cuotas válidas (con o sin predicción): generar/regenerar a baseline
+        today = date.today()
+        end_date = today + timedelta(days=90)
+        pending = db._fetchall(
+            """
+            SELECT m.id, m.jugador1_nombre, m.jugador2_nombre, m.superficie, m.jugador1_cuota, m.jugador2_cuota
+            FROM matches m
+            WHERE COALESCE(m.jugador1_cuota, 0) > 0
+            AND COALESCE(m.jugador2_cuota, 0) > 0
+            AND m.fecha_partido >= :today
+            AND m.fecha_partido <= :end_date
+            ORDER BY m.fecha_partido ASC, m.id ASC
+            """,
+            {"today": today, "end_date": end_date},
+        )
+    else:
+        today = date.today()
+        end_date = today + timedelta(days=14)
+        pending = db._fetchall(
+            """
+            SELECT id, jugador1_nombre, jugador2_nombre, superficie, jugador1_cuota, jugador2_cuota
+            FROM matches
+            WHERE estado = 'pendiente'
+            AND fecha_partido >= :today
+            AND fecha_partido <= :end_date
+            AND COALESCE(jugador1_cuota, 0) > 0
+            AND COALESCE(jugador2_cuota, 0) > 0
+            ORDER BY fecha_partido ASC, id ASC
+            """,
+            {"today": today, "end_date": end_date},
+        )
 
     if not pending:
         return {
             "success": True,
             "matches_processed": 0,
             "predictions_regenerated": 0,
-            "message": "No hay partidos pendientes con cuotas válidas",
+            "message": "No hay partidos con cuotas válidas para regenerar",
         }
-
-    from src.services.prediction_runner import run_prediction_and_save
 
     regenerated = 0
     for match in pending:
@@ -1514,12 +1533,12 @@ async def admin_regenerate_all_predictions():
         if ok:
             regenerated += 1
 
-    logger.info(f"✅ Regeneradas {regenerated}/{len(pending)} predicciones")
+    logger.info(f"✅ Regeneradas {regenerated}/{len(pending)} predicciones (scope={scope})")
     return {
         "success": True,
         "matches_processed": len(pending),
         "predictions_regenerated": regenerated,
-        "message": f"{regenerated} predicciones regeneradas de {len(pending)} partidos",
+        "message": f"{regenerated} predicciones regeneradas de {len(pending)} partidos (baseline 60% ELO)",
     }
 
 
@@ -2592,28 +2611,6 @@ def _startup_sync_background():
     logger.info("🔄 INICIANDO SINCRONIZACIÓN EN BACKGROUND")
     logger.info("=" * 70)
     
-    # 0. CHECK INICIAL: Importar datos históricos si la DB está vacía
-    try:
-        from src.database.match_database import MatchDatabase
-        db_bg = MatchDatabase()
-        
-        result = db_bg._fetchone("SELECT COUNT(*) as count FROM matches", {})
-        count = result["count"] if result else 0
-        
-        if count < 100:
-            logger.warning(f"⚠️  Base de datos casi vacía ({count} partidos). Iniciando importación...")
-            try:
-                from scripts.import_historical_data import import_csv_to_db
-                import_csv_to_db()
-                logger.info("✅ Importación histórica completada")
-            except Exception as e:
-                logger.error(f"❌ Error importando históricos: {e}")
-        else:
-            logger.info(f"✅ Base de datos contiene {count} partidos históricos")
-            
-    except Exception as e:
-        logger.error(f"⚠️  Error verificando estado DB: {e}")
-
     # 1. Actualizar estados de partidos existentes (limitado a 50 partidos max)
     try:
         from src.services.match_update_service import MatchUpdateService
