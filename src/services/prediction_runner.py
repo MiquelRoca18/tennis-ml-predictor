@@ -65,14 +65,17 @@ def run_prediction_and_save(
         edge_j2 = prob_j2 - (1 / player2_odds)
 
         umbral_ev = Config.EV_THRESHOLD
-        if ev_j1 > umbral_ev:
+        min_prob = Config.MIN_PROBABILIDAD  # No recomendar si creemos que tiene < 60% de ganar
+        if ev_j1 > umbral_ev and prob_j1 >= min_prob:
             recomendacion = f"APOSTAR a {player1_name}"
             mejor_opcion = player1_name
+            prob_recomendado = prob_j1
             kelly_j1 = resultado_pred.get("stake_recomendado", 0)
             kelly_j2 = None
-        elif ev_j2 > umbral_ev:
+        elif ev_j2 > umbral_ev and prob_j2 >= min_prob:
             recomendacion = f"APOSTAR a {player2_name}"
             mejor_opcion = player2_name
+            prob_recomendado = prob_j2
             kelly_j1 = None
             kelly_j2 = (
                 compute_kelly_stake_backtesting(
@@ -88,15 +91,29 @@ def run_prediction_and_save(
         else:
             recomendacion = "NO APOSTAR"
             mejor_opcion = None
+            prob_recomendado = max(prob_j1, prob_j2)
             kelly_j1 = None
             kelly_j2 = None
 
-        if abs(prob_j1 - 0.5) > 0.15:
-            confianza = "Alta"
-        elif abs(prob_j1 - 0.5) > 0.08:
-            confianza = "Media"
+        # Confianza = probabilidad del jugador recomendado (no "conocimiento ELO")
+        resultado_pred = dict(resultado_pred)
+        if mejor_opcion:
+            if prob_recomendado >= 0.70:
+                confianza = "Alta"
+                resultado_pred["confidence_level"] = "HIGH"
+                resultado_pred["confidence_score"] = prob_recomendado
+            elif prob_recomendado >= 0.55:
+                confianza = "Media"
+                resultado_pred["confidence_level"] = "MEDIUM"
+                resultado_pred["confidence_score"] = prob_recomendado
+            else:
+                confianza = "Baja"
+                resultado_pred["confidence_level"] = "LOW"
+                resultado_pred["confidence_score"] = prob_recomendado
         else:
             confianza = "Baja"
+            resultado_pred["confidence_level"] = "LOW"
+            resultado_pred["confidence_score"] = prob_recomendado if prob_recomendado else 0.5
 
         db.add_prediction(
             match_id=match_id,
