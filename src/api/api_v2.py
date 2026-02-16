@@ -154,16 +154,11 @@ except Exception as e:
 # Variable global para LiveEventsService
 live_events_service = None
 
-# Funciones del predictor (definidas antes de retraining_executor para el callback)
 def reset_predictor():
-    """
-    Resetea el predictor en memoria.
-    Tras un re-entrenamiento exitoso, el modelo nuevo está en disco pero el predictor
-    en memoria sigue con el viejo. Al resetear, la próxima predicción cargará el nuevo.
-    """
+    """Resetea el predictor en memoria. La próxima predicción creará una nueva instancia."""
     global predictor
     predictor = None
-    logger.info("🔄 Predictor reseteado - modelo nuevo se cargará en próxima predicción")
+    logger.info("🔄 Predictor reseteado - se cargará en próxima predicción")
 
 
 def get_predictor(raise_on_error: bool = True):
@@ -176,7 +171,7 @@ def get_predictor(raise_on_error: bool = True):
     if predictor is None:
         try:
             predictor = PredictorCalibrado(Config.MODEL_PATH)
-            logger.info(f"✅ Predictor cargado desde {Config.MODEL_PATH}")
+            logger.info("✅ Predictor cargado (baseline ELO + mercado)")
         except Exception as e:
             logger.error(f"❌ Error cargando predictor: {e}")
             if raise_on_error:
@@ -184,20 +179,6 @@ def get_predictor(raise_on_error: bool = True):
             return None
     return predictor
 
-
-# Inicializar ModelRetrainingExecutor (con callback para resetear predictor tras re-entrenamiento)
-from src.services.model_retraining_executor import ModelRetrainingExecutor
-
-retraining_executor = ModelRetrainingExecutor(on_success_callback=reset_predictor)
-
-# Inicializar GitHub Polling Monitor (sin necesidad de webhooks)
-from src.services.github_polling_monitor import GitHubPollingMonitor
-
-github_monitor = GitHubPollingMonitor(
-    repo_owner="Tennismylife",
-    repo_name="TML-Database",
-    db=db if db.is_postgres else None,  # Persistir SHA en PostgreSQL (Railway: sobrevive restarts)
-)
 
 scheduler = BackgroundScheduler()
 
@@ -1485,9 +1466,7 @@ async def admin_regenerate_all_predictions():
     """
     Regenera predicciones para TODOS los partidos pendientes con cuotas válidas.
     Ignora si ya tienen predicción o si las cuotas cambiaron.
-
-    Uso: una vez tras desplegar fix de selected_features.txt para corregir
-    predicciones que se generaron con features incorrectas.
+    Usa el predictor baseline (ELO + mercado).
     """
     try:
         pred = get_predictor()
@@ -1637,42 +1616,15 @@ async def admin_check_predictions():
 @app.get("/admin/check-model", tags=["Admin"])
 async def admin_check_model():
     """
-    Verifica si el modelo de predicción existe y puede cargarse.
-    Útil para diagnosticar por qué no se generan predicciones.
+    Diagnóstico del predictor. El sistema usa baseline ELO + mercado (no carga modelo .pkl).
     """
-    import os
-    from pathlib import Path
     try:
-        model_path = Config.MODEL_PATH
-        # Resolver ruta absoluta (desde /app en Docker)
-        if not os.path.isabs(model_path):
-            base = Path("/app" if Path("/app").exists() else ".")
-            full_path = (base / model_path).resolve()
-        else:
-            full_path = Path(model_path)
-
-        exists = full_path.exists()
-        result = {
-            "model_path": model_path,
-            "full_path": str(full_path),
-            "file_exists": exists,
-            "file_size": full_path.stat().st_size if exists else None,
+        return {
+            "mode": "baseline",
+            "message": "Sistema en modo baseline ELO + mercado; no se usa archivo de modelo.",
+            "model_path": Config.MODEL_PATH,
+            "file_required": False,
         }
-
-        if exists:
-            try:
-                import joblib
-                model = joblib.load(full_path)
-                result["load_ok"] = True
-                result["model_type"] = type(model).__name__
-            except Exception as e:
-                result["load_ok"] = False
-                result["load_error"] = str(e)
-        else:
-            result["load_ok"] = False
-            result["load_error"] = "Archivo no encontrado"
-
-        return result
     except Exception as e:
         logger.error(f"❌ Error en check-model: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1681,46 +1633,14 @@ async def admin_check_model():
 @app.get("/admin/debug-predictor", tags=["Admin"])
 async def admin_debug_predictor():
     """
-    Diagnóstico: verifica si el modelo existe y puede cargarse.
-    Útil para entender por qué no se generan predicciones.
+    Diagnóstico del predictor. Sistema baseline ELO + mercado (no usa .pkl).
     """
-    import os
-    from pathlib import Path
     try:
-        model_path = Config.MODEL_PATH
-        path_obj = Path(model_path)
-        abs_path = path_obj.resolve()
-        exists = path_obj.exists()
-        is_file = path_obj.is_file() if exists else False
-        size_bytes = path_obj.stat().st_size if exists and is_file else None
-        cwd = os.getcwd()
-
-        load_ok = False
-        load_error = None
-        if exists and is_file:
-            try:
-                import joblib
-                model = joblib.load(path_obj)
-                load_ok = True
-            except Exception as e:
-                load_error = str(e)
-
         return {
-            "model_path": model_path,
-            "model_path_resolved": str(abs_path),
-            "cwd": cwd,
-            "file_exists": exists,
-            "is_file": is_file,
-            "size_bytes": size_bytes,
-            "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else None,
-            "load_ok": load_ok,
-            "load_error": load_error,
-            "diagnosis": (
-                "Modelo OK - predictor debería funcionar"
-                if load_ok else
-                f"Modelo no cargable: {load_error}" if load_error else
-                f"Archivo no encontrado en {abs_path}"
-            ),
+            "mode": "baseline",
+            "message": "Predictor baseline ELO + mercado; no se carga modelo.",
+            "model_path": Config.MODEL_PATH,
+            "diagnosis": "OK - predictor baseline activo",
         }
     except Exception as e:
         logger.error(f"❌ Error en debug-predictor: {e}", exc_info=True)
@@ -2129,57 +2049,15 @@ async def backfill_match_scores(days: int = 7, max_matches: int = 50):
     }
 
 
-@app.get("/admin/retraining-status", tags=["Admin"])
-async def get_retraining_status():
-    """
-    Obtiene el estado del re-entrenamiento del modelo
-
-    Muestra si hay un re-entrenamiento en progreso, cuándo fue la última
-    ejecución y el resultado.
-
-    Returns:
-        Estado del re-entrenamiento
-    """
-    try:
-        status = retraining_executor.get_status()
-        return status
-    except Exception as e:
-        logger.error(f"❌ Error obteniendo estado de re-entrenamiento: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/admin/trigger-retraining", tags=["Admin"])
-async def admin_trigger_retraining():
-    """
-    Fuerza el re-entrenamiento del modelo manualmente.
-
-    Útil para: recuperar el commit de TML-Database que se perdió por un restart,
-    o actualizar el modelo sin esperar al domingo 2 AM.
-    """
-    result = retraining_executor.start_retraining(
-        commit_info={"trigger": "manual", "message": "Re-entrenamiento manual vía admin"}
-    )
-    return {
-        "success": result["success"],
-        "message": result.get("mensaje", "Re-entrenamiento iniciado"),
-        "retraining": result,
-        "timestamp": datetime.now().isoformat(),
-    }
-
-
 @app.post("/admin/reset-predictor", tags=["Admin"])
 async def admin_reset_predictor():
     """
-    Resetea el predictor en memoria para forzar recarga del modelo desde disco.
-
-    Útil cuando se ha actualizado el archivo del modelo manualmente o tras
-    un re-entrenamiento que no pasó por el executor (ej. manual).
-    La próxima predicción cargará el modelo actual en disco.
+    Resetea el predictor en memoria. La próxima predicción creará una nueva instancia.
     """
     reset_predictor()
     return {
         "status": "ok",
-        "message": "Predictor reseteado. Modelo nuevo se cargará en próxima predicción",
+        "message": "Predictor reseteado. Se cargará en próxima predicción",
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -2680,19 +2558,12 @@ async def github_webhook(request: Request):
             f"🔔 Webhook recibido: Commit {commit_info.get('sha')} - {commit_info.get('message')}"
         )
 
-        # Trigger actualización del modelo en background
-        retraining_result = retraining_executor.start_retraining(commit_info)
-
-        if retraining_result["success"]:
-            logger.info("✅ Re-entrenamiento del modelo iniciado en background")
-        else:
-            logger.warning(f"⚠️  {retraining_result['mensaje']}")
-
+        # El sistema usa baseline ELO + mercado; no hay re-entrenamiento de modelo
         return {
             "success": True,
-            "action": "retraining_started" if retraining_result["success"] else "already_running",
+            "action": "ignored",
             "commit": commit_info,
-            "retraining": retraining_result,
+            "message": "Sistema en modo baseline (sin ML); webhook aceptado pero no se re-entrena modelo",
         }
 
     except HTTPException:
@@ -2900,58 +2771,6 @@ async def startup_event():
                 name="Live: get_livescore fallback cada 15s",
                 replace_existing=True,
             )
-
-        # Job 3: Verificar commits en TML-Database (cada hora)
-        def check_github_commits():
-            """Verifica si hay commits nuevos en TML-Database"""
-            try:
-                new_commit = github_monitor.check_for_new_commits()
-                if new_commit:
-                    logger.info(
-                        f"🆕 Commit nuevo detectado en TML-Database: {new_commit['short_sha']}"
-                    )
-                    logger.info(f"📝 Mensaje: {new_commit['message']}")
-
-                    # Trigger re-entrenamiento
-                    result = retraining_executor.start_retraining(new_commit)
-                    if result["success"]:
-                        logger.info("✅ Re-entrenamiento iniciado automáticamente")
-                    else:
-                        logger.warning(f"⚠️  {result['mensaje']}")
-            except Exception as e:
-                logger.error(f"❌ Error verificando commits: {e}")
-
-        scheduler.add_job(
-            func=check_github_commits,
-            trigger=IntervalTrigger(hours=1),
-            id="github_polling_job",
-            name="Verificación de commits en TML-Database",
-            replace_existing=True,
-        )
-
-        # Job 3b: Re-entrenamiento semanal programado (domingo 2:00 AM)
-        # Garantiza modelo actualizado aunque TML-Database no haga commits
-        def scheduled_retraining():
-            """Re-entrena el modelo cada semana con datos frescos de TML-Database."""
-            try:
-                logger.info("📅 Re-entrenamiento semanal programado - iniciando...")
-                result = retraining_executor.start_retraining(
-                    commit_info={"trigger": "scheduled_weekly", "message": "Re-entrenamiento semanal"}
-                )
-                if result["success"]:
-                    logger.info("✅ Re-entrenamiento semanal iniciado")
-                else:
-                    logger.info(f"ℹ️  Re-entrenamiento semanal: {result.get('mensaje', '')}")
-            except Exception as e:
-                logger.error(f"❌ Error en re-entrenamiento semanal: {e}", exc_info=True)
-
-        scheduler.add_job(
-            func=scheduled_retraining,
-            trigger=CronTrigger(day_of_week="sun", hour=2, minute=0),  # Domingo 2:00 AM
-            id="scheduled_retraining_job",
-            name="Re-entrenamiento semanal (domingo 2 AM)",
-            replace_existing=True,
-        )
 
         # Job 3: Fetch diario de partidos (6:00 AM cada día)
         def daily_match_fetch():

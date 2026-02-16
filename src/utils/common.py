@@ -9,7 +9,6 @@ import pandas as pd
 from pathlib import Path
 from typing import Tuple, Optional, Any, Callable
 import sys
-import joblib  # Añadido para cargar modelos correctamente
 
 
 def compute_kelly_stake_backtesting(
@@ -38,54 +37,6 @@ def compute_kelly_stake_backtesting(
     if stake < min_stake_eur:
         return 0.0
     return round(stake, 2)
-
-
-def load_model(model_path: str) -> Any:
-    """
-    Carga modelo de forma segura usando joblib
-
-    Args:
-        model_path: Ruta al archivo del modelo
-
-    Returns:
-        Modelo cargado
-
-    Raises:
-        FileNotFoundError: Si el modelo no existe
-    """
-    model_path = Path(model_path)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Modelo no encontrado: {model_path}")
-
-    # Usar joblib para cargar (compatible con cómo se guardan los modelos)
-    return joblib.load(model_path)
-
-
-def load_data(data_path: str, features: Optional[list] = None) -> Tuple:
-    """
-    Carga datos de forma segura
-
-    Args:
-        data_path: Ruta al archivo CSV
-        features: Lista de features a extraer (opcional)
-
-    Returns:
-        Si features especificado: (X, y, df)
-        Si no: df
-    """
-    data_path = Path(data_path)
-    if not data_path.exists():
-        raise FileNotFoundError(f"Datos no encontrados: {data_path}")
-
-    df = pd.read_csv(data_path)
-
-    if features:
-        X = df[features]
-        # Intentar encontrar la columna target
-        y = df.get("target", df.get("winner", df.get("resultado")))
-        return X, y, df
-
-    return df
 
 
 def print_header(title: str, emoji: str = "📊", width: int = 60):

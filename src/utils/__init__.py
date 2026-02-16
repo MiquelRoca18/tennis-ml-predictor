@@ -6,8 +6,6 @@ Funciones compartidas para evitar duplicación de código.
 """
 
 from .common import (
-    load_model,
-    load_data,
     print_header,
     print_section,
     print_metric,
@@ -25,8 +23,6 @@ from .common import (
 )
 
 __all__ = [
-    "load_model",
-    "load_data",
     "print_header",
     "print_section",
     "print_metric",

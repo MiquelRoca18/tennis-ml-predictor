@@ -61,6 +61,10 @@ class Config:
     MODEL_PATH = os.getenv("MODEL_PATH", "modelos/random_forest_calibrado.pkl")
     MODEL_BACKUP_DIR = os.getenv("MODEL_BACKUP_DIR", "modelos/archive")
 
+    # Baseline ELO (sin ML): prob = BASELINE_ELO_PESO * prob_elo + (1 - BASELINE_ELO_PESO) * prob_mercado
+    USE_BASELINE_ELO = os.getenv("USE_BASELINE_ELO", "false").lower() == "true"
+    BASELINE_ELO_PESO = float(os.getenv("BASELINE_ELO_PESO", "0.6"))  # 60% ELO, 40% mercado
+
     # ==================== DATOS ====================
     DATA_PATH = os.getenv("DATA_PATH", "datos/processed/dataset_final.csv")
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")
@@ -124,9 +128,8 @@ class Config:
         errors = []
         warnings = []
 
-        # Validaciones críticas (siempre requeridas)
-        if not Path(cls.MODEL_PATH).exists():
-            errors.append(f"Modelo no encontrado: {cls.MODEL_PATH}")
+        # Validaciones críticas (sistema usa solo baseline ELO + mercado; no requiere .pkl)
+        # MODEL_PATH se mantiene por compatibilidad pero no se usa en runtime
 
         # Validaciones opcionales (solo en modo strict)
         if strict:

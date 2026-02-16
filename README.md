@@ -1,17 +1,12 @@
 # 🎾 Tennis ML Predictor
 
-Sistema de predicción de partidos de tenis usando Machine Learning con probabilidades calibradas, optimizado para apuestas deportivas inteligentes.
+Sistema de predicción de partidos de tenis para apuestas deportivas. Usa **baseline ELO + mercado**: probabilidad = 60% ELO + 40% probabilidad implícita de la cuota, con EV, Kelly y filtros conservadores (min prob, max cuota).
 
-## 📊 Resultados del Sistema
+## 📊 Estrategia en producción
 
-- **Accuracy**: 71.57% (modelo calibrado)
-- **Brier Score**: 0.1914 (calibración excelente)
-- **ECE**: 0.0474 (casi perfecta calibración)
-- **ROI Backtesting**: 57.41%
-- **Kelly Criterion**: +96% ROI vs Flat Betting
-- **Line Shopping**: +0.5-2% EV adicional
-- **Datos**: 2022-2025 (TML Database)
-- **Features**: 30 seleccionadas de 149 generadas
+- **Baseline**: 60% ELO + 40% mercado (sin modelo ML)
+- **Filtros**: EV > 10%, cuota < 2.0, probabilidad > 70%
+- **Backtesting**: ROI estable 4/4 años con esta configuración
 
 ---
 
@@ -42,41 +37,22 @@ cp .env.template .env
 # Editar .env con tus credenciales
 ```
 
-### Ejecutar Pipeline Completo
+### Ejecutar la API
 
 ```bash
-# Pipeline completo: descarga datos + entrena + valida
-python setup_and_train.py --full
-```
-
-**⏱️ Tiempo**: 30-40 minutos  
-**✅ Resultado**: Modelo entrenado y validado, listo para usar
-
-### Opciones Alternativas
-
-```bash
-# Solo entrenar (si ya tienes datos)
-python setup_and_train.py --train-only
-
-# Solo validar (si ya tienes modelo)
-python setup_and_train.py --validate-only
+# Levantar la API (predicciones con baseline ELO + mercado)
+uvicorn src.api.api_v2:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## 💡 ¿Qué Hace Este Sistema?
+## 💡 ¿Qué hace este sistema?
 
-Este proyecto es un **sistema completo de predicción de tenis** que:
-
-1. **Descarga datos** históricos de partidos (2022-2025)
-2. **Genera 149 features** avanzadas (ELO, forma reciente, H2H, superficie, etc.)
-3. **Entrena 4 modelos** ML (Random Forest, Gradient Boosting, Logistic Regression, XGBoost)
-4. **Calibra probabilidades** para apuestas (Isotonic + Platt Scaling)
-5. **Optimiza apuestas** con Kelly Criterion
-6. **Compara cuotas** de múltiples bookmakers (line shopping)
-7. **Automatiza predicciones** diarias con alertas por email
-
-**Resultado**: Predicciones calibradas con ventaja estadística para apuestas inteligentes.
+1. **Predicciones** con baseline: probabilidad = 60% ELO + 40% mercado (cuota)
+2. **ELO y features** desde histórico en BD (FeatureGeneratorService)
+3. **EV, Kelly y filtros** (min prob, max cuota) para recomendaciones de apuesta
+4. **API** para crear partidos, obtener predicciones y listar partidos del día
+5. **Automatización** opcional: fetch diario de partidos, actualización de datos
 
 ---
 
@@ -84,75 +60,41 @@ Este proyecto es un **sistema completo de predicción de tenis** que:
 
 ```
 tennis-ml-predictor/
-├── validate.py              # Validación unificada (todas las fases)
-├── demo.py                  # Demos del sistema
-├── setup_and_train.py       # Pipeline maestro
-├── predictor_calibrado.py   # Predictor principal
-│
 ├── scripts/
+│   ├── backtesting_produccion_real_completo.py  # Backtesting (baseline ELO)
 │   └── internal/            # Scripts de uso ocasional
 │
 ├── src/
 │   ├── config/              # Configuración centralizada
+│   ├── api/                  # API FastAPI
+│   ├── prediction/          # Predictor baseline + FeatureGeneratorService
+│   ├── features/            # ELO, forma, H2H, superficie
 │   ├── utils/               # Utilidades compartidas
-│   ├── data/                # Descarga y procesamiento de datos
-│   ├── features/            # Feature engineering (ELO, H2H, etc.)
-│   ├── models/              # Entrenamiento y optimización
-│   ├── prediction/          # Sistema de predicción
-│   ├── betting/             # Kelly Criterion + Bankroll
-│   ├── bookmakers/          # Line shopping + Alertas
-│   ├── tracking/            # Tracking de apuestas
-│   ├── automation/          # Automatización 24/7
-│   ├── validation/          # Validaciones refactorizadas
-│   └── demos/               # Demos refactorizadas
+│   ├── automation/          # DataUpdater, daily match fetcher
+│   └── services/             # Odds, predicciones, etc.
 │
-├── datos/                   # Datasets y base de datos
-├── modelos/                 # Modelos entrenados
-└── resultados/              # Reportes y análisis
+├── datos/                   # Datos y cache
+└── resultados/              # Opcional (backtesting)
 ```
 
 ---
 
-## 🎯 Uso del Sistema
+## 🎯 Uso
 
-### 1. Validar el Sistema
-
-```bash
-# Validar todas las fases
-python validate.py --all
-
-# Validar fase específica
-python validate.py --phase 2  # Calibración
-python validate.py --phase 5  # Kelly Criterion
-python validate.py --phase 7  # Automatización
-```
-
-### 2. Ejecutar Demos
-
-```bash
-# Todas las demos
-python demo.py --all
-
-# Demo específica
-python demo.py --feature tracking
-python demo.py --feature kelly
-python demo.py --feature bookmakers
-```
-
-### 3. Hacer Predicciones
+### Predicciones (baseline ELO + mercado)
 
 ```python
-from predictor_calibrado import PredictorCalibrado
+from src.prediction.predictor_calibrado import PredictorCalibrado
+from src.config.settings import Config
 
-# Cargar modelo
-predictor = PredictorCalibrado('modelos/production/random_forest_calibrado.pkl')
-
-# Predecir partido
-prob = predictor.predecir_partido(
+predictor = PredictorCalibrado(Config.MODEL_PATH)
+resultado = predictor.predecir_partido(
     jugador1="Djokovic",
     jugador2="Nadal",
-    superficie="Clay"
+    superficie="Clay",
+    cuota=2.10
 )
+# resultado["probabilidad"], resultado["expected_value"], resultado["decision"], etc.
 
 print(f"Probabilidad Djokovic: {prob:.2%}")
 ```

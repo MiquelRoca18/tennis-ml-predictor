@@ -45,18 +45,14 @@ COPY --from=builder /root/.local /root/.local
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 
-# Copiar modelos entrenados
-COPY modelos/ ./modelos/
-
-# Copiar lista de features (requerida por PredictorCalibrado - orden debe coincidir con modelo)
-COPY resultados/selected_features.txt ./resultados/
+# Sistema usa solo baseline ELO + mercado (no .pkl ni selected_features)
 
 # Script de arranque
 COPY start.sh ./start.sh
 RUN chmod +x start.sh
 
-# Crear directorios necesarios
-RUN mkdir -p logs datos resultados
+# Crear directorios necesarios (resultados para backtesting si se ejecuta; logs para data_updater)
+RUN mkdir -p logs datos/raw datos/processed resultados
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \

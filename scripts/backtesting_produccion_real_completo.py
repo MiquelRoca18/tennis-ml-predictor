@@ -1,18 +1,13 @@
 """
-Backtesting de Producción REAL - Versión Completa
-==================================================
+Backtesting de Producción REAL - Solo baseline ELO + mercado
+============================================================
 
-Simula EXACTAMENTE cómo funcionaría el modelo en producción:
-1. Genera las 30 features completas usando los calculadores reales
-2. Usa predicción bidireccional (Opción B): predice ambas direcciones y promedia
-3. Evalúa con cuotas reales de 2024
-4. Aplica Kelly Criterion para gestión de bankroll
-
-Este script replica fielmente el proceso de producción.
+Simula el sistema en producción con probabilidad = baseline_elo_peso * prob_elo + (1 - baseline_elo_peso) * prob_mercado.
+- Evalúa con cuotas reales (tennis-data.co.uk)
+- Aplica Kelly Criterion y filtros conservadores (EV, min prob, max cuota)
 """
 
 import pandas as pd
-import joblib
 from pathlib import Path
 import logging
 import sys
@@ -82,24 +77,23 @@ def descargar_datos_automaticamente(año):
             cuotas_excel.write_bytes(response.content)
             logger.info(f"  ✅ Cuotas Excel descargadas: {cuotas_excel}")
 
-            # Procesar Excel a CSV
+            # Procesar Excel a CSV (process_tennis_data_odds.py crea tennis_odds_{año}_{año}.csv)
             logger.info(f"  Procesando cuotas...")
+            project_root = Path(__file__).resolve().parents[1]
             result = subprocess.run(
-                ["python", "scripts/internal/process_tennis_data_odds.py"],
+                ["python", "scripts/internal/process_tennis_data_odds.py", str(año)],
+                cwd=str(project_root),
                 capture_output=True,
                 text=True,
                 timeout=60,
             )
 
-            if result.returncode == 0:
-                # Separar solo el año específico
-                df_all = pd.read_csv(odds_dir / f"tennis_odds_2024_{año}.csv")
-                df_all["fecha"] = pd.to_datetime(df_all["fecha"])
-                df_año = df_all[df_all["fecha"].dt.year == año].copy()
-                df_año.to_csv(cuotas_file, index=False)
+            if result.returncode == 0 and cuotas_file.exists():
+                df_año = pd.read_csv(cuotas_file)
                 logger.info(f"  ✅ Cuotas {año} procesadas: {len(df_año)} partidos")
             else:
-                logger.error(f"  ❌ Error procesando cuotas: {result.stderr}")
+                err = result.stderr or result.stdout or "Script no generó el archivo esperado"
+                logger.error(f"  ❌ Error procesando cuotas: {err[-500:]}")
                 raise Exception("Error procesando cuotas")
 
         except Exception as e:
@@ -178,12 +172,14 @@ class ProductionFeatureGenerator:
 
         # Los otros calculadores se actualizan automáticamente al consultar self.df
 
-    def generar_features(self, jugador, oponente, superficie, fecha):
+    def generar_features(self, jugador, oponente, superficie, fecha, cuota_jugador=None, cuota_oponente=None):
         """
-        Genera las 30 features para un partido
+        Genera las features para un partido.
 
         IMPORTANTE: jugador está en posición 'jugador', oponente en posición 'oponente'
         El modelo predice: ¿Ganará 'jugador'?
+
+        Fase 4.1: cuota_jugador, cuota_oponente opcionales para features de mercado.
         """
         features = {}
 
@@ -217,6 +213,7 @@ class ProductionFeatureGenerator:
         features["diff_win_rate_60d"] = forma_j.get("win_rate_60d", 0.5) - forma_o.get(
             "win_rate_60d", 0.5
         )
+        features["win_rate_60d"] = forma_j.get("win_rate_60d", 0.5)  # para j1_win_rate_60d / form_prior
 
         # 4. Servicio y Resto (14 features)
         serv_j = self.servicio_calc.calcular_estadisticas_servicio(jugador, fecha)
@@ -252,7 +249,17 @@ class ProductionFeatureGenerator:
             # Si falla el cálculo de superficie, usar valor neutral
             features["ventaja_superficie"] = 0
 
-        # 6. Interacciones (3 features)
+        # 6. Features de cuotas (Fase 4.1) - si se pasan
+        if cuota_jugador is not None and cuota_oponente is not None and cuota_jugador > 0 and cuota_oponente > 0:
+            features["cuota_implicita_jugador"] = 1.0 / cuota_jugador
+            features["cuota_implicita_oponente"] = 1.0 / cuota_oponente
+            features["cuota_diff"] = features["cuota_implicita_jugador"] - features["cuota_implicita_oponente"]
+        else:
+            features["cuota_implicita_jugador"] = 0.5
+            features["cuota_implicita_oponente"] = 0.5
+            features["cuota_diff"] = 0.0
+
+        # 7. Interacciones (3 features)
         features["rank_diff_x_forma"] = features["rank_diff"] * forma_j.get("win_rate_60d", 0.5)
         features["elo_x_forma"] = features["elo_diff"] * features["diff_win_rate_60d"]
         features["superficie_x_rank"] = features["ventaja_superficie"] * features["rank_diff"]
@@ -288,36 +295,49 @@ class BacktestingProduccionReal:
         umbral_ev=0.10,
         max_cuota=2.0,
         min_probabilidad=0.60,
+        min_partidos_jugador=0,
+        solo_torneos_principales=False,
+        superficies_permitidas=None,
+        usar_baseline_elo=True,
+        baseline_elo_peso=0.6,
+        solo_rondas_finales=False,
+        resultados_dir=None,
+        **kwargs,  # ignora value_model_path, selected_features_path, conformal, modelo_por_superficie, etc.
     ):
-        self.modelo_path = Path(modelo_path)
+        self.modelo_path = Path(modelo_path) if modelo_path else Path(".")
         self.bankroll_inicial = bankroll_inicial
         self.kelly_fraction = kelly_fraction
         self.umbral_ev = umbral_ev
-        self.max_cuota = max_cuota  # Solo favoritos
-        self.min_probabilidad = min_probabilidad  # Solo cuando modelo está seguro
-        self.resultados_dir = Path("resultados/backtesting_produccion_real")
+        self.max_cuota = max_cuota
+        self.min_probabilidad = min_probabilidad
+        self.min_partidos_jugador = min_partidos_jugador
+        self.solo_torneos_principales = solo_torneos_principales
+        self.superficies_permitidas = superficies_permitidas
+        self.usar_baseline_elo = True  # Solo baseline
+        self.baseline_elo_peso = baseline_elo_peso
+        self.solo_rondas_finales = solo_rondas_finales
+        self.resultados_dir = Path(resultados_dir) if resultados_dir else Path("resultados/backtesting_produccion_real")
         self.resultados_dir.mkdir(parents=True, exist_ok=True)
 
-        self.modelo = None
-        self.feature_cols = None
-
-        logger.info(f"🎯 Backtesting de Producción REAL - ESTRATEGIA CONSERVADORA")
+        logger.info(f"🎯 Backtesting de Producción REAL - BASELINE ELO + MERCADO")
         logger.info(f"💰 Bankroll inicial: {bankroll_inicial}€")
-        logger.info(f"📊 Kelly Fraction: {kelly_fraction*100:.1f}% (MUY CONSERVADOR)")
+        logger.info(f"📊 Kelly Fraction: {kelly_fraction*100:.1f}%")
         logger.info(f"📈 Umbral EV mínimo: {umbral_ev*100:.0f}%")
-        logger.info(f"🎲 Cuota máxima: {max_cuota} (solo favoritos)")
+        logger.info(f"🎲 Cuota máxima: {max_cuota}")
         logger.info(f"🎯 Probabilidad mínima: {min_probabilidad*100:.0f}%")
+        logger.info(f"   Baseline: {baseline_elo_peso*100:.0f}% ELO / {(1-baseline_elo_peso)*100:.0f}% mercado")
+        if min_partidos_jugador > 0:
+            logger.info(f"📋 Mín. partidos/jugador (12m): {min_partidos_jugador}")
+        if solo_torneos_principales:
+            logger.info("🏆 Solo torneos principales (Grand Slam + Masters 1000)")
+        if superficies_permitidas:
+            logger.info(f"🎾 Solo superficies: {superficies_permitidas}")
+        if solo_rondas_finales:
+            logger.info("   Filtro: solo SF y Final")
 
     def cargar_modelo(self):
-        """Carga el modelo y las features"""
-        logger.info(f"\n📂 Cargando modelo...")
-        self.modelo = joblib.load(self.modelo_path)
-
-        # Cargar features
-        with open("resultados/selected_features.txt", "r") as f:
-            self.feature_cols = [line.strip() for line in f.readlines() if line.strip()]
-
-        logger.info(f"✅ Modelo cargado ({len(self.feature_cols)} features)")
+        """Solo baseline; no se carga modelo ML."""
+        logger.info(f"\n📂 Modo baseline ELO + mercado (sin modelo)")
 
     def normalizar_nombre(self, nombre):
         """Normaliza nombre"""
@@ -340,6 +360,18 @@ class BacktestingProduccionReal:
         for old, new in replacements.items():
             nombre = nombre.replace(old, new)
         return " ".join(nombre.split())
+
+    def _contar_partidos_ultimos_12m(self, jugador: str, fecha, df_historico) -> int:
+        """Cuenta partidos de un jugador en los últimos 12 meses antes de fecha (Fase 3.1)."""
+        from datetime import timedelta
+
+        fecha = pd.to_datetime(fecha)
+        inicio = fecha - timedelta(days=365)
+        df_periodo = df_historico[
+            (df_historico["tourney_date"] >= inicio) & (df_historico["tourney_date"] < fecha)
+        ]
+        mask = (df_periodo["winner_name"] == jugador) | (df_periodo["loser_name"] == jugador)
+        return mask.sum()
 
     def buscar_jugador_nombre_completo(self, nombre_odds, df_historico):
         """Busca el nombre completo de un jugador"""
@@ -377,46 +409,6 @@ class BacktestingProduccionReal:
         else:
             return (partes[-1], partes[0][0] if partes[0] else "")
 
-    def predecir_partido_bidireccional(self, feature_gen, jugador1, jugador2, superficie, fecha):
-        """
-        Predicción con NUEVO MODELO (formato j1_/j2_):
-        - Genera features para jugador1 (prefijo j1_)
-        - Genera features para jugador2 (prefijo j2_)
-        - Hace 1 predicción: ¿Ganará j1?
-
-        Returns:
-            prob_jugador1_gana: Probabilidad de que jugador1 gane
-        """
-        # Generar features para jugador1 (como 'jugador')
-        features_j1 = feature_gen.generar_features(jugador1, jugador2, superficie, fecha)
-
-        # Generar features para jugador2 (como 'jugador')
-        features_j2 = feature_gen.generar_features(jugador2, jugador1, superficie, fecha)
-
-        # Combinar con prefijos j1_ y j2_
-        features_combined = {}
-        for key, value in features_j1.items():
-            features_combined[f"j1_{key}"] = value
-        for key, value in features_j2.items():
-            features_combined[f"j2_{key}"] = value
-
-        # Preparar y predecir
-        X = self._preparar_features(features_combined)
-        prob_j1_gana = self.modelo.predict_proba(X)[0, 1]  # P(j1 gana)
-
-        return prob_j1_gana
-
-    def _preparar_features(self, features_dict):
-        """Prepara features en el orden correcto para el modelo"""
-        features_array = []
-        for feat_name in self.feature_cols:
-            if feat_name in features_dict:
-                features_array.append(features_dict[feat_name])
-            else:
-                features_array.append(0.0)
-
-        return pd.DataFrame([features_array], columns=self.feature_cols)
-
     def calcular_kelly_stake(self, prob_modelo, cuota, bankroll_actual):
         """Calcula stake usando Kelly Criterion"""
         prob_implicita = 1.0 / cuota
@@ -442,16 +434,53 @@ class BacktestingProduccionReal:
         """Calcula Expected Value"""
         return (prob * cuota) - 1
 
-    def ejecutar_backtesting(self, df_odds, df_historico):
-        """Ejecuta backtesting completo"""
+    def ejecutar_backtesting(self, df_odds, df_historico, año_backtest=None):
+        """Ejecuta backtesting completo
+
+        Args:
+            df_odds: DataFrame con cuotas
+            df_historico: DataFrame con partidos históricos (para features)
+            año_backtest: Año del backtest (ej: 2024). Si no se pasa, se infiere del rango de df_odds.
+        """
+        if año_backtest is None:
+            año_backtest = df_odds["fecha"].dt.year.min() if "fecha" in df_odds.columns else 2024
+
         logger.info(f"\n{'='*70}")
-        logger.info(f"🎲 BACKTESTING DE PRODUCCIÓN REAL - AÑO 2024")
+        logger.info(f"🎲 BACKTESTING DE PRODUCCIÓN REAL - AÑO {año_backtest}")
         logger.info(f"{'='*70}")
         logger.info(f"Total partidos con cuotas: {len(df_odds)}")
 
-        # Inicializar generador de features con histórico hasta 2024
-        df_historico_pre2024 = df_historico[df_historico["tourney_date"] < "2024-01-01"].copy()
-        feature_gen = ProductionFeatureGenerator(df_historico_pre2024)
+        # Fase 3.2: filtrar solo Grand Slams + Masters 1000 (excluir ATP 250/500)
+        if self.solo_torneos_principales and "serie" in df_odds.columns:
+            df_odds = df_odds[
+                df_odds["serie"].isin(["Grand Slam", "Masters 1000", "Masters Cup"])
+            ].copy()
+            logger.info(f"   Tras filtro torneos principales: {len(df_odds)} partidos")
+
+        # Fase 3.3: filtrar por superficies (ej. excluir Grass: solo Hard + Clay)
+        if self.superficies_permitidas and "superficie" in df_odds.columns:
+            superficie_map = {"Outdoor": "Hard", "Indoor": "Hard", "Carpet": "Hard", "Hard": "Hard", "Clay": "Clay", "Grass": "Grass"}
+            df_odds["_superficie_norm"] = df_odds["superficie"].fillna("Hard").astype(str).map(
+                lambda x: superficie_map.get(x, "Hard")
+            )
+            df_odds = df_odds[df_odds["_superficie_norm"].isin(self.superficies_permitidas)].copy()
+            df_odds = df_odds.drop(columns=["_superficie_norm"], errors="ignore")
+            logger.info(f"   Tras filtro superficies {self.superficies_permitidas}: {len(df_odds)} partidos")
+
+        # Filtro rondas finales (SF, F) - tennis-data usa "Semifinals", "The Final"
+        if self.solo_rondas_finales and "ronda" in df_odds.columns:
+            ronda_norm = df_odds["ronda"].fillna("").astype(str).str.strip().str.upper()
+            mask = ronda_norm.isin([
+                "SF", "F", "SEMIFINAL", "FINAL",
+                "SEMIFINALS", "THE FINAL",  # tennis-data.co.uk
+            ])
+            df_odds = df_odds[mask].copy()
+            logger.info(f"   Tras filtro solo SF/Final: {len(df_odds)} partidos")
+
+        # Histórico: solo datos ANTES del año de backtest (evitar data leakage)
+        fecha_limite = f"{año_backtest}-01-01"
+        df_historico_pre = df_historico[df_historico["tourney_date"] < fecha_limite].copy()
+        feature_gen = ProductionFeatureGenerator(df_historico_pre)
 
         # Ordenar partidos cronológicamente
         df_odds = df_odds.sort_values("fecha").reset_index(drop=True)
@@ -474,6 +503,16 @@ class BacktestingProduccionReal:
                 partidos_sin_jugadores += 1
                 continue
 
+            fecha = pd.to_datetime(partido_odds["fecha"])
+
+            # Fase 3.1: excluir partidos donde algún jugador tiene < min_partidos en últimos 12m
+            if self.min_partidos_jugador > 0:
+                p1 = self._contar_partidos_ultimos_12m(j1_nombre, fecha, df_historico)
+                p2 = self._contar_partidos_ultimos_12m(j2_nombre, fecha, df_historico)
+                if p1 < self.min_partidos_jugador or p2 < self.min_partidos_jugador:
+                    partidos_sin_jugadores += 1
+                    continue
+
             # Normalizar superficie
             superficie = partido_odds.get("superficie", "Hard")
             # Mapear superficies no estándar a las 3 principales
@@ -487,13 +526,16 @@ class BacktestingProduccionReal:
             }
             superficie = superficie_map.get(superficie, "Hard")
 
-            fecha = pd.to_datetime(partido_odds["fecha"])
-
-            # 2. PREDICCIÓN BIDIRECCIONAL (Opción B)
+            # 2. PREDICCIÓN (solo baseline ELO + mercado)
+            cuota_j1 = partido_odds["cuota_jugador_1"]
+            cuota_j2 = partido_odds["cuota_jugador_2"]
             try:
-                prob_j1_gana = self.predecir_partido_bidireccional(
-                    feature_gen, j1_nombre, j2_nombre, superficie, fecha
-                )
+                elo_j1 = feature_gen.elo_system.get_rating(j1_nombre, superficie)
+                elo_j2 = feature_gen.elo_system.get_rating(j2_nombre, superficie)
+                prob_elo = feature_gen.elo_system.expected_score(elo_j1, elo_j2)
+                prob_mercado = 1.0 / cuota_j1 if cuota_j1 and cuota_j1 > 0 else 0.5
+                w = self.baseline_elo_peso
+                prob_j1_gana = w * prob_elo + (1 - w) * prob_mercado
             except Exception as e:
                 logger.warning(f"Error en predicción para {j1_nombre} vs {j2_nombre}: {str(e)}")
                 # Actualizar feature generator incluso si falla la predicción
@@ -516,12 +558,7 @@ class BacktestingProduccionReal:
             ev_j1 = self.calcular_ev(prob_j1_gana, cuota_j1)
             ev_j2 = self.calcular_ev(1 - prob_j1_gana, cuota_j2)
 
-            # FILTROS CONSERVADORES:
-            # 1. Solo favoritos (cuota < max_cuota)
-            # 2. Solo cuando modelo está seguro (prob > min_probabilidad)
-            # 3. EV debe superar umbral alto
-
-            # Apostar al jugador con mayor EV (si supera todos los filtros)
+            # Filtros conservadores: favoritos, prob mínima, EV
             if (
                 ev_j1 > self.umbral_ev
                 and ev_j1 > ev_j2
@@ -671,16 +708,15 @@ def main():
         )
         return
 
-    modelo_path = "modelos/random_forest_calibrado.pkl"
-
-    # ESTRATEGIA CONSERVADORA (RECOMENDADA)
+    # Solo baseline ELO + mercado (modelo_path se ignora)
     backtester = BacktestingProduccionReal(
-        modelo_path=modelo_path,
+        modelo_path="",
         bankroll_inicial=1000.0,
-        kelly_fraction=0.05,  # 5% Kelly (muy conservador)
-        umbral_ev=0.10,  # EV mínimo 10% (solo mejores oportunidades)
-        max_cuota=2.0,  # Solo favoritos
-        min_probabilidad=0.60,  # Solo cuando modelo está seguro (60%+)
+        kelly_fraction=0.05,
+        umbral_ev=0.10,
+        max_cuota=2.0,
+        min_probabilidad=0.70,  # alineado con producción
+        baseline_elo_peso=0.6,
     )
 
     backtester.cargar_modelo()

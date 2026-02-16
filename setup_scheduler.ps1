@@ -81,16 +81,9 @@ if ($Confirmation -eq 'S' -or $Confirmation -eq 's') {
         -ScriptPath "src\automation\data_updater.py" `
         -Time "03:00"
     
-    # 2. Reentrenamiento del modelo (4:00 AM diaria)
-    $Success2 = Create-ScheduledTask `
-        -TaskName "TennisML_ModelRetrain" `
-        -Description "Verificación y reentrenamiento del modelo" `
-        -ScriptPath "src\automation\model_retrainer.py" `
-        -Time "04:00"
-    
     Write-Host ""
     
-    if ($Success1 -and $Success2) {
+    if ($Success1) {
         Write-Host "✅ Todas las tareas instaladas correctamente" -ForegroundColor Green
         Write-Host ""
         Write-Host "📋 Para ver las tareas instaladas:" -ForegroundColor Yellow

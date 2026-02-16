@@ -37,6 +37,7 @@ numpy>=1.26.0
 # Machine Learning
 scikit-learn>=1.3.0
 xgboost>=2.0.0
+# catboost>=1.2.0  # Opcional; requiere Python <3.14 (pip install catboost en entorno 3.11/3.12)
 
 # Visualización
 matplotlib>=3.7.0

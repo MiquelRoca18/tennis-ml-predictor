@@ -25,12 +25,8 @@ def test_predictor():
     logger.info("🧪 TEST 1: PREDICTOR CALIBRADO")
     logger.info("=" * 60)
 
-    model_path = Path(__file__).parent.parent / "modelos" / "random_forest_calibrado.pkl"
-    if not model_path.exists():
-        logger.warning("⚠️  Modelo no encontrado, saltando test")
-        return
-
-    predictor = PredictorCalibrado(str(model_path))
+    # Predictor usa siempre baseline ELO + mercado (no requiere .pkl)
+    predictor = PredictorCalibrado(None)
 
     # Test: predecir_partido
     resultado = predictor.predecir_partido(
