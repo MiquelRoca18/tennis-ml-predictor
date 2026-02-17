@@ -172,29 +172,20 @@ class PlayerService:
     
     def get_player_profile(self, player_key: int) -> Optional[Dict]:
         """
-        Obtiene perfil completo de un jugador
-        
-        Args:
-            player_key: ID del jugador
-            
-        Returns:
-            Dict con perfil completo o None
+        Obtiene perfil completo de un jugador desde la BD.
+        player_key en BD es VARCHAR, por eso se compara como string.
         """
-        # Datos básicos del jugador
+        key_str = str(player_key)
         player = self.db._fetchone(
             "SELECT * FROM players WHERE player_key = :player_key",
-            {"player_key": player_key}
+            {"player_key": key_str}
         )
         
         if not player:
             return None
         
         player_dict = dict(player)
-        
-        # Nota: player_stats table no existe en schema actual
-        # Si se necesita, agregar en el futuro
-        player_dict['stats'] = []
-        
+        player_dict['stats'] = player_dict.get('stats') or []
         return player_dict
     
     def get_player_form(self, player_key: int, last_n: int = 10) -> List[Dict]:

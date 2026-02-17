@@ -45,14 +45,11 @@ class TournamentService:
             Número de torneos sincronizados
         """
         try:
-            # Obtener torneos de la API
-            data = self.api_client._make_request("get_tournaments")
-            
-            if not data or not data.get("result"):
+            # Obtener torneos de la API (get_tournaments ya filtra solo ATP en api_tennis_client)
+            tournaments = self.api_client.get_tournaments()
+            if not tournaments:
                 logger.warning("No se obtuvieron torneos de la API")
                 return 0
-            
-            tournaments = data["result"]
             count = 0
             
             for tournament in tournaments:

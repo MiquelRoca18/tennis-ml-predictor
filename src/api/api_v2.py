@@ -3214,10 +3214,24 @@ Endpoints para jugadores, rankings, H2H y torneos
 # ENDPOINTS ELITE - PLAYERS
 # ============================================================
 
+def _profile_from_api_tennis(api_data: Dict) -> Dict:
+    """Mapea respuesta get_players de API-Tennis al formato que espera el frontend."""
+    return {
+        "player_key": api_data.get("player_key") or api_data.get("player_key_id"),
+        "player_name": api_data.get("player_name") or api_data.get("player") or "",
+        "player_country": api_data.get("player_country") or api_data.get("country"),
+        "country": api_data.get("country") or api_data.get("player_country"),
+        "player_logo": api_data.get("player_logo") or api_data.get("logo"),
+        "atp_ranking": api_data.get("atp_ranking") or api_data.get("ranking"),
+        "atp_points": api_data.get("atp_points") or api_data.get("points"),
+        "stats": api_data.get("stats", []),
+    }
+
+
 @app.get("/players/{player_key}", tags=["Elite - Players"])
 async def get_player_profile(player_key: int):
     """
-    Obtiene perfil completo de un jugador
+    Obtiene perfil completo de un jugador (BD o API-Tennis si no está en BD).
     
     Args:
         player_key: ID del jugador en API-Tennis
@@ -3230,6 +3244,21 @@ async def get_player_profile(player_key: int):
     
     try:
         profile = player_service.get_player_profile(player_key)
+        
+        if not profile and api_client:
+            api_data = api_client.get_player_profile(str(player_key))
+            if api_data:
+                try:
+                    normalized = {
+                        "player_key": api_data.get("player_key") or api_data.get("player_key_id"),
+                        "player_name": api_data.get("player_name") or api_data.get("player", ""),
+                        "player_country": api_data.get("player_country") or api_data.get("country"),
+                        "player_logo": api_data.get("player_logo") or api_data.get("logo"),
+                    }
+                    player_service.update_player_profile(normalized)
+                except Exception as e:
+                    logger.debug("No se pudo guardar perfil en BD: %s", e)
+                profile = _profile_from_api_tennis(api_data)
         
         if not profile:
             raise HTTPException(status_code=404, detail="Jugador no encontrado")
@@ -3650,7 +3679,7 @@ async def sync_rankings():
 @app.get("/tournaments", tags=["Elite - Tournaments"])
 async def get_tournaments(event_type: Optional[str] = None):
     """
-    Obtiene lista de torneos
+    Obtiene lista de torneos (solo ATP; el filtro se aplica al sincronizar en api_tennis_client.get_tournaments).
     
     Args:
         event_type: Filtrar por tipo (opcional)
@@ -3663,12 +3692,10 @@ async def get_tournaments(event_type: Optional[str] = None):
     
     try:
         tournaments = tournament_service.get_all_tournaments(event_type)
-        
         return {
             "total": len(tournaments),
             "tournaments": tournaments
         }
-        
     except Exception as e:
         logger.error(f"Error obteniendo torneos: {e}")
         raise HTTPException(status_code=500, detail=str(e))
