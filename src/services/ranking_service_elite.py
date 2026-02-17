@@ -50,28 +50,33 @@ class RankingServiceElite:
             count = 0
             
             for entry in rankings:
-                player_key = entry.get('player_key')
-                player_name = entry.get('player')
-                ranking = int(entry.get('place', 0))
-                points = int(entry.get('points', 0))
-                movement = entry.get('movement', 'same')
+                raw_key = entry.get('player_key')
+                player_key = str(raw_key) if raw_key is not None else None
+                player_name = entry.get('player') or entry.get('player_name') or ''
+                if not player_key or not player_name:
+                    continue
+                try:
+                    ranking = int(entry.get('place', 0) or 0)
+                    points = int(entry.get('points', 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                movement = entry.get('movement', 'same') or 'same'
                 
-                # Crear o actualizar jugador
-                self.player_service.get_or_create_player(
-                    player_key=player_key,
-                    player_name=player_name
-                )
-                
-                # Actualizar ranking
-                self.player_service.update_ranking(
-                    player_key=player_key,
-                    ranking=ranking,
-                    points=points,
-                    movement=movement,
-                    league='ATP'
-                )
-                
-                count += 1
+                try:
+                    self.player_service.get_or_create_player(
+                        player_key=player_key,
+                        player_name=player_name
+                    )
+                    self.player_service.update_ranking(
+                        player_key=player_key,
+                        ranking=ranking,
+                        points=points,
+                        movement=movement,
+                        league='ATP'
+                    )
+                    count += 1
+                except Exception as e:
+                    logger.warning("Error syncing player %s (%s): %s", player_name, player_key, e)
             
             logger.info(f"✅ Sincronizados {count} rankings ATP")
             return count

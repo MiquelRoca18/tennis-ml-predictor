@@ -243,7 +243,7 @@ class APITennisClient:
 
     def get_rankings(self, league: str = "ATP") -> List[Dict]:
         """
-        Obtiene rankings ATP oficiales
+        Obtiene rankings ATP oficiales (misma petición directa que el diagnóstico para evitar fallos).
         
         Args:
             league: "ATP" (WTA no soportado)
@@ -261,29 +261,30 @@ class APITennisClient:
             
         try:
             logger.info("📊 Consultando rankings ATP...")
-            
-            params = {"event_type": "ATP"}
-            data = self._make_request("get_standings", params)
-            
-            if not data:
-                logger.warning("⚠️  No se obtuvieron rankings ATP de la API (revisa API key y que tu plan incluya Standings)")
+            # Misma petición que get_standings_diagnostic (que sí funciona); timeout mayor por respuesta grande
+            params = {"method": "get_standings", "APIkey": self.api_key, "event_type": "ATP"}
+            response = requests.get(self.base_url, params=params, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            self.requests_made += 1
+
+            if data.get("success") != 1:
+                logger.warning("⚠️  API devolvió success != 1: %s", data.get("success"))
                 return []
-            
-            # result puede ser lista o, en algunos planes, otro formato
+
             raw_result = data.get("result")
             if raw_result is None:
                 logger.warning("⚠️  API devolvió success pero sin campo 'result'")
                 return []
             rankings = raw_result if isinstance(raw_result, list) else []
             if len(rankings) == 0:
-                logger.warning("⚠️  API devolvió 0 jugadores. Comprueba que tu plan API-Tennis incluya 'Standings' (rankings ATP).")
+                logger.warning("⚠️  API devolvió 0 jugadores.")
             else:
-                logger.info(f"✅ {len(rankings)} rankings ATP (individual masculino) obtenidos")
-            
+                logger.info("✅ %s rankings ATP (individual masculino) obtenidos", len(rankings))
             return rankings
             
         except Exception as e:
-            logger.error(f"❌ Error obteniendo rankings: {e}")
+            logger.error("❌ Error obteniendo rankings: %s", e)
             return []
 
     def get_standings_diagnostic(self, event_type: str = "ATP") -> Dict:
