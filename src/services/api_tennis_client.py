@@ -703,13 +703,8 @@ class APITennisClient:
             Lista de jugadores con ranking
         """
         try:
-            params = {
-                "method": "get_standings",
-                "APIkey": self.api_key,
-                "event_type": league
-            }
-            
-            response = self._make_request(params)
+            params = {"event_type": league}
+            response = self._make_request("get_standings", params)
             
             if not response or "result" not in response:
                 return []

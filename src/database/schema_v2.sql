@@ -107,6 +107,19 @@ CREATE INDEX IF NOT EXISTS idx_players_atp_ranking ON players(atp_ranking);
 CREATE INDEX IF NOT EXISTS idx_players_wta_ranking ON players(wta_ranking);
 
 
+-- Tabla de torneos (catálogo API-Tennis, sincronizado por TournamentService)
+CREATE TABLE IF NOT EXISTS tournaments (
+    tournament_key VARCHAR(50) PRIMARY KEY,
+    tournament_name VARCHAR(200) NOT NULL,
+    event_type_key VARCHAR(50),
+    event_type_type VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tournaments_name ON tournaments(tournament_name);
+CREATE INDEX IF NOT EXISTS idx_tournaments_event_type ON tournaments(event_type_type);
+
+
 -- Tabla de historial head to head
 CREATE TABLE IF NOT EXISTS head_to_head (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

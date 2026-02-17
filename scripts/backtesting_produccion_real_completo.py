@@ -9,6 +9,10 @@ Qué hace (mismo proceso que producción):
 3. Apuesta: si EV_j1 > 10% y prob_j1 >= min_probabilidad y cuota_j1 < max_cuota → apostamos a J1.
    Igual para J2. Kelly stake con fraction 0.05, max 10% bankroll, min 5€.
 4. Resultado: en tennis-data Winner/Loser es el resultado real; ganancia = stake*(cuota-1) o -stake.
+5. Bankroll disponible: si el mismo día hay varios partidos, el stake de cada nueva apuesta se calcula con
+   bankroll_disponible = bankroll_actual - sum(stakes de apuestas ya colocadas ese día y aún no liquidadas).
+   Las apuestas se liquidan (resultado aplicado al bankroll) al pasar al día siguiente. Así se simula que
+   el dinero apostado está "comprometido" hasta que termina el partido.
 
 CONFIG MEJOR (guardada, usar BACKTEST_PRESET=mejor):
 - EV>3%, prob>=50%, cuota<3.0 → ~105 apuestas/año (con Kelly), ROI medio ~113% (2021-2024).
@@ -538,6 +542,17 @@ class BacktestingProduccionReal:
         partidos_procesados = 0
         total_staked_flat = 0.0
         total_profit_flat = 0.0
+        # Apuestas colocadas pero aún no liquidadas (mismo día): el siguiente Kelly usa bankroll - pendientes
+        pending_bets = []  # list of {"stake", "ganancia", "idx"}
+        last_settlement_date = None
+
+        def _settle_pending():
+            nonlocal bankroll_actual, pending_bets
+            for p in pending_bets:
+                bankroll_actual += p["ganancia"]
+                apuestas_realizadas[p["idx"]]["bankroll_despues"] = bankroll_actual
+                bankroll_history.append(bankroll_actual)
+            pending_bets.clear()
 
         logger.info(f"\n🔄 Procesando partidos...")
         logger.info(f"{'='*70}\n")
@@ -552,6 +567,14 @@ class BacktestingProduccionReal:
                 continue
 
             fecha = pd.to_datetime(partido_odds["fecha"])
+            fecha_date = pd.Timestamp(fecha).date()
+
+            # Liquidar apuestas del día anterior (así el bankroll refleja resultados ya conocidos)
+            if last_settlement_date is not None and fecha_date > last_settlement_date:
+                _settle_pending()
+            last_settlement_date = fecha_date
+            # Bankroll disponible = lo que tenemos menos lo ya apostado y aún no resuelto (mismo día)
+            available_bankroll = bankroll_actual - sum(p["stake"] for p in pending_bets)
 
             # Fase 3.1: excluir partidos donde algún jugador tiene < min_partidos en últimos 12m
             if self.min_partidos_jugador > 0:
@@ -611,23 +634,24 @@ class BacktestingProduccionReal:
                 stake = self.min_stake_eur
                 if ev_j1 >= ev_j2:
                     ganancia = stake * (cuota_j1 - 1)
-                    bankroll_actual += ganancia
+                    apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j1_nombre, "oponente": j2_nombre,
                         "prob_modelo": prob_j1_gana, "cuota": cuota_j1, "ev": ev_j1,
-                        "stake": stake, "resultado": 1, "ganancia": ganancia, "bankroll_despues": bankroll_actual,
+                        "stake": stake, "resultado": 1, "ganancia": ganancia, "bankroll_despues": None,
                     })
+                    pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
                 else:
                     ganancia = -stake
-                    bankroll_actual += ganancia
+                    apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j2_nombre, "oponente": j1_nombre,
                         "prob_modelo": 1 - prob_j1_gana, "cuota": cuota_j2, "ev": ev_j2,
-                        "stake": stake, "resultado": 0, "ganancia": ganancia, "bankroll_despues": bankroll_actual,
+                        "stake": stake, "resultado": 0, "ganancia": ganancia, "bankroll_despues": None,
                     })
-                bankroll_history.append(bankroll_actual)
+                    pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
             # Filtros normales: favoritos, prob mínima, EV
             elif (
                 ev_j1 > self.umbral_ev
@@ -635,19 +659,18 @@ class BacktestingProduccionReal:
                 and cuota_j1 < self.max_cuota
                 and prob_j1_gana > self.min_probabilidad
             ):
-                # Apostar a jugador 1
+                # Apostar a jugador 1 (Kelly con bankroll disponible = bankroll - apuestas pendientes)
                 if self.use_flat_stake:
                     stake = self.flat_stake_eur
                 else:
-                    stake = self.calcular_kelly_stake(prob_j1_gana, cuota_j1, bankroll_actual)
-                if stake > 0:
+                    stake = self.calcular_kelly_stake(prob_j1_gana, cuota_j1, available_bankroll)
+                if stake > 0 and available_bankroll >= self.min_stake_eur:
                     # jugador_1 SIEMPRE es el ganador en los datos
                     ganancia = stake * (cuota_j1 - 1)
-                    bankroll_actual += ganancia
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
-
+                    apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append(
                         {
                             "fecha": fecha,
@@ -660,29 +683,28 @@ class BacktestingProduccionReal:
                             "stake": stake,
                             "resultado": 1,
                             "ganancia": ganancia,
-                            "bankroll_despues": bankroll_actual,
+                            "bankroll_despues": None,
                         }
                     )
-                    bankroll_history.append(bankroll_actual)
+                    pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
 
             elif (
                 ev_j2 > self.umbral_ev
                 and cuota_j2 < self.max_cuota
                 and (1 - prob_j1_gana) > self.min_probabilidad
             ):
-                # Apostar a jugador 2
+                # Apostar a jugador 2 (Kelly con bankroll disponible = bankroll - apuestas pendientes)
                 if self.use_flat_stake:
                     stake = self.flat_stake_eur
                 else:
-                    stake = self.calcular_kelly_stake(1 - prob_j1_gana, cuota_j2, bankroll_actual)
-                if stake > 0:
+                    stake = self.calcular_kelly_stake(1 - prob_j1_gana, cuota_j2, available_bankroll)
+                if stake > 0 and available_bankroll >= self.min_stake_eur:
                     # jugador_2 SIEMPRE es el perdedor en los datos
                     ganancia = -stake
-                    bankroll_actual += ganancia
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
-
+                    apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append(
                         {
                             "fecha": fecha,
@@ -695,10 +717,10 @@ class BacktestingProduccionReal:
                             "stake": stake,
                             "resultado": 0,
                             "ganancia": ganancia,
-                            "bankroll_despues": bankroll_actual,
+                            "bankroll_despues": None,
                         }
                     )
-                    bankroll_history.append(bankroll_actual)
+                    pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
 
             # 4. ACTUALIZAR FEATURE GENERATOR con el resultado real
             feature_gen.actualizar_con_partido(
@@ -716,6 +738,9 @@ class BacktestingProduccionReal:
                 logger.info(
                     f"  Bankroll: {bankroll_actual:.2f}€ ({(bankroll_actual/self.bankroll_inicial-1)*100:+.1f}%)\n"
                 )
+
+        # Liquidar apuestas pendientes del último día
+        _settle_pending()
 
         logger.info(f"\n{'='*70}")
         logger.info(f"✅ BACKTESTING COMPLETADO")
@@ -790,17 +815,19 @@ class BacktestingProduccionReal:
 
 def main():
     """
-    Función principal. Backtesting baseline 60% ELO + 40% mercado para todos los años (2022, 2023, 2024).
-    Config que dio ROI ~7.8% promedio y ROI positivo cada año.
+    Función principal. Backtesting baseline 60% ELO + 40% mercado para todos los años (2021-2024).
+    Por defecto usa preset mitad_partidos (EV>0.01%, prob>=0%, cuota<100, stake mín 1€), el mismo
+    que en producción; ~76-86% partidos con apuesta, ROI promedio ~577%. Para otro config:
+    BACKTEST_PRESET=mejor|conservador|todos_partidos o BACKTEST_EV + BACKTEST_MIN_PROB + BACKTEST_MAX_CUOTA.
     """
     # 4 años
     AÑOS = [2021, 2022, 2023, 2024]
 
-    # Parámetros: BACKTEST_PRESET=mejor | BACKTEST_MAS_APUESTAS=1 | BACKTEST_EV + MIN_PROB + MAX_CUOTA
+    # Parámetros: BACKTEST_PRESET=mejor | mitad_partidos (por defecto, mismo que producción) | BACKTEST_MAS_APUESTAS=1 | BACKTEST_EV + MIN_PROB + MAX_CUOTA
     ev_env = os.environ.get("BACKTEST_EV")
     prob_env = os.environ.get("BACKTEST_MIN_PROB")
     cuota_env = os.environ.get("BACKTEST_MAX_CUOTA")
-    preset = (os.environ.get("BACKTEST_PRESET") or "").strip().lower()
+    preset = (os.environ.get("BACKTEST_PRESET") or "mitad_partidos").strip().lower()
     config_label = ""
 
     if preset == "mejor":
@@ -838,8 +865,8 @@ def main():
 
     use_flat_stake = os.environ.get("BACKTEST_FLAT_STAKE", "").lower() in ("1", "true", "yes")
     flat_stake_eur = float(os.environ.get("BACKTEST_FLAT_STAKE_EUR", "10"))
-    # Para BACKTEST_PRESET=mitad_partidos usar BACKTEST_MIN_STAKE_EUR=1
-    min_stake_eur = float(os.environ.get("BACKTEST_MIN_STAKE_EUR", "5"))
+    # Por defecto stake mín 1€ para mitad_partidos (config producción); otro preset usa 5€
+    min_stake_eur = float(os.environ.get("BACKTEST_MIN_STAKE_EUR", "1" if preset == "mitad_partidos" else "5"))
     if preset == "mitad_partidos" and min_stake_eur > 1:
         min_stake_eur = 1.0
         logger.info("📌 Preset mitad_partidos: usando BACKTEST_MIN_STAKE_EUR=1")

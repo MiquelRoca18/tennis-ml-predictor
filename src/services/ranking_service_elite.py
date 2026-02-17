@@ -16,13 +16,14 @@ class RankingServiceElite:
     def __init__(self, db_connection, api_client, player_service):
         """
         Args:
-            db_connection: Conexión a la base de datos
+            db_connection: Conexión a la base de datos (MatchDatabase o sqlite3.Connection)
             api_client: Cliente de API-Tennis
             player_service: Servicio de jugadores
         """
         self.conn = db_connection
         self.api_client = api_client
         self.player_service = player_service
+        self.db = db_connection if hasattr(db_connection, '_fetchall') else None
         logger.info("✅ RankingServiceElite initialized")
     
     def sync_atp_rankings(self, limit: int = 100) -> int:
@@ -101,23 +102,37 @@ class RankingServiceElite:
         Returns:
             Lista de jugadores ordenados por ranking
         """
+        if self.db:
+            if league == 'ATP':
+                players = self.db._fetchall("""
+                    SELECT * FROM players
+                    WHERE atp_ranking IS NOT NULL
+                    ORDER BY atp_ranking ASC
+                    LIMIT :limit
+                """, {"limit": limit})
+            else:
+                players = self.db._fetchall("""
+                    SELECT * FROM players
+                    WHERE wta_ranking IS NOT NULL
+                    ORDER BY wta_ranking ASC
+                    LIMIT :limit
+                """, {"limit": limit})
+            return [dict(p) for p in players] if players else []
         cursor = self.conn.cursor()
-        
         if league == 'ATP':
             players = cursor.execute("""
-                SELECT * FROM players 
+                SELECT * FROM players
                 WHERE atp_ranking IS NOT NULL
                 ORDER BY atp_ranking ASC
                 LIMIT ?
             """, (limit,)).fetchall()
         else:
             players = cursor.execute("""
-                SELECT * FROM players 
+                SELECT * FROM players
                 WHERE wta_ranking IS NOT NULL
                 ORDER BY wta_ranking ASC
                 LIMIT ?
             """, (limit,)).fetchall()
-        
         return [dict(p) for p in players]
     
     def get_player_ranking_info(self, player_key: int) -> Optional[Dict]:
@@ -130,15 +145,23 @@ class RankingServiceElite:
         Returns:
             Dict con info de ranking o None
         """
+        if self.db:
+            row = self.db._fetchone("""
+                SELECT player_key, player_name,
+                       atp_ranking, wta_ranking,
+                       atp_points, wta_points,
+                       ranking_movement
+                FROM players
+                WHERE player_key = :player_key
+            """, {"player_key": player_key})
+            return dict(row) if row else None
         cursor = self.conn.cursor()
-        
         player = cursor.execute("""
-            SELECT 
-                player_key, player_name,
-                atp_ranking, wta_ranking,
-                ranking_points, ranking_movement
+            SELECT player_key, player_name,
+                   atp_ranking, wta_ranking,
+                   atp_points, wta_points,
+                   ranking_movement
             FROM players
             WHERE player_key = ?
         """, (player_key,)).fetchone()
-        
         return dict(player) if player else None
