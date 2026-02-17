@@ -286,6 +286,41 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo rankings: {e}")
             return []
 
+    def get_standings_diagnostic(self, event_type: str = "ATP") -> Dict:
+        """
+        Llama a get_standings y devuelve solo diagnóstico (success, result_count, primer jugador).
+        No filtra por success=1, para poder ver si la API key falla o ATP viene vacío.
+        """
+        try:
+            params = {"method": "get_standings", "APIkey": self.api_key, "event_type": event_type}
+            response = requests.get(self.base_url, params=params, timeout=30)
+            data = response.json()
+            result = data.get("result")
+            count = len(result) if isinstance(result, list) else 0
+            first = (result[0].get("player") if result and isinstance(result[0], dict) else None)
+            if data.get("success") == 1 and count > 0:
+                msg = "API key OK, hay datos."
+            elif data.get("success") == 1:
+                msg = "API key OK pero result vacío. Prueba con event_type=WTA en la URL; si WTA sí devuelve datos, tu plan puede no incluir ATP Standings."
+            else:
+                msg = "API devolvió success distinto de 1. En Railway debe estar configurada la variable API_TENNIS_API_KEY con la misma key que usas en el curl que te funciona (la de WTA)."
+            return {
+                "api_success": data.get("success"),
+                "result_count": count,
+                "first_player": first,
+                "event_type": event_type,
+                "message": msg,
+            }
+        except Exception as e:
+            logger.exception("get_standings_diagnostic failed")
+            return {
+                "api_success": 0,
+                "result_count": 0,
+                "first_player": None,
+                "event_type": event_type,
+                "message": f"Error: {e}",
+            }
+
     def get_h2h(self, player1_key: str, player2_key: str) -> Dict:
         """
         Obtiene historial Head to Head entre 2 jugadores

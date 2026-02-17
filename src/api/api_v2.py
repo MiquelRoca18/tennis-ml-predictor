@@ -3466,6 +3466,22 @@ async def get_player_ranking(player_key: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/rankings-api-diagnostic", tags=["Admin"])
+async def rankings_api_diagnostic(event_type: str = "ATP"):
+    """
+    Comprueba qué devuelve la API de api-tennis al pedir standings (ATP o WTA).
+    Útil para ver si API_TENNIS_API_KEY en Railway es correcta y si tu plan devuelve ATP.
+    """
+    if not api_client:
+        raise HTTPException(status_code=503, detail="API client not available")
+    try:
+        info = api_client.get_standings_diagnostic(event_type=event_type)
+        return info
+    except Exception as e:
+        logger.exception("rankings_api_diagnostic failed")
+        return {"api_success": 0, "result_count": 0, "message": str(e)}
+
+
 @app.get("/rankings/sync/diagnostic", tags=["Elite - Rankings"])
 async def rankings_sync_diagnostic():
     """
