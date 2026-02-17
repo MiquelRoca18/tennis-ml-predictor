@@ -3407,10 +3407,10 @@ async def get_rankings(
     limit: int = Query(100, ge=1, le=500)
 ):
     """
-    Obtiene rankings ATP o WTA
+    Obtiene ranking ATP (individual masculino). Solo ATP; WTA no se usa en esta app.
     
     Args:
-        league: 'ATP' o 'WTA'
+        league: Solo 'ATP' (individual masculino)
         limit: Número de jugadores (1-500)
         
     Returns:
@@ -3419,14 +3419,15 @@ async def get_rankings(
     if not ranking_service:
         raise HTTPException(status_code=503, detail="Ranking service not available")
     
-    if league.upper() not in ['ATP', 'WTA']:
-        raise HTTPException(status_code=400, detail="League debe ser ATP o WTA")
+    if league.upper() != "ATP":
+        raise HTTPException(status_code=400, detail="Esta app solo usa ranking ATP (individual masculino). Usa league=ATP.")
     
     try:
-        players = ranking_service.get_top_players(league.upper(), limit)
+        players = ranking_service.get_top_players("ATP", limit)
         
         return {
-            "league": league.upper(),
+            "league": "ATP",
+            "label": "ATP Individual masculino",
             "total": len(players),
             "players": players
         }
@@ -3617,7 +3618,8 @@ async def sync_rankings():
         return {
             "success": True,
             "rankings_synced": atp_count,
-            "message": f"Sincronizados {atp_count} rankings ATP"
+            "message": f"Sincronizados {atp_count} rankings ATP (individual masculino)",
+            "hint": "Si rankings_synced es 0, comprueba que tu plan en api-tennis.com incluya 'Standings' y que API_TENNIS_API_KEY sea correcta."
         }
         
     except Exception as e:

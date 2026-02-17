@@ -266,11 +266,19 @@ class APITennisClient:
             data = self._make_request("get_standings", params)
             
             if not data:
-                logger.warning("⚠️  No se obtuvieron rankings ATP de la API")
+                logger.warning("⚠️  No se obtuvieron rankings ATP de la API (revisa API key y que tu plan incluya Standings)")
                 return []
-                
-            rankings = data.get("result", [])
-            logger.info(f"✅ {len(rankings)} rankings ATP obtenidos")
+            
+            # result puede ser lista o, en algunos planes, otro formato
+            raw_result = data.get("result")
+            if raw_result is None:
+                logger.warning("⚠️  API devolvió success pero sin campo 'result'")
+                return []
+            rankings = raw_result if isinstance(raw_result, list) else []
+            if len(rankings) == 0:
+                logger.warning("⚠️  API devolvió 0 jugadores. Comprueba que tu plan API-Tennis incluya 'Standings' (rankings ATP).")
+            else:
+                logger.info(f"✅ {len(rankings)} rankings ATP (individual masculino) obtenidos")
             
             return rankings
             

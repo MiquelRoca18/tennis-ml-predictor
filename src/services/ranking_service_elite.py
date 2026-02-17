@@ -28,7 +28,8 @@ class RankingServiceElite:
     
     def sync_atp_rankings(self, limit: int = 100) -> int:
         """
-        Sincroniza rankings ATP desde API
+        Sincroniza ranking ATP (individual masculino) desde API.
+        Solo individuales masculinos; WTA y dobles no se usan en esta app.
         
         Args:
             limit: Número máximo de rankings a sincronizar
@@ -37,16 +38,15 @@ class RankingServiceElite:
             Número de rankings sincronizados
         """
         try:
-            logger.info(f"🔄 Sincronizando rankings ATP (top {limit})...")
+            logger.info(f"🔄 Sincronizando ranking ATP individual masculino (top {limit})...")
             
-            # Usar nuevo método get_rankings()
             rankings = self.api_client.get_rankings(league="ATP")
             
             if not rankings:
-                logger.warning("No se obtuvieron rankings ATP de la API")
+                logger.warning("No se obtuvieron rankings ATP de la API (plan o API key)")
                 return 0
             
-            rankings = rankings[:limit] # Apply limit after fetching
+            rankings = rankings[:limit]
             count = 0
             
             for entry in rankings:
