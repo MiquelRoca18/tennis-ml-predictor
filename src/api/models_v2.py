@@ -399,6 +399,9 @@ class MatchResponse(BaseModel):
     # Motivo de finalización (Retired, Walk Over, etc.) para mostrar en card
     event_status: Optional[str] = None
 
+    # Flag explícito para que la card muestre "En directo" (alineado con estado === en_juego)
+    is_live: bool = False
+
     class Config:
         json_schema_extra = {
             "example": {

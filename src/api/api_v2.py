@@ -691,6 +691,7 @@ async def get_matches_by_date(
                 prediccion=prediccion,
                 resultado=resultado,
                 event_status=p.get("event_status"),
+                is_live=(effective_estado == "en_juego"),
             )
 
             partidos.append(partido)

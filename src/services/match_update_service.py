@@ -915,4 +915,3 @@ if __name__ == "__main__":
             }
         except Exception:
             return {"partidos_pendientes": 0, "estado": "desconocido"}
-
