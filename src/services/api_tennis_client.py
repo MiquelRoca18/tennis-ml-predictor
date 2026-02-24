@@ -386,6 +386,7 @@ class APITennisClient:
     def get_livescore(self) -> List[Dict]:
         """
         Obtiene partidos en vivo (get_livescore). Usado como fallback cuando WebSocket no está o para refresco periódico.
+        Misma lógica de filtro que daily_match_fetcher: ATP + Challenger + ITF Men Singles (excluir dobles, WTA, júnior).
         Returns:
             Lista de partidos en vivo con scores, event_final_result, etc.
         """
@@ -397,13 +398,30 @@ class APITennisClient:
             if not data:
                 return []
             matches = data.get("result", [])
-            def is_atp_singles(m):
-                t = (m.get("event_type") or m.get("event_type_type") or "").upper()
-                return "ATP" in t and "DOUBLES" not in t and "WTA" not in t
-            return [m for m in matches if is_atp_singles(m)]
+            return [m for m in matches if self._is_men_singles_event(m)]
         except Exception as e:
             logger.debug(f"Error get_livescore: {e}")
             return []
+
+    def _is_men_singles_event(self, m: Dict) -> bool:
+        """
+        True si el partido es masculino individual (ATP, Challenger, ITF Men).
+        Misma lógica que daily_match_fetcher para que lista/detalle en directo coincidan con los partidos que mostramos.
+        """
+        t = (m.get("event_type") or m.get("event_type_type") or "").upper()
+        league = (m.get("league") or "").upper()
+        if not t:
+            return False
+        if "DOUBLES" in t or "DOUBLE" in t or "BOYS" in t or "GIRLS" in t or "WTA" in t or "WOMEN" in t:
+            return False
+        is_singles = "SINGLES" in t or "SINGLE" in t
+        if not is_singles:
+            return False
+        is_atp_main = "ATP" in t or "ATP" in league
+        is_challenger = "CHALLENGER" in t and "MEN" in t
+        is_itf_men = "ITF" in t and "MEN" in t
+        is_men_singles = "MEN" in t and is_singles
+        return is_atp_main or is_challenger or is_itf_men or is_men_singles
 
     def get_tournaments(self) -> List[Dict]:
         """
