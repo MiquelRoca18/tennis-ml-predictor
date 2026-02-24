@@ -495,15 +495,31 @@ async def get_matches_by_date(
             if api_client:
                 live_list = api_client.get_livescore()
                 if live_list:
-                    live_by_key = {}
-                    for m in live_list:
-                        k = m.get("event_key")
-                        if k is not None:
-                            live_by_key[str(k)] = m
+                    live_by_key = {str(m.get("event_key")): m for m in live_list if m.get("event_key") is not None}
                     for p in partidos_raw:
                         ek = p.get("event_key")
                         mid = p.get("id")
                         live_api = (live_by_key.get(str(ek)) if ek is not None else None) or (live_by_key.get(str(mid)) if mid is not None else None)
+                        if not live_api:
+                            # Sin event_key en BD: emparejar por jugadores + fecha
+                            j1 = (p.get("jugador1_nombre") or p.get("jugador1") or "").strip()
+                            j2 = (p.get("jugador2_nombre") or p.get("jugador2") or "").strip()
+                            fecha_p = p.get("fecha_partido")
+                            fecha_str = fecha_p.strftime("%Y-%m-%d") if hasattr(fecha_p, "strftime") else (str(fecha_p)[:10] if fecha_p else "")
+                            for m in live_list:
+                                if m.get("event_live") != "1":
+                                    continue
+                                aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip().lower()
+                                aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip().lower()
+                                adate = (m.get("event_date") or "")[:10]
+                                if not j1 or not j2 or not adate or fecha_str != adate:
+                                    continue
+                                j1l = j1.lower()
+                                j2l = j2.lower()
+                                same = (j1l == aj1 or j1l.split()[-1] == aj1.split()[-1] or j1l in aj1 or aj1 in j1l) and (j2l == aj2 or j2l.split()[-1] == aj2.split()[-1] or j2l in aj2 or aj2 in j2l)
+                                if same:
+                                    live_api = m
+                                    break
                         if live_api and live_api.get("event_live") == "1":
                             p["estado"] = "en_juego"
                             p["event_final_result"] = live_api.get("event_final_result")

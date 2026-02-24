@@ -110,36 +110,88 @@ def get_api_client():
     return _api_client
 
 
-def _enrich_match_with_livescore(match: dict, api_client) -> Optional[str]:
+def _normalize_player_for_match(a: str, b: str) -> bool:
+    """True si los dos nombres se refieren al mismo jugador (por apellido o nombre completo)."""
+    if not a or not b:
+        return False
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    if a == b:
+        return True
+    # Apellido: última palabra (ej. "M. Dodig" -> "dodig")
+    a_last = a.split()[-1] if a else ""
+    b_last = b.split()[-1] if b else ""
+    return a_last == b_last or a in b or b in a
+
+
+def _enrich_match_with_livescore(match: dict, api_client, db=None, match_id: Optional[int] = None) -> Optional[str]:
     """
     Si el partido está en get_livescore con event_live=1, actualiza el dict match
     con los datos en vivo y devuelve 'en_juego'. Si no, devuelve None.
+    Empareja por event_key/id y, si no hay event_key en BD, por jugadores + fecha.
     """
     event_key = match.get("event_key")
-    match_id = match.get("id")
-    if event_key is None and match_id is None:
-        return None
+    mid = match.get("id") or match_id
     try:
         live_list = api_client.get_livescore()
         if not live_list:
             return None
+        # 1) Emparejar por event_key o por id (por si id == event_key en algún flujo)
         for api_m in live_list:
             api_key = api_m.get("event_key")
             if api_key is None:
                 continue
-            if str(api_key) == str(event_key) or str(api_key) == str(match_id):
+            if (event_key is not None and str(api_key) == str(event_key)) or (mid is not None and str(api_key) == str(mid)):
                 if api_m.get("event_live") != "1":
                     return None
-                match["event_final_result"] = api_m.get("event_final_result")
-                match["event_game_result"] = api_m.get("event_game_result")
-                match["event_serve"] = api_m.get("event_serve")
-                match["event_status"] = api_m.get("event_status")
-                match["event_live"] = "1"
+                _merge_live_into_match(match, api_m, db=db, match_id=mid)
+                return "en_juego"
+        # 2) Si no hay event_key en BD (o no coincidió), emparejar por jugadores + fecha
+        j1 = (match.get("jugador1_nombre") or match.get("jugador1") or "").strip()
+        j2 = (match.get("jugador2_nombre") or match.get("jugador2") or "").strip()
+        fecha = match.get("fecha_partido")
+        if fecha is not None and hasattr(fecha, "strftime"):
+            fecha_str = fecha.strftime("%Y-%m-%d")
+        else:
+            fecha_str = str(fecha)[:10] if fecha else ""
+        if not j1 or not j2:
+            return None
+        for api_m in live_list:
+            if api_m.get("event_live") != "1":
+                continue
+            api_j1 = (api_m.get("event_first_player") or api_m.get("event_home_team") or "").strip()
+            api_j2 = (api_m.get("event_second_player") or api_m.get("event_away_team") or "").strip()
+            api_date = (api_m.get("event_date") or "")[:10]
+            if not api_date:
+                continue
+            if _normalize_player_for_match(j1, api_j1) and _normalize_player_for_match(j2, api_j2) and api_date == fecha_str:
+                _merge_live_into_match(match, api_m, db=db, match_id=mid)
+                # Persistir event_key en BD si faltaba, para futuras peticiones
+                if (event_key is None or (isinstance(event_key, str) and not event_key.strip())) and mid and db:
+                    try:
+                        new_ek = api_m.get("event_key")
+                        if new_ek is not None:
+                            db._execute(
+                                "UPDATE matches SET event_key = :ek WHERE id = :id",
+                                {"ek": str(new_ek), "id": mid},
+                            )
+                            logger.debug("Guardado event_key %s para match id=%s", new_ek, mid)
+                    except Exception as e:
+                        logger.debug("No se pudo actualizar event_key en BD: %s", e)
                 return "en_juego"
         return None
     except Exception as e:
         logger.debug("Enrich livescore: %s", e)
         return None
+
+
+def _merge_live_into_match(match: dict, api_m: dict, db=None, match_id: Optional[int] = None):
+    """Escribe en el dict match los campos en vivo del partido API."""
+    match["event_final_result"] = api_m.get("event_final_result")
+    match["event_game_result"] = api_m.get("event_game_result")
+    match["event_serve"] = api_m.get("event_serve")
+    match["event_status"] = api_m.get("event_status")
+    match["event_live"] = "1"
 
 
 # ============================================================
@@ -189,7 +241,7 @@ async def get_match_full(match_id: int):
             db_estado = "pendiente"
         try:
             api_client = get_api_client()
-            live_estado = _enrich_match_with_livescore(match, api_client)
+            live_estado = _enrich_match_with_livescore(match, api_client, db=db, match_id=match_id)
             if live_estado == "en_juego":
                 db_estado = "en_juego"
         except Exception:
