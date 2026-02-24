@@ -110,6 +110,38 @@ def get_api_client():
     return _api_client
 
 
+def _enrich_match_with_livescore(match: dict, api_client) -> Optional[str]:
+    """
+    Si el partido está en get_livescore con event_live=1, actualiza el dict match
+    con los datos en vivo y devuelve 'en_juego'. Si no, devuelve None.
+    """
+    event_key = match.get("event_key")
+    match_id = match.get("id")
+    if event_key is None and match_id is None:
+        return None
+    try:
+        live_list = api_client.get_livescore()
+        if not live_list:
+            return None
+        for api_m in live_list:
+            api_key = api_m.get("event_key")
+            if api_key is None:
+                continue
+            if str(api_key) == str(event_key) or str(api_key) == str(match_id):
+                if api_m.get("event_live") != "1":
+                    return None
+                match["event_final_result"] = api_m.get("event_final_result")
+                match["event_game_result"] = api_m.get("event_game_result")
+                match["event_serve"] = api_m.get("event_serve")
+                match["event_status"] = api_m.get("event_status")
+                match["event_live"] = "1"
+                return "en_juego"
+        return None
+    except Exception as e:
+        logger.debug("Enrich livescore: %s", e)
+        return None
+
+
 # ============================================================
 # ENDPOINT PRINCIPAL: /matches/{id}/full
 # ============================================================
@@ -149,11 +181,21 @@ async def get_match_full(match_id: int):
             match = db.get_match(match_id)
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
-        
-        # 2. Construir información del partido
+
+        # 1b. Enriquecer con get_livescore: si API-Tennis marca el partido en directo, usar ese estado
+        # para que el detalle no muestre "PROGRAMADO" cuando el partido ya está en vivo.
         db_estado = match.get("estado", "pendiente")
         if db_estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
             db_estado = "pendiente"
+        try:
+            api_client = get_api_client()
+            live_estado = _enrich_match_with_livescore(match, api_client)
+            if live_estado == "en_juego":
+                db_estado = "en_juego"
+        except Exception:
+            pass
+
+        # 2. Construir información del partido
         # Si el partido es futuro, no mostrar en_juego (API-Tennis puede tener bugs).
         # NUNCA sobrescribir "completado": partidos terminados siempre muestran stats/timeline.
         if db_estado == "completado":
@@ -272,10 +314,8 @@ async def get_match_full(match_id: int):
                     except Exception as e:
                         logger.debug(f"Error parseando marcador: {e}")
         
-        # PRIORIDAD 3: Usar event_final_result para sets_won SOLO si partido completado
-        # En vivo NO usar event_final_result: la API puede enviar "2-0" como sets actuales
-        # aunque el set 2 siga en curso (ej. 3-1 en juegos).
-        if (not scores or not scores.sets) and estado != "en_juego":
+        # PRIORIDAD 3: Usar event_final_result para sets_won (completado o en vivo sin match_sets)
+        if not scores or not scores.sets:
             event_final_result = match.get("event_final_result")
             if event_final_result and "-" in event_final_result:
                 try:

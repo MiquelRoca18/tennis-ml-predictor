@@ -490,6 +490,30 @@ async def get_matches_by_date(
         db_time = time.time() - db_start
         logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
+        # Enriquecer con get_livescore: partidos que API-Tennis marca en directo deben mostrarse en directo
+        try:
+            if api_client:
+                live_list = api_client.get_livescore()
+                if live_list:
+                    live_by_key = {}
+                    for m in live_list:
+                        k = m.get("event_key")
+                        if k is not None:
+                            live_by_key[str(k)] = m
+                    for p in partidos_raw:
+                        ek = p.get("event_key")
+                        mid = p.get("id")
+                        live_api = (live_by_key.get(str(ek)) if ek is not None else None) or (live_by_key.get(str(mid)) if mid is not None else None)
+                        if live_api and live_api.get("event_live") == "1":
+                            p["estado"] = "en_juego"
+                            p["event_final_result"] = live_api.get("event_final_result")
+                            p["event_game_result"] = live_api.get("event_game_result")
+                            p["event_serve"] = live_api.get("event_serve")
+                            p["event_status"] = live_api.get("event_status")
+                            p["event_live"] = "1"
+        except Exception as e:
+            logger.debug("Enrich /matches with get_livescore: %s", e)
+
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
             p["id"] for p in partidos_raw
@@ -2182,7 +2206,6 @@ async def get_jobs_health():
     except Exception as e:
         logger.error(f"❌ Error en jobs-health: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @app.get("/admin/pending-matches", tags=["Admin"])
