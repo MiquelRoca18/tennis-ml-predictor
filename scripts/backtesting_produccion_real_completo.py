@@ -18,9 +18,10 @@ CONFIG MEJOR (guardada, usar BACKTEST_PRESET=mejor):
 - EV>3%, prob>=50%, cuota<3.0 → ~105 apuestas/año (con Kelly), ROI medio ~113% (2021-2024).
 - El ROI con Kelly sube con más apuestas por compounding; para comparar configs usar BACKTEST_FLAT_STAKE=1 (stake fijo 10€).
 
-Datos para cada predicción (sin leakage): partidos ordenados por fecha; para un partido en 12-04-2024
-se usa ELO calculado con todo el histórico antes de 2024 y con todos los partidos ya procesados en 2024
-(tras cada partido se llama actualizar_con_partido). Nunca se usa el resultado del partido que se predice.
+Datos para cada predicción (sin leakage): partidos ordenados por fecha. Para el backtest de un año Y se
+carga el histórico de partidos desde AÑO_INICIO hasta Y (p. ej. 2021–2024 para Y=2024). El ELO al inicio
+de Y se calcula con todo el histórico antes del 01-01-Y; luego se actualiza con actualizar_con_partido tras
+cada partido procesado. Nunca se usa el resultado del partido que se predice.
 
 Config conservador (por defecto sin preset): EV 10%, prob 70%, cuota 2.0 (~16/año).
 Filtros opcionales DESACTIVADOS: solo_torneos_principales=False, solo_rondas_finales=False,
@@ -820,8 +821,13 @@ def main():
     que en producción; ~76-86% partidos con apuesta, ROI promedio ~577%. Para otro config:
     BACKTEST_PRESET=mejor|conservador|todos_partidos o BACKTEST_EV + BACKTEST_MIN_PROB + BACKTEST_MAX_CUOTA.
     """
-    # 4 años
+    # 4 años de backtesting; histórico se carga desde AÑO_INICIO para tener ELO con más contexto
     AÑOS = [2021, 2022, 2023, 2024]
+    AÑO_INICIO = min(AÑOS)  # 2021: primer año para construir histórico (evita ELO "en frío")
+    # Por defecto: solo año anterior (BACKTEST_SOLO_ANO_ANTERIOR=1). Si BACKTEST_SOLO_ANO_ANTERIOR=0: multi-año (2021..año).
+    solo_ano_anterior = os.environ.get("BACKTEST_SOLO_ANO_ANTERIOR", "1").lower() in ("1", "true", "yes")
+    if solo_ano_anterior:
+        logger.info("📌 Modo SOLO AÑO ANTERIOR: ELO con histórico del año previo únicamente")
 
     # Parámetros: BACKTEST_PRESET=mejor | mitad_partidos (por defecto, mismo que producción) | BACKTEST_MAS_APUESTAS=1 | BACKTEST_EV + MIN_PROB + MAX_CUOTA
     ev_env = os.environ.get("BACKTEST_EV")
@@ -904,20 +910,46 @@ def main():
         logger.info("=" * 70)
 
         try:
-            historico_file, odds_file = descargar_datos_automaticamente(AÑO_BACKTESTING)
+            # Descargar partidos: multi-año (AÑO_INICIO..AÑO_BACKTESTING) o solo año anterior (AÑO_BACKTESTING-1 y AÑO_BACKTESTING)
+            if solo_ano_anterior:
+                año_carga_desde = max(AÑO_INICIO, AÑO_BACKTESTING - 1)
+            else:
+                año_carga_desde = AÑO_INICIO
+            for año_descarga in range(año_carga_desde, AÑO_BACKTESTING + 1):
+                descargar_datos_automaticamente(año_descarga)
+            _, odds_file = descargar_datos_automaticamente(AÑO_BACKTESTING)
         except Exception as e:
             logger.error(f"❌ Error descargando datos {AÑO_BACKTESTING}: {e}")
             resumen_años.append({"año": AÑO_BACKTESTING, "apuestas": 0, "ganadas": 0, "perdidas": 0, "win_rate_%": None, "roi_%": None})
             continue
 
-        logger.info(f"\n📂 Cargando datos...")
+        if solo_ano_anterior:
+            año_carga_desde = max(AÑO_INICIO, AÑO_BACKTESTING - 1)
+        else:
+            año_carga_desde = AÑO_INICIO
+
+        logger.info(f"\n📂 Cargando datos (histórico {año_carga_desde}–{AÑO_BACKTESTING} para ELO)...")
         df_odds = pd.read_csv(odds_file)
         df_odds["fecha"] = pd.to_datetime(df_odds["fecha"])
-        logger.info(f"✅ {len(df_odds)} partidos con cuotas")
+        logger.info(f"✅ {len(df_odds)} partidos con cuotas (año {AÑO_BACKTESTING})")
 
-        df_historico = pd.read_csv(historico_file)
-        df_historico["tourney_date"] = pd.to_datetime(df_historico["tourney_date"])
-        logger.info(f"✅ {len(df_historico)} partidos históricos")
+        # Concatenar partidos de todos los años desde año_carga_desde hasta AÑO_BACKTESTING
+        datos_dir = Path("datos/raw")
+        dfs_partidos = []
+        for año in range(año_carga_desde, AÑO_BACKTESTING + 1):
+            partidos_file = datos_dir / f"atp_matches_{año}_tml.csv"
+            if partidos_file.exists():
+                df_año = pd.read_csv(partidos_file)
+                df_año["tourney_date"] = pd.to_datetime(df_año["tourney_date"])
+                dfs_partidos.append(df_año)
+        df_historico = pd.concat(dfs_partidos, ignore_index=True) if dfs_partidos else pd.DataFrame()
+        if not df_historico.empty:
+            df_historico = df_historico.sort_values("tourney_date").reset_index(drop=True)
+        logger.info(f"✅ {len(df_historico)} partidos históricos ({año_carga_desde}–{AÑO_BACKTESTING})")
+        if df_historico.empty:
+            logger.error("❌ No hay partidos históricos; necesarios para ELO. Revisar datos/raw/.")
+            resumen_años.append({"año": AÑO_BACKTESTING, "apuestas": 0, "ganadas": 0, "perdidas": 0, "win_rate_%": None, "roi_%": None})
+            continue
 
         apuestas, bankroll_history = backtester.ejecutar_backtesting(df_odds, df_historico, año_backtest=AÑO_BACKTESTING)
 

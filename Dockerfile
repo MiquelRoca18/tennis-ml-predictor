@@ -32,9 +32,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Instalar solo dependencias runtime necesarias
+# Instalar solo dependencias runtime necesarias (+ curl para descargar TML-Database en build)
 RUN apt-get update && apt-get install -y \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar dependencias de Python desde builder
@@ -54,8 +55,9 @@ RUN chmod +x start.sh
 # Crear directorios necesarios (resultados para backtesting; logs)
 RUN mkdir -p logs datos/raw datos/processed resultados
 
-# Para ELO desde CSV en Railway: pon los TML CSVs en datos/raw/ y descomenta la línea siguiente antes del build:
-# COPY datos/raw/ ./datos/raw/
+# Descargar CSVs de TML-Database para ELO en producción (2025 + 2026; cada build tiene datos recientes)
+RUN curl -sL "https://raw.githubusercontent.com/Tennismylife/TML-Database/master/2025.csv" -o datos/raw/2025.csv && \
+    curl -sL "https://raw.githubusercontent.com/Tennismylife/TML-Database/master/2026.csv" -o datos/raw/2026.csv
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \

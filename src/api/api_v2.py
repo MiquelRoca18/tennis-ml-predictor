@@ -1651,6 +1651,44 @@ async def trigger_retraining():
         }
 
 
+@app.get("/cron/refresh-elo", tags=["Cron"])
+async def cron_refresh_elo():
+    """
+    GET para crons externos (ej. cron-job.org): actualiza datos ELO TML-Database.
+
+    Ejecuta la misma lógica que el job diario de las 5 AM: elimina CSVs de años viejos,
+    descarga año-1 y año actual desde TML-Database, resetea predictor.
+    Útil si Railway pone la app en sleep y el scheduler interno no corre a las 5 AM.
+
+    En cron-job.org: crear job diario a las 5:00 AM con URL
+    https://tu-app.railway.app/cron/refresh-elo
+    """
+    try:
+        from src.services.tml_data_download import refresh_elo_data_daily
+        from src.prediction.feature_generator_service import reset_instance as reset_fgs
+
+        result = refresh_elo_data_daily()
+        if result["downloaded"]:
+            reset_fgs()
+            reset_predictor()
+            logger.info("🔄 ELO y predictor reseteados tras GET /cron/refresh-elo")
+        return {
+            "ok": True,
+            "timestamp": datetime.now().isoformat(),
+            "downloaded": result["downloaded"],
+            "removed": result.get("removed") or [],
+            "errors": result.get("errors"),
+            "message": "Datos ELO actualizados" if result["downloaded"] else "Nada que descargar o ya actualizado",
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en /cron/refresh-elo: {e}", exc_info=True)
+        return {
+            "ok": False,
+            "detail": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
 @app.post("/admin/regenerate-all-predictions", tags=["Admin"])
 async def admin_regenerate_all_predictions(scope: str = "default"):
     """
@@ -2373,12 +2411,8 @@ async def admin_refresh_elo_data(
     use los datos nuevos.
 
     Útil cuando TML-Database ha actualizado los CSV (nueva temporada o correcciones).
-    En Railway sin volumen persistente, los CSV descargados se pierden al redeploy;
-    en ese caso es mejor actualizar los CSV en el repo y redeploy.
+    En Railway el webhook también puede actualizar automáticamente al hacer push en TML-Database.
     """
-    import os
-    import urllib.request
-
     current_year = date.today().year
     if years:
         try:
@@ -2388,26 +2422,10 @@ async def admin_refresh_elo_data(
     else:
         year_list = [current_year - 1, current_year]
 
-    data_raw = Path("datos/raw")
-    data_raw.mkdir(parents=True, exist_ok=True)
-    base_url = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
-    downloaded = []
-    errors = []
+    from src.services.tml_data_download import download_tml_csvs, remove_old_year_csvs
 
-    for yr in year_list:
-        if yr < 2018 or yr > current_year + 1:
-            continue
-        url = f"{base_url}/{yr}.csv"
-        dest = data_raw / f"{yr}.csv"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "TennisML-Predictor/1.0"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                dest.write_bytes(resp.read())
-            downloaded.append(str(yr))
-            logger.info(f"✅ ELO CSV descargado: {yr}.csv")
-        except Exception as e:
-            errors.append(f"{yr}: {e}")
-            logger.warning(f"⚠️ No se pudo descargar {yr}.csv: {e}")
+    removed = remove_old_year_csvs()
+    downloaded, errors = download_tml_csvs(year_list)
 
     if not downloaded:
         return {
@@ -2430,6 +2448,7 @@ async def admin_refresh_elo_data(
         "status": "ok",
         "message": "CSV de TML-Database descargados y ELO/predictor reseteados. La próxima predicción usará los datos nuevos.",
         "downloaded": downloaded,
+        "removed": removed if removed else None,
         "errors": errors if errors else None,
         "timestamp": datetime.now().isoformat(),
     }
@@ -2879,22 +2898,22 @@ async def sync_matches_now():
 @app.post("/webhooks/github", tags=["Webhooks"])
 async def github_webhook(request: Request):
     """
-    Recibe webhooks de GitHub para auto-actualización del modelo
+    Recibe webhooks de GitHub para actualización automática de datos ELO.
 
-    Cuando el repositorio tennis_atp tiene un commit nuevo con archivos CSV,
-    este endpoint trigger la actualización automática del modelo:
-    1. Descarga datos nuevos
-    2. Aplica ventana temporal (elimina semana antigua, añade nueva)
-    3. Re-entrena modelo
+    Cuando el repositorio TML-Database (https://github.com/Tennismylife/TML-Database)
+    recibe un push con archivos CSV modificados (ej. 2025.csv, 2026.csv):
+    1. Se descargan esos CSV desde raw.githubusercontent.com a datos/raw/
+    2. Se resetea el FeatureGeneratorService y el predictor
+    3. La próxima predicción usará los datos nuevos
 
-    Configuración en GitHub:
-    - Payload URL: https://tu-dominio.com/webhooks/github
+    Configuración en GitHub (repo Tennismylife/TML-Database → Settings → Webhooks):
+    - Payload URL: https://tu-dominio.railway.app/webhooks/github
     - Content type: application/json
-    - Secret: GITHUB_WEBHOOK_SECRET (en .env)
+    - Secret: GITHUB_WEBHOOK_SECRET (misma variable en Railway)
     - Events: Just the push event
 
     Returns:
-        Confirmación de recepción
+        Confirmación con años descargados y estado.
     """
     try:
         # Leer payload
@@ -2931,12 +2950,40 @@ async def github_webhook(request: Request):
             f"🔔 Webhook recibido: Commit {commit_info.get('sha')} - {commit_info.get('message')}"
         )
 
-        # El sistema usa baseline ELO + mercado; no hay re-entrenamiento de modelo
+        # Extraer años de los CSV modificados en el push
+        archivos_csv = set()
+        for commit in event_data.get("commits", []):
+            archivos_csv.update(commit.get("added", []))
+            archivos_csv.update(commit.get("modified", []))
+        archivos_csv = [f for f in archivos_csv if f.endswith(".csv")]
+
+        from src.services.tml_data_download import download_tml_csvs, extract_years_from_csv_filenames, remove_old_year_csvs
+
+        years_to_download = extract_years_from_csv_filenames(list(archivos_csv))
+        if not years_to_download:
+            # Si no se detectaron años (ej. otro formato), actualizar año actual y anterior
+            years_to_download = [date.today().year - 1, date.today().year]
+
+        removed = remove_old_year_csvs()
+        downloaded, errors = download_tml_csvs(years_to_download)
+
+        if downloaded:
+            try:
+                from src.prediction.feature_generator_service import reset_instance as reset_fgs
+                reset_fgs()
+                reset_predictor()
+                logger.info("🔄 ELO y predictor reseteados tras webhook TML-Database")
+            except Exception as e:
+                logger.error(f"Error reseteando ELO/predictor tras webhook: {e}")
+
         return {
             "success": True,
-            "action": "ignored",
+            "action": "elo_data_updated",
             "commit": commit_info,
-            "message": "Sistema en modo baseline (sin ML); webhook aceptado pero no se re-entrena modelo",
+            "downloaded": downloaded,
+            "removed": removed if removed else None,
+            "errors": errors if errors else None,
+            "message": "CSV de TML-Database descargados y ELO/predictor actualizados. La próxima predicción usará los datos nuevos.",
         }
 
     except HTTPException:
@@ -3244,6 +3291,33 @@ async def startup_event():
             name="Limpieza automática de partidos antiguos (>7 días, 2 AM)",
             replace_existing=True,
         )
+
+        # Job: Actualizar datos ELO TML-Database (diario 5 AM); elimina CSV de temporadas viejas
+        def refresh_elo_tml_daily_job():
+            """Descarga 2025/2026 (o año-1 y año actual), elimina CSVs de años ya no usados, resetea predictor."""
+            try:
+                from src.services.tml_data_download import refresh_elo_data_daily
+                from src.prediction.feature_generator_service import reset_instance as reset_fgs
+                result = refresh_elo_data_daily()
+                if result["removed"]:
+                    logger.info(f"🗑️ TML diario: eliminados {result['removed']}")
+                if result["downloaded"]:
+                    logger.info(f"✅ TML diario: descargados {result['downloaded']}")
+                    reset_fgs()
+                    reset_predictor()
+                    logger.info("🔄 ELO y predictor reseteados tras actualización diaria TML")
+                if result.get("errors"):
+                    logger.warning(f"⚠️ TML diario: errores {result['errors']}")
+            except Exception as e:
+                logger.error(f"❌ Error en actualización diaria TML-Database: {e}")
+
+        scheduler.add_job(
+            func=refresh_elo_tml_daily_job,
+            trigger=CronTrigger(hour=5, minute=0),  # 5:00 AM cada día
+            id="refresh_elo_tml_daily_job",
+            name="Actualización diaria TML-Database (5 AM): descarga año-1 y año, elimina viejos, resetea ELO",
+            replace_existing=True,
+        )
         
         # ============================================================
         # ELITE SCHEDULER JOBS
@@ -3323,6 +3397,7 @@ async def startup_event():
         logger.info("   - Detección de partidos nuevos: cada 2 horas")
         logger.info("   - Sincronizar fixtures hoy/mañana: cada 6 horas")
         logger.info("   - ELO: desde CSV en datos/raw/ (actualizar vía POST /admin/refresh-elo-data o redeploy)")
+        logger.info("   - Actualización diaria TML-Database: 5:00 AM (descarga año-1 y año, elimina CSVs viejos)")
         logger.info("   - Fetch diario de partidos: 6:00 AM")
         logger.info("   - Limpieza de partidos antiguos (>7 días): 2:00 AM")
         logger.info("   - [ELITE] Sincronización de rankings ATP: 3:00 AM")
