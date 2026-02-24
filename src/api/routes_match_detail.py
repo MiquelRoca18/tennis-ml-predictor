@@ -687,11 +687,11 @@ async def get_match_odds_detailed(match_id: int):
                     "player2_odds": p2_float,
                 })
                 
-                # Guardar en BD para caché (lazy loading)
+                # Guardar en BD para caché (lazy loading). Schema: jugador1_cuota, jugador2_cuota, timestamp
                 try:
                     db._execute(
                         """
-                        INSERT INTO odds_history (match_id, bookmaker, odds_player1, odds_player2, created_at)
+                        INSERT INTO odds_history (match_id, bookmaker, jugador1_cuota, jugador2_cuota, timestamp)
                         VALUES (:match_id, :bookmaker, :p1, :p2, CURRENT_TIMESTAMP)
                         """,
                         {"match_id": match_id, "bookmaker": bookmaker, "p1": p1_float, "p2": p2_float}
@@ -1185,13 +1185,13 @@ def _get_detailed_odds_from_db(db, match_id: int, match: dict) -> Optional[dict]
         p1_name = match.get("jugador1_nombre") or match.get("jugador1")
         p2_name = match.get("jugador2_nombre") or match.get("jugador2")
         
-        # Buscar en odds_history
+        # Buscar en odds_history (schema: jugador1_cuota, jugador2_cuota, timestamp)
         odds_rows = db._fetchall(
             """
-            SELECT bookmaker, odds_player1, odds_player2, created_at
-            FROM odds_history 
+            SELECT bookmaker, jugador1_cuota, jugador2_cuota, timestamp
+            FROM odds_history
             WHERE match_id = :match_id
-            ORDER BY created_at DESC
+            ORDER BY timestamp DESC
             """,
             {"match_id": match_id}
         )
@@ -1224,8 +1224,8 @@ def _get_detailed_odds_from_db(db, match_id: int, match: dict) -> Optional[dict]
             if bm not in bookmakers_dict:
                 bookmakers_dict[bm] = {
                     "bookmaker": bm,
-                    "player1_odds": row.get("odds_player1"),
-                    "player2_odds": row.get("odds_player2"),
+                    "player1_odds": row.get("jugador1_cuota"),
+                    "player2_odds": row.get("jugador2_cuota"),
                 }
         
         bookmakers_list = list(bookmakers_dict.values())

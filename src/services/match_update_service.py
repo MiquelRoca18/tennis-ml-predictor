@@ -889,3 +889,30 @@ if __name__ == "__main__":
         except Exception as e:
             logger.debug(f"Error guardando estadísticas detalladas: {e}")
 
+    def get_pending_matches(self) -> List[Dict]:
+        """Partidos pendientes o en juego (para actualización)."""
+        try:
+            return self.db._fetchall(
+                """
+                SELECT id, jugador1_nombre, jugador2_nombre, superficie, fecha_partido, estado
+                FROM matches
+                WHERE estado IN ('pendiente', 'en_juego')
+                ORDER BY fecha_partido ASC
+                """,
+                {},
+            ) or []
+        except Exception:
+            return []
+
+    def get_update_stats(self) -> Dict:
+        """Estadísticas para el endpoint scheduler-status."""
+        try:
+            pending = self.get_pending_matches()
+            return {
+                "partidos_pendientes": len(pending),
+                "proxima_actualizacion": "Cada 5 min (estados), cada 4h (cuotas/predicciones)",
+                "estado": "activo",
+            }
+        except Exception:
+            return {"partidos_pendientes": 0, "estado": "desconocido"}
+

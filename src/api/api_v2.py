@@ -1583,6 +1583,33 @@ async def manual_sync_odds_and_predictions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/trigger-retraining", tags=["Admin"])
+async def trigger_retraining():
+    """
+    GET para crons externos: dispara sync de cuotas y predicciones (mismo efecto que POST /admin/sync-odds-and-predictions).
+    Devuelve 200 para que el cron no marque 404. Idempotente.
+    """
+    try:
+        if not odds_service:
+            return {"ok": False, "detail": "OddsUpdateService no disponible", "timestamp": datetime.now().isoformat()}
+        logger.info("🔧 Trigger retraining (cron GET) solicitado")
+        result = odds_service.sync_odds_and_predictions_for_pending_matches()
+        return {
+            "ok": True,
+            "timestamp": datetime.now().isoformat(),
+            "odds_updated": result.get("odds_updated", 0),
+            "predictions_generated": result.get("predictions_generated", 0),
+            "message": result.get("message", "Sync ejecutado"),
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en trigger-retraining: {e}", exc_info=True)
+        return {
+            "ok": False,
+            "detail": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
 @app.post("/admin/regenerate-all-predictions", tags=["Admin"])
 async def admin_regenerate_all_predictions(scope: str = "default"):
     """
@@ -2055,7 +2082,12 @@ async def get_scheduler_status():
                 "trigger": str(job.trigger)
             })
 
-        stats = match_update_service.get_update_stats()
+        stats = {}
+        if match_update_service:
+            try:
+                stats = match_update_service.get_update_stats()
+            except AttributeError:
+                stats = {"partidos_pendientes": 0, "estado": "activo", "note": "Actualiza backend para get_update_stats"}
 
         return {
             "scheduler_running": is_running,
@@ -2069,6 +2101,89 @@ async def get_scheduler_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _parse_iso_to_hours_ago(iso_str: Optional[str]) -> Optional[float]:
+    """Convierte timestamp ISO o 'YYYY-MM-DD HH:MM:SS' a horas desde ahora. None si no hay valor."""
+    if not iso_str:
+        return None
+    try:
+        from datetime import datetime, timezone
+        s = str(iso_str).strip().replace("Z", "+00:00")
+        if " " in s and "T" not in s:
+            s = s.replace(" ", "T", 1)
+        ts = datetime.fromisoformat(s)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = now - ts
+        return round(delta.total_seconds() / 3600, 1)
+    except Exception:
+        return None
+
+
+@app.get("/admin/jobs-health", tags=["Admin"])
+async def get_jobs_health():
+    """
+    Diagnóstico: última actividad en BD para saber si los jobs han estado ejecutándose.
+
+    En Railway el proceso puede dormir si no hay tráfico; el scheduler solo corre
+    cuando la app está despierta. Si "last_*_hours_ago" son muchos días, los jobs
+    probablemente no han corrido (servidor dormido).
+
+    Returns:
+        Timestamps de última actividad y horas desde entonces.
+    """
+    try:
+        out = {
+            "message": "Última actividad en la BD (si hay muchas horas/días, el servidor pudo estar dormido).",
+            "scheduler_running": scheduler.running,
+        }
+        # Última actualización de un partido (job de estados/cuotas)
+        row = db._fetchone("SELECT MAX(updated_at) as last FROM matches", {})
+        if row and row.get("last"):
+            last = str(row["last"])
+            out["last_match_updated_at"] = last
+            out["last_match_updated_hours_ago"] = _parse_iso_to_hours_ago(last)
+        else:
+            out["last_match_updated_at"] = None
+            out["last_match_updated_hours_ago"] = None
+        # Última predicción generada
+        try:
+            row = db._fetchone("SELECT MAX(timestamp) as last FROM predictions", {})
+            if row and row.get("last"):
+                last = str(row["last"])
+                out["last_prediction_at"] = last
+                out["last_prediction_hours_ago"] = _parse_iso_to_hours_ago(last)
+            else:
+                out["last_prediction_at"] = None
+                out["last_prediction_hours_ago"] = None
+        except Exception:
+            out["last_prediction_at"] = None
+            out["last_prediction_hours_ago"] = None
+        # Última actualización de rankings (tabla players)
+        try:
+            row = db._fetchone("SELECT MAX(last_ranking_update) as last FROM players WHERE last_ranking_update IS NOT NULL", {})
+            if row and row.get("last"):
+                last = str(row["last"])
+                out["last_ranking_update_at"] = last
+                out["last_ranking_update_hours_ago"] = _parse_iso_to_hours_ago(last)
+            else:
+                row = db._fetchone("SELECT MAX(updated_at) as last FROM players", {})
+                if row and row.get("last"):
+                    last = str(row["last"])
+                    out["last_ranking_update_at"] = last
+                    out["last_ranking_update_hours_ago"] = _parse_iso_to_hours_ago(last)
+                else:
+                    out["last_ranking_update_at"] = None
+                    out["last_ranking_update_hours_ago"] = None
+        except Exception:
+            out["last_ranking_update_at"] = None
+            out["last_ranking_update_hours_ago"] = None
+        return out
+    except Exception as e:
+        logger.error(f"❌ Error en jobs-health: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.get("/admin/pending-matches", tags=["Admin"])
 async def get_pending_matches():
@@ -2079,7 +2194,12 @@ async def get_pending_matches():
         Lista de partidos pendientes de actualización
     """
     try:
-        pending = match_update_service.get_pending_matches()
+        if not match_update_service:
+            return {"total": 0, "partidos": []}
+        try:
+            pending = match_update_service.get_pending_matches()
+        except AttributeError:
+            pending = []
         return {"total": len(pending), "partidos": pending}
     except Exception as e:
         logger.error(f"❌ Error obteniendo partidos pendientes: {e}")
