@@ -3554,17 +3554,28 @@ async def get_player_profile(player_key: int):
                     logger.debug("No se pudo guardar perfil en BD: %s", e)
                 profile = _profile_from_api_tennis(api_data)
         
-        # Si el perfil viene de BD y no tiene stats/tournaments, enriquecer con API
-        if profile and api_client and (not profile.get("stats") and not profile.get("tournaments")):
-            try:
-                api_data = api_client.get_player_profile(str(player_key))
-                if api_data:
-                    profile["stats"] = api_data.get("stats", [])
-                    profile["tournaments"] = api_data.get("tournaments", [])
-                    profile["player_full_name"] = api_data.get("player_full_name") or profile.get("player_name")
-                    profile["player_bday"] = api_data.get("player_bday")
-            except Exception as e:
-                logger.debug("Enriquecer perfil con API: %s", e)
+        # Si el perfil viene de BD, enriquecer con API (stats, tournaments, player_logo, etc.)
+        if profile and api_client:
+            need_enrich = (
+                not profile.get("stats") or not profile.get("tournaments")
+                or not profile.get("player_logo") or not profile.get("player_full_name")
+            )
+            if need_enrich:
+                try:
+                    api_data = api_client.get_player_profile(str(player_key))
+                    if api_data:
+                        if not profile.get("stats"):
+                            profile["stats"] = api_data.get("stats", [])
+                        if not profile.get("tournaments"):
+                            profile["tournaments"] = api_data.get("tournaments", [])
+                        if not profile.get("player_full_name"):
+                            profile["player_full_name"] = api_data.get("player_full_name") or profile.get("player_name")
+                        if not profile.get("player_bday"):
+                            profile["player_bday"] = api_data.get("player_bday")
+                        if api_data.get("player_logo"):
+                            profile["player_logo"] = api_data.get("player_logo")
+                except Exception as e:
+                    logger.debug("Enriquecer perfil con API: %s", e)
         
         if not profile:
             raise HTTPException(status_code=404, detail="Jugador no encontrado")
