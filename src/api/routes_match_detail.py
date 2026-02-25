@@ -605,6 +605,7 @@ async def get_match_stats(match_id: int):
                     )
                     if stats and getattr(stats, "has_detailed_stats", True):
                         logger.info(f"📊 Stats match {match_id}: desde API statistics")
+                        _save_statistics_to_db(db, match_id, api_data["statistics"])
                         if api_data.get("pointbypoint"):
                             _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
                         if api_data.get("scores"):
@@ -1116,6 +1117,40 @@ def _load_pointbypoint_from_db(db, match_id: int) -> Optional[list]:
     return None
 
 
+def _save_statistics_to_db(db, match_id: int, statistics_data: list):
+    """Guarda el array statistics de la API en match_statistics_cache para no volver a llamar a la API."""
+    try:
+        import json
+        data_json = json.dumps(statistics_data)
+        params = {"match_id": match_id, "data": data_json}
+        db._execute(
+            """
+            INSERT INTO match_statistics_cache (match_id, data, created_at)
+            VALUES (:match_id, :data, CURRENT_TIMESTAMP)
+            ON CONFLICT (match_id) DO UPDATE SET data = :data, created_at = CURRENT_TIMESTAMP
+            """,
+            params
+        )
+        logger.info(f"✅ Statistics guardadas en caché para match {match_id}")
+    except Exception as e:
+        logger.warning(f"Error guardando statistics en BD: {e}")
+
+
+def _load_statistics_from_db(db, match_id: int) -> Optional[list]:
+    """Carga el array statistics de la BD (match_statistics_cache) si existen."""
+    try:
+        import json
+        result = db._fetchone(
+            "SELECT data FROM match_statistics_cache WHERE match_id = :match_id",
+            {"match_id": match_id}
+        )
+        if result and result.get("data"):
+            return json.loads(result["data"])
+    except Exception as e:
+        logger.warning(f"Error cargando statistics de BD: {e}")
+    return None
+
+
 def _save_match_data_to_db(db, match_id: int, api_data: dict):
     """Guarda datos del partido en la BD para caché"""
     try:
@@ -1139,7 +1174,8 @@ def _save_match_data_to_db(db, match_id: int, api_data: dict):
 
 def _load_stats_from_db(db, match_id: int):
     """
-    Carga estadísticas y timeline desde la BD (caché de pointbypoint).
+    Carga estadísticas y timeline desde la BD.
+    Prioridad: 1) caché de statistics (API) → stats detalladas; 2) pointbypoint → stats básicas + timeline.
     
     Returns:
         Tuple[MatchStats, MatchTimeline] o (None, None) si no hay datos
@@ -1148,29 +1184,41 @@ def _load_stats_from_db(db, match_id: int):
     timeline = None
     
     try:
-        # Intentar cargar pointbypoint de la caché
-        pbp_data = _load_pointbypoint_from_db(db, match_id)
+        # 1) Intentar primero caché de statistics (evita llamar a la API en cada request)
+        cached_statistics = _load_statistics_from_db(db, match_id)
+        if cached_statistics:
+            match = db.get_match(match_id)
+            if match and match.get("jugador1_key") is not None and match.get("jugador2_key") is not None:
+                api_match = {
+                    "first_player_key": match.get("jugador1_key"),
+                    "second_player_key": match.get("jugador2_key"),
+                }
+                try:
+                    stats = stats_calculator.parse_statistics_from_api(cached_statistics, api_match)
+                    if stats:
+                        logger.info(f"✅ Statistics encontradas en caché para match {match_id}")
+                except Exception as e:
+                    logger.warning(f"Error parseando statistics desde caché: {e}")
         
+        # Timeline: desde pointbypoint si hay
+        pbp_data = _load_pointbypoint_from_db(db, match_id)
         if pbp_data:
-            logger.info(f"✅ Pointbypoint encontrado en caché para match {match_id}")
-            
-            # Calcular stats
-            try:
-                # Obtener scores del match para calcular stats
-                match = db.get_match(match_id)
-                scores = None
-                if match and match.get("resultado_marcador"):
-                    scores = stats_calculator.parse_score_string(match["resultado_marcador"])
-                
-                stats = stats_calculator.calculate_stats(pbp_data, scores)
-            except Exception as e:
-                logger.warning(f"Error calculando stats desde caché: {e}")
-            
-            # Calcular timeline
             try:
                 timeline = stats_calculator.calculate_timeline(pbp_data)
             except Exception as e:
                 logger.warning(f"Error calculando timeline desde caché: {e}")
+        
+        # 2) Si no había statistics en caché pero sí pointbypoint, usar stats desde pointbypoint
+        if not stats and pbp_data:
+            logger.info(f"✅ Pointbypoint encontrado en caché para match {match_id}")
+            try:
+                match = db.get_match(match_id)
+                scores = None
+                if match and match.get("resultado_marcador"):
+                    scores = stats_calculator.parse_score_string(match["resultado_marcador"])
+                stats = stats_calculator.calculate_stats(pbp_data, scores)
+            except Exception as e:
+                logger.warning(f"Error calculando stats desde pointbypoint: {e}")
                 
     except Exception as e:
         logger.warning(f"Error cargando stats de BD: {e}")

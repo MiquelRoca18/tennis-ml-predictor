@@ -336,6 +336,14 @@ CREATE TABLE IF NOT EXISTS match_pointbypoint_cache (
     FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
 );
 
+-- Caché del array statistics de la API (stats detalladas: Puntos, Winners, %, etc.)
+CREATE TABLE IF NOT EXISTS match_statistics_cache (
+    match_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+);
+
 
 -- ============================================================
 -- VISTAS ÚTILES

@@ -245,6 +245,8 @@ class MatchDatabase:
             self._migrate_add_event_status()
             # Migración: tabla match_pointbypoint_cache para caché JSON (stats/timeline)
             self._migrate_pointbypoint_cache_table()
+            # Migración: tabla match_statistics_cache para caché de statistics (evita llamar API en cada stats)
+            self._migrate_statistics_cache_table()
             # Migración: tabla h2h_cache para H2H por player keys (API) - no confundir con head_to_head
             self._migrate_h2h_cache_table()
             # Migración: tabla settings (bankroll y config de apuestas por usuario)
@@ -415,6 +417,35 @@ class MatchDatabase:
         except Exception as e:
             if "already exists" not in str(e).lower():
                 logger.warning(f"Migración match_pointbypoint_cache: {e}")
+
+    def _migrate_statistics_cache_table(self):
+        """Crea tabla match_statistics_cache para caché del array statistics de la API (stats detalladas)."""
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS match_statistics_cache (
+                            match_id INTEGER PRIMARY KEY,
+                            data TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+                        )
+                    """))
+                    conn.commit()
+            else:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS match_statistics_cache (
+                        match_id INTEGER PRIMARY KEY,
+                        data TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+                    )
+                """)
+                self.conn.commit()
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Migración match_statistics_cache: {e}")
 
     def _migrate_h2h_cache_table(self):
         """Crea tabla h2h_cache para H2H por player keys (API). No confundir con head_to_head (player ids)."""
