@@ -249,6 +249,18 @@ def _is_set_completed(p1: int, p2: int) -> bool:
     return (hi - lo >= 2) or (lo >= 6)
 
 
+def _is_match_still_live(api_data: dict) -> bool:
+    """True si el partido sigue en directo; False si event_status es Finished, Retired, etc."""
+    status = (api_data.get("event_status") or "").strip().upper()
+    if not status:
+        return True  # Sin estado, confiar en event_live
+    if status == "FINISHED" or "FINISH" in status:
+        return False
+    if "RETIR" in status or "WALK" in status or "DEFAULT" in status or "WO " in status or status == "WO":
+        return False
+    return True
+
+
 def _partido_has_started(p: dict, today: date) -> bool:
     """True si el partido ya ha empezado (fecha en el pasado o hoy con hora_inicio pasada)."""
     match_date = p.get("fecha_partido")
@@ -601,12 +613,17 @@ async def get_matches_by_date(
                                 live_api = m
                                 break
                     if live_api and live_api.get("event_live") == "1":
-                        p["estado"] = "en_juego"
-                        p["event_final_result"] = live_api.get("event_final_result")
-                        p["event_game_result"] = live_api.get("event_game_result")
-                        p["event_serve"] = live_api.get("event_serve")
-                        p["event_status"] = live_api.get("event_status")
-                        p["event_live"] = "1"
+                        if _is_match_still_live(live_api):
+                            p["estado"] = "en_juego"
+                            p["event_final_result"] = live_api.get("event_final_result")
+                            p["event_game_result"] = live_api.get("event_game_result")
+                            p["event_serve"] = live_api.get("event_serve")
+                            p["event_status"] = live_api.get("event_status")
+                            p["event_live"] = "1"
+                        else:
+                            p["estado"] = "completado"
+                            p["event_final_result"] = live_api.get("event_final_result")
+                            p["event_status"] = live_api.get("event_status")
             except Exception as e:
                 logger.debug("Enrich /matches with get_livescore: %s", e)
 
@@ -629,12 +646,17 @@ async def get_matches_by_date(
                     if not api_match:
                         continue
                     if api_match.get("event_live") == "1" or api_match.get("event_final_result") or api_match.get("scores"):
-                        p["estado"] = "en_juego"
-                        p["event_final_result"] = api_match.get("event_final_result")
-                        p["event_game_result"] = api_match.get("event_game_result")
-                        p["event_serve"] = api_match.get("event_serve")
-                        p["event_status"] = api_match.get("event_status")
-                        p["event_live"] = api_match.get("event_live") or "1"
+                        if _is_match_still_live(api_match):
+                            p["estado"] = "en_juego"
+                            p["event_final_result"] = api_match.get("event_final_result")
+                            p["event_game_result"] = api_match.get("event_game_result")
+                            p["event_serve"] = api_match.get("event_serve")
+                            p["event_status"] = api_match.get("event_status")
+                            p["event_live"] = api_match.get("event_live") or "1"
+                        else:
+                            p["estado"] = "completado"
+                            p["event_final_result"] = api_match.get("event_final_result")
+                            p["event_status"] = api_match.get("event_status")
                         api_scores = api_match.get("scores") or []
                         if api_scores and hasattr(db, "save_match_sets"):
                             try:

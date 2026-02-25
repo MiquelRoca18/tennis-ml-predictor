@@ -912,18 +912,48 @@ async def get_match_h2h(match_id: int):
         
         result = response["result"]
         h2h_matches = result.get("H2H", [])
-        first_raw = result.get("firstPlayerResults", [])[:10]
-        second_raw = result.get("secondPlayerResults", [])[:10]
 
-        def _normalize_recent(match_list: list, our_player_is_first: bool):
+        def _match_involves_player(m: dict, player_key) -> bool:
+            """True si el partido incluye al jugador (por key). Evita errores de la API que mezcla listas."""
+            if player_key is None:
+                return False
+            pk = str(player_key).strip()
+            return str(m.get("first_player_key") or "").strip() == pk or str(m.get("second_player_key") or "").strip() == pk
+
+        def _is_direct_h2h_match(m: dict) -> bool:
+            """True si el partido es entre nuestros dos jugadores (p1 vs p2). Para no contar entradas erróneas en H2H."""
+            if not p1_key or not p2_key:
+                return False
+            p1 = str(p1_key).strip()
+            p2 = str(p2_key).strip()
+            f = str(m.get("first_player_key") or "").strip()
+            s = str(m.get("second_player_key") or "").strip()
+            return (f == p1 and s == p2) or (f == p2 and s == p1)
+
+        h2h_matches = [m for m in h2h_matches if _is_direct_h2h_match(m)]
+
+        first_raw = [m for m in result.get("firstPlayerResults", []) if _match_involves_player(m, p1_key)][:10]
+        second_raw = [m for m in result.get("secondPlayerResults", []) if _match_involves_player(m, p2_key)][:10]
+
+        def _normalize_recent(match_list: list, our_player_is_first: bool, our_player_name: str, our_player_key):
+            our_name_norm = (our_player_name or "").strip().lower()
             out = []
             for m in match_list:
+                if not _match_involves_player(m, our_player_key):
+                    continue
+                first_name = (m.get("event_first_player") or "").strip()
+                second_name = (m.get("event_second_player") or "").strip()
+                if first_name == second_name:
+                    continue
+                if our_player_is_first:
+                    opponent = second_name
+                else:
+                    opponent = first_name
+                opponent_norm = opponent.lower()
+                if not opponent_norm or opponent_norm == our_name_norm:
+                    continue
                 winner_first = "First" in (m.get("event_winner") or "")
                 our_won = winner_first if our_player_is_first else (not winner_first)
-                if our_player_is_first:
-                    opponent = m.get("event_second_player", "")
-                else:
-                    opponent = m.get("event_first_player", "")
                 out.append({
                     "date": m.get("event_date", ""),
                     "tournament": m.get("tournament_name", ""),
@@ -935,8 +965,8 @@ async def get_match_h2h(match_id: int):
                 })
             return out
 
-        first_player_results = _normalize_recent(first_raw, our_player_is_first=True)
-        second_player_results = _normalize_recent(second_raw, our_player_is_first=False)
+        first_player_results = _normalize_recent(first_raw, our_player_is_first=True, our_player_name=p1_name or "", our_player_key=p1_key)
+        second_player_results = _normalize_recent(second_raw, our_player_is_first=False, our_player_name=p2_name or "", our_player_key=p2_key)
 
         if not h2h_matches:
             return {
