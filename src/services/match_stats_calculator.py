@@ -495,7 +495,7 @@ class MatchStatsCalculator:
             player2=player2_stats,
             total_games=total_games,
             total_points=total_points,
-            has_detailed_stats=True
+            has_detailed_stats=False  # Solo pointbypoint: faltan total_points_won, winners, %, etc.; la API puede devolver "statistics"
         )
     
     def _init_stats_counters(self) -> Dict[str, int]:

@@ -596,6 +596,21 @@ async def get_match_stats(match_id: int):
                         f"📊 Stats match {match_id} (event_key={event_key}): pointbypoint vacío o ausente. "
                         f"Keys: {keys}, pointbypoint type={pbp_type}, len={pbp_len}"
                     )
+                # Prioridad 1: Si la API devuelve "statistics", usarla (tiene todos los datos: Puntos, Winners, UE, % saque/resto).
+                # Cuando hay pointbypoint Y statistics, antes se usaba solo pointbypoint y faltaban total_points_won, winners, etc.
+                if api_data and api_data.get("statistics"):
+                    stats = stats_calculator.parse_statistics_from_api(
+                        api_data["statistics"],
+                        api_data,
+                    )
+                    if stats and getattr(stats, "has_detailed_stats", True):
+                        logger.info(f"📊 Stats match {match_id}: desde API statistics")
+                        if api_data.get("pointbypoint"):
+                            _save_pointbypoint_to_db(db, match_id, api_data["pointbypoint"])
+                        if api_data.get("scores"):
+                            _save_scores_to_match_sets(db, match_id, api_data["scores"])
+                        return stats
+                # Prioridad 2: Solo pointbypoint (sin statistics) → calcular desde juegos (menos detalle).
                 if api_data and api_data.get("pointbypoint"):
                     pbp = api_data["pointbypoint"]
                     logger.info(f"📊 Stats match {match_id}: API devolvió {len(pbp)} juegos pointbypoint")
@@ -605,19 +620,6 @@ async def get_match_stats(match_id: int):
                         scores = stats_calculator.calculate_scores(api_data["scores"], api_data)
                     stats = stats_calculator.calculate_stats(pbp, scores)
                     if stats:
-                        return stats
-                
-                # Fallback: API tiene "statistics" aunque pointbypoint esté vacío (ej. Australian Open)
-                if api_data and api_data.get("statistics"):
-                    stats = stats_calculator.parse_statistics_from_api(
-                        api_data["statistics"],
-                        api_data,
-                    )
-                    if stats and stats.has_detailed_stats:
-                        logger.info(f"📊 Stats match {match_id}: desde API statistics (sin pointbypoint)")
-                        # Guardar scores en match_sets si tenemos, para timeline/fallback
-                        if api_data.get("scores"):
-                            _save_scores_to_match_sets(db, match_id, api_data["scores"])
                         return stats
         except Exception as e:
             logger.warning(f"Error obteniendo stats de API: {e}")
