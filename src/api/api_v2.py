@@ -3783,6 +3783,48 @@ async def get_player_matches(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/players/{player_key}/upcoming", tags=["Elite - Players"])
+async def get_player_upcoming(
+    player_key: int,
+    days: int = Query(14, ge=1, le=31)
+):
+    """
+    Obtiene los próximos partidos de un jugador (get_fixtures con player_key).
+    Solo partidos pendientes o en curso, no finalizados.
+    """
+    if not api_client:
+        raise HTTPException(status_code=503, detail="API no disponible")
+    try:
+        raw = api_client.get_upcoming_fixtures_for_player(player_key, days_ahead=days)
+        pk_str = str(player_key)
+        out = []
+        for m in raw:
+            status = (m.get("event_status") or "").strip()
+            if status.upper() == "FINISHED":
+                continue
+            first_key = str(m.get("first_player_key") or "").strip()
+            second_key = str(m.get("second_player_key") or "").strip()
+            if pk_str == first_key:
+                opponent_name = (m.get("event_second_player") or "").strip()
+            elif pk_str == second_key:
+                opponent_name = (m.get("event_first_player") or "").strip()
+            else:
+                continue
+            out.append({
+                "event_key": m.get("event_key"),
+                "date": m.get("event_date") or "",
+                "time": m.get("event_time") or "",
+                "opponent_name": opponent_name or "Rival",
+                "tournament_name": (m.get("tournament_name") or "").strip(),
+                "round": (m.get("tournament_round") or "").strip(),
+                "event_type_type": (m.get("event_type_type") or "").strip(),
+            })
+        return {"player_key": player_key, "upcoming": out}
+    except Exception as e:
+        logger.error(f"Error obteniendo próximos partidos del jugador: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/players/{player_key}/stats", tags=["Elite - Players"])
 async def get_player_stats(
     player_key: int,

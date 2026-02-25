@@ -136,6 +136,35 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo partidos: {e}")
             return []
 
+    def get_upcoming_fixtures_for_player(self, player_key, days_ahead: int = 14) -> List[Dict]:
+        """
+        Obtiene los próximos partidos (fixtures) de un jugador.
+        Usa get_fixtures con player_key para filtrar por jugador.
+        """
+        if not self.api_key:
+            logger.warning("API_TENNIS_API_KEY no configurada")
+            return []
+        if not player_key:
+            return []
+        try:
+            today = datetime.now()
+            date_stop = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+            params = {
+                "date_start": today.strftime("%Y-%m-%d"),
+                "date_stop": date_stop,
+                "player_key": str(player_key),
+            }
+            data = self._make_request("get_fixtures", params, timeout=15)
+            if not data:
+                return []
+            result = data.get("result", [])
+            if not isinstance(result, list):
+                return [result] if result else []
+            return result
+        except Exception as e:
+            logger.debug("get_upcoming_fixtures_for_player: %s", e)
+            return []
+
     def get_match_odds(self, match_key: str) -> Optional[Dict]:
         """
         Obtiene cuotas para un partido específico
