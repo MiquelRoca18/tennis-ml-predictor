@@ -854,7 +854,9 @@ async def get_match_h2h(match_id: int):
                 "total_matches": 0,
                 "player1_wins": 0,
                 "player2_wins": 0,
-                "recent_matches": []
+                "recent_matches": [],
+                "first_player_results": [],
+                "second_player_results": [],
             }
         
         # 1. Intentar obtener de BD (instantáneo)
@@ -872,7 +874,9 @@ async def get_match_h2h(match_id: int):
                 "player1_wins": h2h_from_db.player1_wins,
                 "player2_wins": h2h_from_db.player2_wins,
                 "surface_records": surface_records,
-                "recent_matches": [m.model_dump() for m in h2h_from_db.matches] if h2h_from_db.matches else []
+                "recent_matches": [m.model_dump() for m in h2h_from_db.matches] if h2h_from_db.matches else [],
+                "first_player_results": [],
+                "second_player_results": [],
             }
         
         # 2. No hay datos en BD - llamar a API (lazy loading)
@@ -889,7 +893,9 @@ async def get_match_h2h(match_id: int):
                 "total_matches": 0,
                 "player1_wins": 0,
                 "player2_wins": 0,
-                "recent_matches": []
+                "recent_matches": [],
+                "first_player_results": [],
+                "second_player_results": [],
             }
         
         if not response or not response.get("result"):
@@ -899,12 +905,39 @@ async def get_match_h2h(match_id: int):
                 "total_matches": 0,
                 "player1_wins": 0,
                 "player2_wins": 0,
-                "recent_matches": []
+                "recent_matches": [],
+                "first_player_results": [],
+                "second_player_results": [],
             }
         
         result = response["result"]
         h2h_matches = result.get("H2H", [])
-        
+        first_raw = result.get("firstPlayerResults", [])[:10]
+        second_raw = result.get("secondPlayerResults", [])[:10]
+
+        def _normalize_recent(match_list: list, our_player_is_first: bool):
+            out = []
+            for m in match_list:
+                winner_first = "First" in (m.get("event_winner") or "")
+                our_won = winner_first if our_player_is_first else (not winner_first)
+                if our_player_is_first:
+                    opponent = m.get("event_second_player", "")
+                else:
+                    opponent = m.get("event_first_player", "")
+                out.append({
+                    "date": m.get("event_date", ""),
+                    "tournament": m.get("tournament_name", ""),
+                    "round": m.get("tournament_round", ""),
+                    "result": (m.get("event_final_result") or "").strip(),
+                    "our_player_won": our_won,
+                    "opponent_name": opponent,
+                    "event_type": m.get("event_type_type", ""),
+                })
+            return out
+
+        first_player_results = _normalize_recent(first_raw, our_player_is_first=True)
+        second_player_results = _normalize_recent(second_raw, our_player_is_first=False)
+
         if not h2h_matches:
             return {
                 "success": True,
@@ -912,7 +945,9 @@ async def get_match_h2h(match_id: int):
                 "total_matches": 0,
                 "player1_wins": 0,
                 "player2_wins": 0,
-                "recent_matches": []
+                "recent_matches": [],
+                "first_player_results": first_player_results,
+                "second_player_results": second_player_results,
             }
         
         # Procesar datos
@@ -986,7 +1021,9 @@ async def get_match_h2h(match_id: int):
                 "Clay": [clay_p1, clay_p2],
                 "Grass": [grass_p1, grass_p2]
             },
-            "recent_matches": recent_matches
+            "recent_matches": recent_matches,
+            "first_player_results": first_player_results,
+            "second_player_results": second_player_results,
         }
         
     except HTTPException:
