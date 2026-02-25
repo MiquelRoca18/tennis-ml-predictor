@@ -48,58 +48,44 @@ class APITennisClient:
 
         logger.info("✅ APITennisClient inicializado")
 
-    def _make_request(self, method: str, params: Dict = None) -> Optional[Dict]:
+    def _make_request(self, method: str, params: Dict = None, timeout: int = 30) -> Optional[Dict]:
         """
         Hace una petición a la API
 
         Args:
             method: Método de la API (get_fixtures, get_odds, etc.)
             params: Parámetros adicionales
+            timeout: Segundos por intento (default 30). Si <= 10 se usa solo 1 intento.
 
         Returns:
             Respuesta JSON o None si hay error
         """
         try:
-            # Construir parámetros
             request_params = {"method": method, "APIkey": self.api_key}
-
             if params:
                 request_params.update(params)
 
-            # Reintentos con backoff exponencial
-            max_retries = 3
-            timeout = 30  # Aumentado de 10s a 30s
-            
+            max_retries = 3 if timeout > 10 else 1
             for attempt in range(max_retries):
                 try:
                     response = requests.get(self.base_url, params=request_params, timeout=timeout)
-                    
-                    # Actualizar contador de requests
                     self.requests_made += 1
                     logger.debug(f"📊 Requests hechos: {self.requests_made}")
-
-                    # Manejar errores HTTP
                     response.raise_for_status()
-
                     data = response.json()
-
-                    # Verificar si la API devolvió success
                     if data.get("success") != 1:
                         logger.error(f"❌ API devolvió error: {data}")
                         return None
-
                     return data
-                    
                 except requests.exceptions.Timeout:
                     if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt  # Backoff: 1s, 2s, 4s
+                        wait_time = 2 ** attempt
                         logger.warning(f"⚠️  Timeout en intento {attempt + 1}/{max_retries}, reintentando en {wait_time}s...")
                         import time
                         time.sleep(wait_time)
                     else:
-                        logger.error(f"❌ Timeout después de {max_retries} intentos")
+                        logger.warning(f"⚠️  Timeout después de {max_retries} intentos en {method}")
                         return None
-
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Error en petición a API-Tennis: {e}")
             return None
@@ -383,10 +369,11 @@ class APITennisClient:
             logger.error(f"❌ Error obteniendo H2H: {e}")
             return {"H2H": [], "firstPlayerResults": [], "secondPlayerResults": []}
 
-    def get_livescore(self) -> List[Dict]:
+    def get_livescore(self, timeout: int = 30) -> List[Dict]:
         """
         Obtiene partidos en vivo (get_livescore). Usado como fallback cuando WebSocket no está o para refresco periódico.
         Misma lógica de filtro que daily_match_fetcher: ATP + Challenger + ITF Men Singles (excluir dobles, WTA, júnior).
+        timeout: segundos para la petición (default 30). Usar valor bajo (ej. 5) en listados para no bloquear.
         Returns:
             Lista de partidos en vivo con scores, event_final_result, etc.
         """
@@ -394,7 +381,7 @@ class APITennisClient:
             logger.error("❌ API_TENNIS_API_KEY no configurada")
             return []
         try:
-            data = self._make_request("get_livescore", {})
+            data = self._make_request("get_livescore", {}, timeout=timeout)
             if not data:
                 return []
             matches = data.get("result", [])

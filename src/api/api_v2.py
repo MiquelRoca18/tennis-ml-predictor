@@ -284,6 +284,32 @@ def _partido_has_started(p: dict, today: date) -> bool:
         return True
 
 
+def _fetch_livescore_and_fixtures_sync(api_client, fecha: date, today: date):
+    """
+    Obtiene get_livescore y get_fixtures con timeout corto (5s cada uno).
+    Para usar en executor desde /matches y no bloquear la respuesta más de 10s.
+    Returns:
+        (live_list, fixtures_resp) — fixtures_resp puede ser None
+    """
+    live_list = []
+    fixtures_resp = None
+    if not api_client:
+        return (live_list, fixtures_resp)
+    try:
+        live_list = api_client.get_livescore(timeout=5) or []
+    except Exception:
+        pass
+    if fecha == today:
+        try:
+            date_str = fecha.strftime("%Y-%m-%d")
+            fixtures_resp = api_client._make_request(
+                "get_fixtures", {"date_start": date_str, "date_stop": date_str}, timeout=5
+            )
+        except Exception:
+            pass
+    return (live_list, fixtures_resp)
+
+
 def _build_match_scores(
     match_data: dict,
     database,
@@ -529,101 +555,112 @@ async def get_matches_by_date(
         db_time = time.time() - db_start
         logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
-        # Enriquecer con get_livescore: partidos que API-Tennis marca en directo deben mostrarse en directo
-        try:
-            if api_client:
-                live_list = api_client.get_livescore()
-                if live_list:
-                    live_by_key = {str(m.get("event_key")): m for m in live_list if m.get("event_key") is not None}
-                    for p in partidos_raw:
-                        ek = p.get("event_key")
-                        mid = p.get("id")
-                        live_api = (live_by_key.get(str(ek)) if ek is not None else None) or (live_by_key.get(str(mid)) if mid is not None else None)
-                        if not live_api:
-                            # Sin event_key en BD: emparejar por jugadores + fecha
-                            j1 = (p.get("jugador1_nombre") or p.get("jugador1") or "").strip()
-                            j2 = (p.get("jugador2_nombre") or p.get("jugador2") or "").strip()
-                            fecha_p = p.get("fecha_partido")
-                            fecha_str = fecha_p.strftime("%Y-%m-%d") if hasattr(fecha_p, "strftime") else (str(fecha_p)[:10] if fecha_p else "")
-                            for m in live_list:
-                                if m.get("event_live") != "1":
-                                    continue
-                                aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip().lower()
-                                aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip().lower()
-                                adate = (m.get("event_date") or "")[:10]
-                                if not j1 or not j2 or not adate or fecha_str != adate:
-                                    continue
-                                j1l = j1.lower()
-                                j2l = j2.lower()
-                                same = (j1l == aj1 or j1l.split()[-1] == aj1.split()[-1] or j1l in aj1 or aj1 in j1l) and (j2l == aj2 or j2l.split()[-1] == aj2.split()[-1] or j2l in aj2 or aj2 in j2l)
-                                if same:
-                                    live_api = m
-                                    break
-                        if live_api and live_api.get("event_live") == "1":
-                            p["estado"] = "en_juego"
-                            p["event_final_result"] = live_api.get("event_final_result")
-                            p["event_game_result"] = live_api.get("event_game_result")
-                            p["event_serve"] = live_api.get("event_serve")
-                            p["event_status"] = live_api.get("event_status")
-                            p["event_live"] = "1"
-        except Exception as e:
-            logger.debug("Enrich /matches with get_livescore: %s", e)
+        today = date.today()
+        # Enriquecer con live/fixtures con timeout global 10s para no bloquear /matches
+        live_list, fixtures_resp = [], None
+        if api_client:
+            try:
+                loop = asyncio.get_event_loop()
+                live_list, fixtures_resp = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: _fetch_livescore_and_fixtures_sync(api_client, fecha, today),
+                    ),
+                    10.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ /matches: enriquecimiento timeout 10s, devolviendo sin live/fixtures")
+            except Exception as e:
+                logger.debug("Enriquecimiento /matches: %s", e)
 
-        # Fallback: partidos ya empezados que get_livescore no devolvió — enriquecer con get_fixtures para que la card muestre resultado en directo
-        try:
-            if api_client and fecha == today and partidos_raw:
-                date_str = fecha.strftime("%Y-%m-%d")
-                fixtures_resp = api_client._make_request("get_fixtures", {"date_start": date_str, "date_stop": date_str})
-                if fixtures_resp and fixtures_resp.get("result"):
-                    fixtures = fixtures_resp["result"]
-                    if not isinstance(fixtures, list):
-                        fixtures = [fixtures] if fixtures else []
-                    fixtures_by_key = {str(f.get("event_key")): f for f in fixtures if f.get("event_key") is not None}
-                    for p in partidos_raw:
-                        if p.get("estado") == "en_juego":
-                            continue
-                        ek = p.get("event_key")
-                        if not ek:
-                            continue
-                        if not _partido_has_started(p, today):
-                            continue
-                        api_match = fixtures_by_key.get(str(ek))
-                        if not api_match:
-                            continue
-                        if api_match.get("event_live") == "1" or api_match.get("event_final_result") or api_match.get("scores"):
-                            p["estado"] = "en_juego"
-                            p["event_final_result"] = api_match.get("event_final_result")
-                            p["event_game_result"] = api_match.get("event_game_result")
-                            p["event_serve"] = api_match.get("event_serve")
-                            p["event_status"] = api_match.get("event_status")
-                            p["event_live"] = api_match.get("event_live") or "1"
-                            # Guardar scores por set para que la card muestre juegos (1-6, 2-2, etc.)
-                            api_scores = api_match.get("scores") or []
-                            if api_scores and hasattr(db, "save_match_sets"):
-                                try:
-                                    sets_data = []
-                                    for i, sc in enumerate(api_scores):
-                                        set_num = int(sc.get("score_set") or (i + 1))
-                                        try:
-                                            p1 = int(sc.get("score_first") or 0)
-                                        except (ValueError, TypeError):
-                                            p1 = 0
-                                        try:
-                                            p2 = int(sc.get("score_second") or 0)
-                                        except (ValueError, TypeError):
-                                            p2 = 0
-                                        sets_data.append({
-                                            "set_number": set_num,
-                                            "player1_score": p1,
-                                            "player2_score": p2,
-                                            "tiebreak_score": None,
-                                        })
-                                    if sets_data:
-                                        db.save_match_sets(p["id"], sets_data)
-                                except Exception as ex:
-                                    logger.debug("Enrich save_match_sets from get_fixtures: %s", ex)
-        except Exception as e:
-            logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
+        # Aplicar enriquecimiento con get_livescore
+        if live_list:
+            try:
+                live_by_key = {str(m.get("event_key")): m for m in live_list if m.get("event_key") is not None}
+                for p in partidos_raw:
+                    ek = p.get("event_key")
+                    mid = p.get("id")
+                    live_api = (live_by_key.get(str(ek)) if ek is not None else None) or (live_by_key.get(str(mid)) if mid is not None else None)
+                    if not live_api:
+                        j1 = (p.get("jugador1_nombre") or p.get("jugador1") or "").strip()
+                        j2 = (p.get("jugador2_nombre") or p.get("jugador2") or "").strip()
+                        fecha_p = p.get("fecha_partido")
+                        fecha_str = fecha_p.strftime("%Y-%m-%d") if hasattr(fecha_p, "strftime") else (str(fecha_p)[:10] if fecha_p else "")
+                        for m in live_list:
+                            if m.get("event_live") != "1":
+                                continue
+                            aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip().lower()
+                            aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip().lower()
+                            adate = (m.get("event_date") or "")[:10]
+                            if not j1 or not j2 or not adate or fecha_str != adate:
+                                continue
+                            j1l = j1.lower()
+                            j2l = j2.lower()
+                            same = (j1l == aj1 or j1l.split()[-1] == aj1.split()[-1] or j1l in aj1 or aj1 in j1l) and (j2l == aj2 or j2l.split()[-1] == aj2.split()[-1] or j2l in aj2 or aj2 in j2l)
+                            if same:
+                                live_api = m
+                                break
+                    if live_api and live_api.get("event_live") == "1":
+                        p["estado"] = "en_juego"
+                        p["event_final_result"] = live_api.get("event_final_result")
+                        p["event_game_result"] = live_api.get("event_game_result")
+                        p["event_serve"] = live_api.get("event_serve")
+                        p["event_status"] = live_api.get("event_status")
+                        p["event_live"] = "1"
+            except Exception as e:
+                logger.debug("Enrich /matches with get_livescore: %s", e)
+
+        # Fallback: partidos ya empezados con get_fixtures
+        if fixtures_resp and fixtures_resp.get("result") and fecha == today and partidos_raw:
+            try:
+                fixtures = fixtures_resp["result"]
+                if not isinstance(fixtures, list):
+                    fixtures = [fixtures] if fixtures else []
+                fixtures_by_key = {str(f.get("event_key")): f for f in fixtures if f.get("event_key") is not None}
+                for p in partidos_raw:
+                    if p.get("estado") == "en_juego":
+                        continue
+                    ek = p.get("event_key")
+                    if not ek:
+                        continue
+                    if not _partido_has_started(p, today):
+                        continue
+                    api_match = fixtures_by_key.get(str(ek))
+                    if not api_match:
+                        continue
+                    if api_match.get("event_live") == "1" or api_match.get("event_final_result") or api_match.get("scores"):
+                        p["estado"] = "en_juego"
+                        p["event_final_result"] = api_match.get("event_final_result")
+                        p["event_game_result"] = api_match.get("event_game_result")
+                        p["event_serve"] = api_match.get("event_serve")
+                        p["event_status"] = api_match.get("event_status")
+                        p["event_live"] = api_match.get("event_live") or "1"
+                        api_scores = api_match.get("scores") or []
+                        if api_scores and hasattr(db, "save_match_sets"):
+                            try:
+                                sets_data = []
+                                for i, sc in enumerate(api_scores):
+                                    set_num = int(sc.get("score_set") or (i + 1))
+                                    try:
+                                        p1 = int(sc.get("score_first") or 0)
+                                    except (ValueError, TypeError):
+                                        p1 = 0
+                                    try:
+                                        p2 = int(sc.get("score_second") or 0)
+                                    except (ValueError, TypeError):
+                                        p2 = 0
+                                    sets_data.append({
+                                        "set_number": set_num,
+                                        "player1_score": p1,
+                                        "player2_score": p2,
+                                        "tiebreak_score": None,
+                                    })
+                                if sets_data:
+                                    db.save_match_sets(p["id"], sets_data)
+                            except Exception as ex:
+                                logger.debug("Enrich save_match_sets from get_fixtures: %s", ex)
+            except Exception as e:
+                logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
 
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
@@ -636,7 +673,6 @@ async def get_matches_by_date(
         bankroll = _get_current_bankroll(db)
         # Convertir a modelos Pydantic
         partidos = []
-        today = date.today()
         for p in partidos_raw:
             # Partidos con fecha futura: nunca mostrar como "en directo" ni resultado
             match_date = p.get("fecha_partido")
