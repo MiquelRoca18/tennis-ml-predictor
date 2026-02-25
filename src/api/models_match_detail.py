@@ -52,6 +52,7 @@ class PlayerInfo(BaseModel):
     country: Optional[str] = Field(None, description="País (código ISO)")
     ranking: Optional[int] = Field(None, description="Ranking ATP/WTA")
     logo_url: Optional[str] = Field(None, description="URL del logo/foto")
+    player_key: Optional[Union[int, str]] = Field(None, description="ID del jugador para enlace al perfil")
     
     class Config:
         json_schema_extra = {

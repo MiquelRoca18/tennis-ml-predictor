@@ -308,6 +308,7 @@ async def get_match_full(match_id: int):
             country=match.get("jugador1_pais"),
             ranking=j1_ranking,
             logo_url=match.get("jugador1_logo"),
+            player_key=str(j1_key) if j1_key is not None else None,
         )
         
         player2 = PlayerInfo(
@@ -315,6 +316,7 @@ async def get_match_full(match_id: int):
             country=match.get("jugador2_pais"),
             ranking=j2_ranking,
             logo_url=match.get("jugador2_logo"),
+            player_key=str(j2_key) if j2_key is not None else None,
         )
         
         # 4. Obtener scores de la BD (rápido)
