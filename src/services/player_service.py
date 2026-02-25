@@ -221,14 +221,35 @@ class PlayerService:
             row = dict(m)
             j1_key = (row.get("jugador1_key") or "")
             j2_key = (row.get("jugador2_key") or "")
+            j1_name = (row.get("jugador1_nombre") or "").strip()
+            j2_name = (row.get("jugador2_nombre") or "").strip()
+            winner = (row.get("resultado_ganador") or "").strip()
             if str(j1_key) == key_str:
-                row["opponent_name"] = (row.get("jugador2_nombre") or "").strip()
-                row["is_win"] = (row.get("resultado_ganador") or "").strip() == (row.get("jugador1_nombre") or "").strip()
+                row["opponent_name"] = j2_name
+                row["profile_is_jugador1"] = True
+                row["is_win"] = self._winner_matches_name(winner, j1_name)
             else:
-                row["opponent_name"] = (row.get("jugador1_nombre") or "").strip()
-                row["is_win"] = (row.get("resultado_ganador") or "").strip() == (row.get("jugador2_nombre") or "").strip()
+                row["opponent_name"] = j1_name
+                row["profile_is_jugador1"] = False
+                row["is_win"] = self._winner_matches_name(winner, j2_name)
             out.append(row)
         return out
+
+    def _winner_matches_name(self, winner_name: str, player_name: str) -> bool:
+        """True si winner_name y player_name se consideran la misma persona (coincidencia flexible)."""
+        if not winner_name or not player_name:
+            return False
+        w = winner_name.lower().strip()
+        p = player_name.lower().strip()
+        if w == p:
+            return True
+        if w in p or p in w:
+            return True
+        w_parts = w.split()
+        p_parts = p.split()
+        if w_parts and p_parts and w_parts[-1] == p_parts[-1]:
+            return True
+        return False
 
     def get_player_key_by_name(self, name: str) -> Optional[int]:
         """
