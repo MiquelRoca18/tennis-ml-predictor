@@ -249,6 +249,41 @@ def _is_set_completed(p1: int, p2: int) -> bool:
     return (hi - lo >= 2) or (lo >= 6)
 
 
+def _partido_has_started(p: dict, today: date) -> bool:
+    """True si el partido ya ha empezado (fecha en el pasado o hoy con hora_inicio pasada)."""
+    match_date = p.get("fecha_partido")
+    if isinstance(match_date, str):
+        try:
+            match_date = datetime.strptime(match_date[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return False
+    elif hasattr(match_date, "date") and callable(getattr(match_date, "date", None)):
+        match_date = match_date.date()
+    elif not isinstance(match_date, date):
+        return False
+    if match_date > today:
+        return False
+    if match_date < today:
+        return True
+    # Hoy: comprobar hora_inicio
+    hora_inicio_val = p.get("hora_inicio")
+    if hora_inicio_val is None:
+        return True
+    try:
+        if isinstance(hora_inicio_val, dt_time):
+            start_dt = datetime.combine(match_date, hora_inicio_val)
+        elif isinstance(hora_inicio_val, str):
+            parts = hora_inicio_val.strip().split(":")
+            h = int(parts[0]) if len(parts) > 0 else 0
+            m = int(parts[1]) if len(parts) > 1 else 0
+            start_dt = datetime.combine(match_date, dt_time(h, m, 0))
+        else:
+            return True
+        return start_dt <= datetime.now()
+    except (ValueError, TypeError):
+        return True
+
+
 def _build_match_scores(
     match_data: dict,
     database,
@@ -533,6 +568,62 @@ async def get_matches_by_date(
                             p["event_live"] = "1"
         except Exception as e:
             logger.debug("Enrich /matches with get_livescore: %s", e)
+
+        # Fallback: partidos ya empezados que get_livescore no devolvió — enriquecer con get_fixtures para que la card muestre resultado en directo
+        try:
+            if api_client and fecha == today and partidos_raw:
+                date_str = fecha.strftime("%Y-%m-%d")
+                fixtures_resp = api_client._make_request("get_fixtures", {"date_start": date_str, "date_stop": date_str})
+                if fixtures_resp and fixtures_resp.get("result"):
+                    fixtures = fixtures_resp["result"]
+                    if not isinstance(fixtures, list):
+                        fixtures = [fixtures] if fixtures else []
+                    fixtures_by_key = {str(f.get("event_key")): f for f in fixtures if f.get("event_key") is not None}
+                    for p in partidos_raw:
+                        if p.get("estado") == "en_juego":
+                            continue
+                        ek = p.get("event_key")
+                        if not ek:
+                            continue
+                        if not _partido_has_started(p, today):
+                            continue
+                        api_match = fixtures_by_key.get(str(ek))
+                        if not api_match:
+                            continue
+                        if api_match.get("event_live") == "1" or api_match.get("event_final_result") or api_match.get("scores"):
+                            p["estado"] = "en_juego"
+                            p["event_final_result"] = api_match.get("event_final_result")
+                            p["event_game_result"] = api_match.get("event_game_result")
+                            p["event_serve"] = api_match.get("event_serve")
+                            p["event_status"] = api_match.get("event_status")
+                            p["event_live"] = api_match.get("event_live") or "1"
+                            # Guardar scores por set para que la card muestre juegos (1-6, 2-2, etc.)
+                            api_scores = api_match.get("scores") or []
+                            if api_scores and hasattr(db, "save_match_sets"):
+                                try:
+                                    sets_data = []
+                                    for i, sc in enumerate(api_scores):
+                                        set_num = int(sc.get("score_set") or (i + 1))
+                                        try:
+                                            p1 = int(sc.get("score_first") or 0)
+                                        except (ValueError, TypeError):
+                                            p1 = 0
+                                        try:
+                                            p2 = int(sc.get("score_second") or 0)
+                                        except (ValueError, TypeError):
+                                            p2 = 0
+                                        sets_data.append({
+                                            "set_number": set_num,
+                                            "player1_score": p1,
+                                            "player2_score": p2,
+                                            "tiebreak_score": None,
+                                        })
+                                    if sets_data:
+                                        db.save_match_sets(p["id"], sets_data)
+                                except Exception as ex:
+                                    logger.debug("Enrich save_match_sets from get_fixtures: %s", ex)
+        except Exception as e:
+            logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
 
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
