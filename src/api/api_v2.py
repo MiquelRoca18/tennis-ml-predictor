@@ -626,8 +626,14 @@ async def get_matches_by_date(
 
             # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador).
             # Para en_juego SIEMPRE intentar construir (aunque no haya marcador aún), así la card puede mostrar 0-0 o sets en curso.
+            # También para partidos ya empezados (hora pasada) que siguen "pendiente" en BD (get_livescore no los devolvió): enviar placeholder para que la card no muestre cuotas.
+            started_but_pendiente = not is_future and db_estado == "pendiente" and not p.get("resultado_ganador")
             match_scores = None
-            if not is_future and (p.get("resultado_marcador") or p.get("event_final_result") or effective_estado == "en_juego"):
+            if not is_future and (
+                p.get("resultado_marcador") or p.get("event_final_result")
+                or effective_estado == "en_juego"
+                or started_but_pendiente
+            ):
                 try:
                     match_scores = _build_match_scores(p, db, pre_fetched_sets=sets_by_match)
                     if match_scores is None and p.get("event_final_result"):
@@ -656,6 +662,13 @@ async def get_matches_by_date(
                                 is_tiebreak=False
                             )
                         )
+                    # Partido ya empezado pero get_livescore no lo devolvió: placeholder para que la card muestre 0-0 en vez de cuotas
+                    if match_scores is None and started_but_pendiente:
+                        match_scores = MatchScores(
+                            sets_result="0-0",
+                            sets=[],
+                            live=None
+                        )
                 except Exception:
                     pass
             # Garantía: si es en_juego y no tenemos scores (p. ej. excepción arriba), forzar mínimo para que la card muestre 0-0
@@ -672,8 +685,13 @@ async def get_matches_by_date(
                 )
             
             # Construir resultado (solo para completados o en juego, nunca para fecha futura)
+            # Incluir también partidos ya empezados que siguen "pendiente" (get_livescore no los devolvió) para que la card muestre score
             resultado = None
-            if not is_future and (p.get("resultado_ganador") or effective_estado in ["completado", "en_juego"]):
+            if not is_future and (
+                p.get("resultado_ganador")
+                or effective_estado in ["completado", "en_juego"]
+                or started_but_pendiente
+            ):
                 resultado = MatchResult(
                     ganador=p.get("resultado_ganador"),
                     marcador=p.get("resultado_marcador"),
