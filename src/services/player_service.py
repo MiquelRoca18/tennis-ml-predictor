@@ -204,6 +204,7 @@ class PlayerService:
             SELECT 
                 id, fecha_partido, torneo, superficie,
                 jugador1_nombre, jugador2_nombre,
+                jugador1_key, jugador2_key,
                 resultado_ganador, resultado_marcador, estado
             FROM matches
             WHERE (jugador1_key = :player_key OR jugador2_key = :player_key)
@@ -214,7 +215,20 @@ class PlayerService:
             {"player_key": str(player_key), "limit": last_n}
         )
 
-        return matches
+        key_str = str(player_key)
+        out = []
+        for m in matches:
+            row = dict(m)
+            j1_key = (row.get("jugador1_key") or "")
+            j2_key = (row.get("jugador2_key") or "")
+            if str(j1_key) == key_str:
+                row["opponent_name"] = (row.get("jugador2_nombre") or "").strip()
+                row["is_win"] = (row.get("resultado_ganador") or "").strip() == (row.get("jugador1_nombre") or "").strip()
+            else:
+                row["opponent_name"] = (row.get("jugador1_nombre") or "").strip()
+                row["is_win"] = (row.get("resultado_ganador") or "").strip() == (row.get("jugador2_nombre") or "").strip()
+            out.append(row)
+        return out
 
     def get_player_key_by_name(self, name: str) -> Optional[int]:
         """
