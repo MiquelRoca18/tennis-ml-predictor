@@ -191,11 +191,11 @@ class PlayerService:
     def get_player_form(self, player_key: int, last_n: int = 10) -> List[Dict]:
         """
         Obtiene últimos N partidos de un jugador
-        
+
         Args:
             player_key: ID del jugador
             last_n: Número de partidos
-            
+
         Returns:
             Lista de partidos recientes
         """
@@ -213,8 +213,44 @@ class PlayerService:
         """,
             {"player_key": str(player_key), "limit": last_n}
         )
-        
+
         return matches
+
+    def get_player_key_by_name(self, name: str) -> Optional[int]:
+        """
+        Busca player_key por nombre (para enlace desde la card cuando no viene key en el partido).
+        Coincidencia parcial por nombre; devuelve el primero que coincida (priorizando ranking).
+
+        Args:
+            name: Nombre del jugador (ej. "Alcaraz", "Rafael Nadal")
+
+        Returns:
+            player_key si se encuentra, None si no
+        """
+        if not name or not name.strip():
+            return None
+        name_clean = name.strip().replace("%", "").replace("_", "")
+        if not name_clean:
+            return None
+        pattern = f"%{name_clean}%"
+        row = self.db._fetchone(
+            """
+            SELECT player_key FROM players
+            WHERE LOWER(player_name) LIKE LOWER(:pattern)
+            ORDER BY atp_ranking ASC NULLS LAST
+            LIMIT 1
+            """,
+            {"pattern": pattern},
+        )
+        if not row:
+            return None
+        raw = row.get("player_key")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
 
 
 if __name__ == "__main__":

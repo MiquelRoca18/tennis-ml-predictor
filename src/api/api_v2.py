@@ -154,6 +154,10 @@ except Exception as e:
 # Variable global para LiveEventsService
 live_events_service = None
 
+# Últimos resultados de crons externos (para verificación en GET /admin/cron-status)
+_last_trigger_retraining_result: Optional[Dict] = None
+_last_refresh_elo_result: Optional[Dict] = None
+
 def reset_predictor():
     """Resetea el predictor en memoria. La próxima predicción creará una nueva instancia."""
     global predictor
@@ -579,17 +583,21 @@ async def get_matches_by_date(
             effective_estado = "pendiente" if is_future else db_estado
 
             # Construir jugadores
+            j1_key = p.get("jugador1_key")
+            j2_key = p.get("jugador2_key")
             jugador1 = JugadorInfo(
                 nombre=p["jugador1_nombre"],
                 ranking=p["jugador1_ranking"],
                 cuota=p.get("jugador1_cuota") or 0,  # Sin cuota = 0, no mostrar en frontend
                 logo=p.get("jugador1_logo"),  # URL del logo desde API-Tennis
+                key=str(j1_key) if j1_key is not None else None,
             )
             jugador2 = JugadorInfo(
                 nombre=p["jugador2_nombre"],
                 ranking=p["jugador2_ranking"],
                 cuota=p.get("jugador2_cuota") or 0,
                 logo=p.get("jugador2_logo"),  # URL del logo desde API-Tennis
+                key=str(j2_key) if j2_key is not None else None,
             )
 
             # Construir predicción si existe (stake recalculado con bankroll actual)
@@ -1630,25 +1638,32 @@ async def trigger_retraining():
     GET para crons externos: dispara sync de cuotas y predicciones (mismo efecto que POST /admin/sync-odds-and-predictions).
     Devuelve 200 para que el cron no marque 404. Idempotente.
     """
+    global _last_trigger_retraining_result
     try:
         if not odds_service:
-            return {"ok": False, "detail": "OddsUpdateService no disponible", "timestamp": datetime.now().isoformat()}
+            out = {"ok": False, "detail": "OddsUpdateService no disponible", "timestamp": datetime.now().isoformat()}
+            _last_trigger_retraining_result = out
+            return out
         logger.info("🔧 Trigger retraining (cron GET) solicitado")
         result = odds_service.sync_odds_and_predictions_for_pending_matches()
-        return {
+        out = {
             "ok": True,
             "timestamp": datetime.now().isoformat(),
             "odds_updated": result.get("odds_updated", 0),
             "predictions_generated": result.get("predictions_generated", 0),
             "message": result.get("message", "Sync ejecutado"),
         }
+        _last_trigger_retraining_result = out
+        return out
     except Exception as e:
         logger.error(f"❌ Error en trigger-retraining: {e}", exc_info=True)
-        return {
+        out = {
             "ok": False,
             "detail": str(e),
             "timestamp": datetime.now().isoformat(),
         }
+        _last_trigger_retraining_result = out
+        return out
 
 
 @app.get("/cron/refresh-elo", tags=["Cron"])
@@ -1663,6 +1678,7 @@ async def cron_refresh_elo():
     En cron-job.org: crear job diario a las 5:00 AM con URL
     https://tu-app.railway.app/cron/refresh-elo
     """
+    global _last_refresh_elo_result
     try:
         from src.services.tml_data_download import refresh_elo_data_daily
         from src.prediction.feature_generator_service import reset_instance as reset_fgs
@@ -1672,7 +1688,7 @@ async def cron_refresh_elo():
             reset_fgs()
             reset_predictor()
             logger.info("🔄 ELO y predictor reseteados tras GET /cron/refresh-elo")
-        return {
+        out = {
             "ok": True,
             "timestamp": datetime.now().isoformat(),
             "downloaded": result["downloaded"],
@@ -1680,13 +1696,33 @@ async def cron_refresh_elo():
             "errors": result.get("errors"),
             "message": "Datos ELO actualizados" if result["downloaded"] else "Nada que descargar o ya actualizado",
         }
+        _last_refresh_elo_result = out
+        return out
     except Exception as e:
         logger.error(f"❌ Error en /cron/refresh-elo: {e}", exc_info=True)
-        return {
+        out = {
             "ok": False,
             "detail": str(e),
             "timestamp": datetime.now().isoformat(),
         }
+        _last_refresh_elo_result = out
+        return out
+
+
+@app.get("/admin/cron-status", tags=["Admin"])
+async def admin_cron_status():
+    """
+    Devuelve el último resultado de cada cron externo (trigger-retraining y refresh-elo).
+    Útil para comprobar que los crons de cron-job.org están ejecutando correctamente:
+    - trigger_retraining: ok true, y revisar odds_updated / predictions_generated.
+    - refresh_elo: ok true, downloaded debe incluir años (ej. ["2025","2026"]), errors null o vacío.
+    Los valores se actualizan cada vez que se llama a GET /admin/trigger-retraining o GET /cron/refresh-elo.
+    """
+    return {
+        "trigger_retraining": _last_trigger_retraining_result,
+        "refresh_elo": _last_refresh_elo_result,
+        "note": "Valores en null hasta que cada cron se ejecute al menos una vez.",
+    }
 
 
 @app.post("/admin/regenerate-all-predictions", tags=["Admin"])
@@ -3461,6 +3497,26 @@ def _profile_from_api_tennis(api_data: Dict) -> Dict:
         "atp_points": api_data.get("atp_points") or api_data.get("points"),
         "stats": api_data.get("stats", []),
     }
+
+
+@app.get("/players/lookup", tags=["Elite - Players"])
+async def lookup_player_by_name(name: str = Query(..., min_length=1)):
+    """
+    Busca player_key por nombre. Para usar desde la card del partido cuando no viene key en la respuesta.
+    Devuelve el primer jugador cuya nombre coincida (parcial), priorizando mejor ranking.
+    """
+    if not player_service:
+        raise HTTPException(status_code=503, detail="Player service not available")
+    try:
+        player_key = player_service.get_player_key_by_name(name)
+        if player_key is None:
+            raise HTTPException(status_code=404, detail="Jugador no encontrado")
+        return {"player_key": player_key}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en lookup de jugador por nombre: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/players/{player_key}", tags=["Elite - Players"])
