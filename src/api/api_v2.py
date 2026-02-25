@@ -3490,12 +3490,15 @@ def _profile_from_api_tennis(api_data: Dict) -> Dict:
     return {
         "player_key": api_data.get("player_key") or api_data.get("player_key_id"),
         "player_name": api_data.get("player_name") or api_data.get("player") or "",
+        "player_full_name": api_data.get("player_full_name") or api_data.get("player_name") or api_data.get("player") or "",
         "player_country": api_data.get("player_country") or api_data.get("country"),
         "country": api_data.get("country") or api_data.get("player_country"),
+        "player_bday": api_data.get("player_bday"),
         "player_logo": api_data.get("player_logo") or api_data.get("logo"),
         "atp_ranking": api_data.get("atp_ranking") or api_data.get("ranking"),
         "atp_points": api_data.get("atp_points") or api_data.get("points"),
         "stats": api_data.get("stats", []),
+        "tournaments": api_data.get("tournaments", []),
     }
 
 
@@ -3550,6 +3553,18 @@ async def get_player_profile(player_key: int):
                 except Exception as e:
                     logger.debug("No se pudo guardar perfil en BD: %s", e)
                 profile = _profile_from_api_tennis(api_data)
+        
+        # Si el perfil viene de BD y no tiene stats/tournaments, enriquecer con API
+        if profile and api_client and (not profile.get("stats") and not profile.get("tournaments")):
+            try:
+                api_data = api_client.get_player_profile(str(player_key))
+                if api_data:
+                    profile["stats"] = api_data.get("stats", [])
+                    profile["tournaments"] = api_data.get("tournaments", [])
+                    profile["player_full_name"] = api_data.get("player_full_name") or profile.get("player_name")
+                    profile["player_bday"] = api_data.get("player_bday")
+            except Exception as e:
+                logger.debug("Enriquecer perfil con API: %s", e)
         
         if not profile:
             raise HTTPException(status_code=404, detail="Jugador no encontrado")
