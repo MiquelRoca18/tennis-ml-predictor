@@ -3803,7 +3803,18 @@ async def get_player_upcoming(
                 "tournament_name": (m.get("tournament_name") or "").strip(),
                 "round": (m.get("tournament_round") or "").strip(),
                 "event_type_type": (m.get("event_type_type") or "").strip(),
+                "match_id": None,  # se rellena si existe en nuestra BD
             })
+        # Resolver match_id por event_key para partidos que ya están en nuestra BD (navegación al detalle)
+        for item in out:
+            ek = item.get("event_key")
+            if ek is not None and hasattr(db, "get_match_by_event_key"):
+                try:
+                    found = db.get_match_by_event_key(str(ek))
+                    if found and found.get("id"):
+                        item["match_id"] = found["id"]
+                except Exception:
+                    pass
         return {"player_key": player_key, "upcoming": out}
     except Exception as e:
         logger.error(f"Error obteniendo próximos partidos del jugador: {e}")
