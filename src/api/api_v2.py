@@ -395,11 +395,14 @@ def _build_match_scores(
         # No inventar "0-0" para en_juego sin datos: la card debe mostrar cuotas, no 0-0 falso
 
         # Construir datos en vivo solo si hay algo real que mostrar (sets, puntos del juego, o sacador)
+        # No crear live_data cuando el único dato es event_game_result "0-0" (equivale a "sin datos en vivo")
         live_data = None
         if estado == "en_juego":
+            eg = (match_data.get("event_game_result") or "").strip().replace(" ", "")
+            has_real_game_score = eg and eg != "0-0"
             has_live_info = (
                 bool(sets_data)
-                or match_data.get("event_game_result")
+                or has_real_game_score
                 or match_data.get("event_serve")
             )
             if has_live_info:
