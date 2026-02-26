@@ -845,7 +845,8 @@ class MatchDatabase:
             if self.is_postgres:
                 from sqlalchemy import text, bindparam
                 stmt = text("""
-                    SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+                    SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre,
+                           fecha_partido, hora_inicio
                     FROM matches
                     WHERE id IN :match_ids
                 """).bindparams(bindparam("match_ids", expanding=True))
@@ -856,7 +857,8 @@ class MatchDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 f"""
-                SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+                SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre,
+                       fecha_partido, hora_inicio
                 FROM matches
                 WHERE id IN ({placeholders})
                 """,

@@ -917,7 +917,14 @@ async def get_matches_status_batch(request: Request):
                         winner = 1
                     elif ganador_nombre.lower() in j2.lower() or (ganador_nombre.split()[-1] if ganador_nombre else "") == (j2.split()[-1] if j2 else ""):
                         winner = 2
-            out[str(mid)] = {"status": estado, "winner": winner}
+            entry = {"status": estado, "winner": winner}
+            fp = r.get("fecha_partido")
+            if fp is not None:
+                entry["match_date"] = fp.strftime("%Y-%m-%d") if hasattr(fp, "strftime") else str(fp)[:10]
+            hi = r.get("hora_inicio")
+            if hi is not None:
+                entry["match_time"] = str(hi)[:5]  # "19:42" or "19:42:00" -> "19:42"
+            out[str(mid)] = entry
         for mid in match_ids:
             if str(mid) not in out:
                 out[str(mid)] = {"status": "pendiente", "winner": None}
