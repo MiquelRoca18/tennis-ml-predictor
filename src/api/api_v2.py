@@ -392,20 +392,25 @@ def _build_match_scores(
                 p1_sets = sum(1 for s in sets_data if s.player1_score > s.player2_score)
                 p2_sets = sum(1 for s in sets_data if s.player2_score > s.player1_score)
             sets_result = f"{p1_sets}-{p2_sets}"
-        if not sets_result and estado == "en_juego":
-            sets_result = "0-0"  # En vivo sin datos de sets: mostrar 0-0
-        
-        # Construir datos en vivo si está en juego
+        # No inventar "0-0" para en_juego sin datos: la card debe mostrar cuotas, no 0-0 falso
+
+        # Construir datos en vivo solo si hay algo real que mostrar (sets, puntos del juego, o sacador)
         live_data = None
         if estado == "en_juego":
-            live_data = LiveData(
-                current_game_score=match_data.get("event_game_result"),
-                current_server=match_data.get("event_serve"),
-                current_set=len(sets_data) + 1 if sets_data else 1,
-                is_tiebreak="tiebreak" in (match_data.get("event_status_detail") or "").lower()
+            has_live_info = (
+                bool(sets_data)
+                or match_data.get("event_game_result")
+                or match_data.get("event_serve")
             )
-        
-        # Si no hay datos, retornar None
+            if has_live_info:
+                live_data = LiveData(
+                    current_game_score=match_data.get("event_game_result"),
+                    current_server=match_data.get("event_serve"),
+                    current_set=len(sets_data) + 1 if sets_data else 1,
+                    is_tiebreak="tiebreak" in (match_data.get("event_status_detail") or "").lower()
+                )
+
+        # Si no hay datos reales (ni sets ni sets_result ni live con info), no devolver scores
         if not sets_data and not sets_result and not live_data:
             return None
         
@@ -797,32 +802,9 @@ async def get_matches_by_date(
                                     is_tiebreak=False
                                 ) if effective_estado == "en_juego" else None
                             )
-                    # En vivo sin scores aún: devolver al menos sets_result "0-0" y live para que la card no muestre @2.00
-                    if match_scores is None and effective_estado == "en_juego":
-                        match_scores = MatchScores(
-                            sets_result="0-0",
-                            sets=[],
-                            live=LiveData(
-                                current_game_score=p.get("event_game_result"),
-                                current_server=p.get("event_serve"),
-                                current_set=1,
-                                is_tiebreak=False
-                            )
-                        )
+                    # En vivo sin datos reales: no enviar scores (la card mostrará cuotas, no 0-0)
                 except Exception:
                     pass
-            # Garantía: si es en_juego y no tenemos scores (p. ej. excepción arriba), forzar mínimo para que la card muestre 0-0
-            if effective_estado == "en_juego" and match_scores is None and not is_future:
-                match_scores = MatchScores(
-                    sets_result="0-0",
-                    sets=[],
-                    live=LiveData(
-                        current_game_score=p.get("event_game_result"),
-                        current_server=p.get("event_serve"),
-                        current_set=1,
-                        is_tiebreak=False
-                    )
-                )
             
             # Construir resultado (solo para completados o en juego, nunca para fecha futura)
             resultado = None
