@@ -247,82 +247,25 @@ class OddsUpdateService:
                             top3_player2=match["top3_player2"],
                         )
 
-                    # Generar predicción automáticamente
+                    # Generar predicción con las MISMAS reglas que actualización de cuotas (run_prediction_and_save)
                     try:
                         from src.prediction.predictor_calibrado import PredictorCalibrado
                         from src.config.settings import Config
-                        
-                        # Cargar predictor (lazy loading)
+                        from src.services.prediction_runner import run_prediction_and_save
+
                         predictor = PredictorCalibrado(Config.MODEL_PATH)
-                        
-                        # Generar predicción para ambos jugadores
-                        resultado_j1 = predictor.predecir_partido(
-                            jugador1=match["player1_name"],
-                            jugador2=match["player2_name"],
-                            superficie=match.get("surface") or "Hard",
-                            cuota=match.get("player1_odds", 2.0)
-                        )
-                        
-                        resultado_j2 = predictor.predecir_partido(
-                            jugador1=match["player2_name"],
-                            jugador2=match["player1_name"],
-                            superficie=match.get("surface") or "Hard",
-                            cuota=match.get("player2_odds", 2.0)
-                        )
-                        
-                        # Extraer probabilidades y métricas
-                        prob_j1 = resultado_j1["probabilidad"]
-                        prob_j2 = 1 - prob_j1
-                        ev_j1 = resultado_j1["expected_value"]
-                        ev_j2 = resultado_j2["expected_value"]
-                        edge_j1 = resultado_j1.get("edge", 0)
-                        edge_j2 = resultado_j2.get("edge", 0)
-                        kelly_j1 = resultado_j1.get("stake_recomendado", 0)
-                        kelly_j2 = resultado_j2.get("stake_recomendado", 0)
-                        
-                        # Determinar recomendación
-                        if ev_j1 > 0.03 and ev_j1 > ev_j2:
-                            recomendacion = f"APOSTAR a {match['player1_name']}"
-                            mejor_opcion = match["player1_name"]
-                        elif ev_j2 > 0.03:
-                            recomendacion = f"APOSTAR a {match['player2_name']}"
-                            mejor_opcion = match["player2_name"]
-                        else:
-                            recomendacion = "NO APOSTAR"
-                            mejor_opcion = None
-                        
-                        # Determinar confianza
-                        if abs(prob_j1 - 0.5) > 0.15:
-                            confianza = "Alta"
-                        elif abs(prob_j1 - 0.5) > 0.08:
-                            confianza = "Media"
-                        else:
-                            confianza = "Baja"
-                        
-                        # Guardar predicción
-                        self.db.add_prediction(
+                        ok = run_prediction_and_save(
+                            db=self.db,
+                            predictor=predictor,
                             match_id=match_id,
-                            jugador1_cuota=match.get("player1_odds", 2.0),
-                            jugador2_cuota=match.get("player2_odds", 2.0),
-                            jugador1_probabilidad=prob_j1,
-                            jugador2_probabilidad=prob_j2,
-                            jugador1_ev=ev_j1,
-                            jugador2_ev=ev_j2,
-                            jugador1_edge=edge_j1,
-                            jugador2_edge=edge_j2,
-                            recomendacion=recomendacion,
-                            mejor_opcion=mejor_opcion,
-                            confianza=confianza,
-                            kelly_stake_jugador1=kelly_j1,
-                            kelly_stake_jugador2=kelly_j2,
-                            confidence_level=resultado_j1.get("confidence_level"),
-                            confidence_score=resultado_j1.get("confidence_score"),
-                            player1_known=resultado_j1.get("player1_known"),
-                            player2_known=resultado_j2.get("player2_known"),
+                            player1_name=match["player1_name"],
+                            player2_name=match["player2_name"],
+                            surface=match.get("surface") or "Hard",
+                            player1_odds=match.get("player1_odds", 2.0),
+                            player2_odds=match.get("player2_odds", 2.0),
                         )
-                        
-                        logger.info(f"✅ Predicción generada para partido {match_id}: {recomendacion}")
-                        
+                        if ok:
+                            logger.info(f"✅ Predicción generada para partido {match_id} (mismas reglas que sync)")
                     except Exception as e:
                         logger.error(f"❌ Error generando predicción para partido {match_id}: {e}")
 

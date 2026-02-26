@@ -328,6 +328,8 @@ class MatchPrediction(BaseModel):
     probability_player2: float
     value_bet: Optional[int] = Field(None, description="1, 2 o None si no hay value")
     recommendation: Optional[str] = None
+    """Jugador recomendado para apostar: 1 o 2. None si no hay recomendación de apuesta."""
+    recommended_bet_side: Optional[int] = Field(None, description="1 o 2 según mejor_opcion; None si NO APOSTAR")
     kelly_stake_jugador1: Optional[float] = Field(None, description="Stake sugerido en € para jugador 1")
     kelly_stake_jugador2: Optional[float] = Field(None, description="Stake sugerido en € para jugador 2")
     bankroll_used: Optional[float] = Field(None, description="Bankroll con el que se calculó el stake")

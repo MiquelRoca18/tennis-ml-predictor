@@ -70,11 +70,12 @@ class Config:
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")
 
     # ==================== PARÁMETROS DE APUESTA ====================
-    # Por defecto: ~125 apuestas/año, ROI ~180% (backtest 2021-2024). CONFIG_MEJOR = 0.03/0.50/3.0 (~105/año, ROI ~113%)
-    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.02"))  # 2% EV mínimo
+    # Valores por defecto = CONFIG_MEJOR del backtesting (~105 apuestas/año, ROI ~113% 2021-2024).
+    # Para igualar producción al backtesting: EV_THRESHOLD=0.03, MIN_PROBABILIDAD=0.50, MAX_CUOTA=3.0
+    EV_THRESHOLD = float(os.getenv("EV_THRESHOLD", "0.03"))  # 3% EV mínimo (CONFIG_MEJOR)
     EV_THRESHOLD_ALERT = float(os.getenv("EV_THRESHOLD_ALERT", "0.15"))  # 15% para alertas
-    MAX_CUOTA = float(os.getenv("MAX_CUOTA", "3.5"))  # Cuota máxima recomendada
-    MIN_PROBABILIDAD = float(os.getenv("MIN_PROBABILIDAD", "0.45"))  # Prob mínima para recomendar
+    MAX_CUOTA = float(os.getenv("MAX_CUOTA", "3.0"))  # Cuota máxima recomendada (CONFIG_MEJOR)
+    MIN_PROBABILIDAD = float(os.getenv("MIN_PROBABILIDAD", "0.50"))  # Prob mínima 50% (CONFIG_MEJOR)
     BANKROLL_INICIAL = float(os.getenv("BANKROLL_INICIAL", "1000"))
 
     # ==================== KELLY CRITERION ====================
@@ -289,11 +290,11 @@ MODEL_BACKUP_DIR=modelos/archive
 DATA_PATH=datos/processed/dataset_final.csv
 DATA_BACKUP_DIR=backups
 
-# Betting Parameters (~125 apuestas/año, ROI ~180% backtest). CONFIG_MEJOR: 0.03/0.50/3.0 (~105/año, ~113%)
-EV_THRESHOLD=0.02
+# Betting Parameters - CONFIG_MEJOR del backtesting (~105 apuestas/año, ROI ~113%)
+EV_THRESHOLD=0.03
 EV_THRESHOLD_ALERT=0.15
-MAX_CUOTA=3.5
-MIN_PROBABILIDAD=0.45
+MAX_CUOTA=3.0
+MIN_PROBABILIDAD=0.50
 BANKROLL_INICIAL=1000
 
 # Kelly Criterion (igual que backtesting)

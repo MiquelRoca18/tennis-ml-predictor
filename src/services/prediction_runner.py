@@ -69,8 +69,10 @@ def run_prediction_and_save(
         min_prob = Config.MIN_PROBABILIDAD
         max_cuota = Config.MAX_CUOTA
         max_stake_eur = getattr(Config, "MAX_STAKE_EUR", None)
+        # Misma regla que backtesting: si ambos pasan filtros, recomendar el de mayor EV (ev_j1 > ev_j2 para J1)
         if (
             ev_j1 > umbral_ev
+            and ev_j1 > ev_j2
             and prob_j1 >= min_prob
             and player1_odds < max_cuota
         ):

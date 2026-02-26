@@ -1660,6 +1660,14 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
         j1_name = (match.get("jugador1_nombre") or "").strip()
         j2_name = (match.get("jugador2_nombre") or "").strip()
 
+        # Lado recomendado para apostar (1 o 2) según mejor_opcion; None si no apostar
+        recommended_bet_side = None
+        if mejor_opcion and (j1_name or j2_name):
+            if mejor_opcion == j1_name:
+                recommended_bet_side = 1
+            elif mejor_opcion == j2_name:
+                recommended_bet_side = 2
+
         # Stake sugerido (Kelly) con bankroll actual
         kelly_j1 = None
         kelly_j2 = None
@@ -1703,6 +1711,7 @@ def _get_prediction(match: dict) -> Optional[MatchPrediction]:
             probability_player2=prob2 * 100,
             value_bet=value_bet,
             recommendation=recomendacion or None,
+            recommended_bet_side=recommended_bet_side,
             kelly_stake_jugador1=kelly_j1,
             kelly_stake_jugador2=kelly_j2,
             bankroll_used=bankroll_used,
