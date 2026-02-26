@@ -4187,13 +4187,37 @@ async def sync_rankings():
 # ENDPOINTS ELITE - TOURNAMENTS
 # ============================================================
 
+def _is_men_singles_tournament(event_type_type: Optional[str]) -> bool:
+    """
+    True si el torneo es de individuales masculinos (misma lógica que partidos en la app).
+    Incluye: ATP Singles, Challenger Men Singles, ITF Men Singles, Exhibition Men Singles.
+    Excluye: dobles, WTA, mujeres, júnior (Boys/Girls).
+    """
+    if not event_type_type or not isinstance(event_type_type, str):
+        return False
+    t = event_type_type.upper()
+    if "DOUBLES" in t or "DOUBLE" in t or "WTA" in t or "WOMEN" in t or "LADIES" in t:
+        return False
+    if "BOYS" in t or "GIRLS" in t:
+        return False
+    if not ("SINGLES" in t or "SINGLE" in t):
+        return False
+    is_atp = "ATP" in t
+    is_challenger = "CHALLENGER" in t and "MEN" in t
+    is_itf_men = "ITF" in t and "MEN" in t
+    is_exhibition_men = "EXHIBITION" in t and "MEN" in t
+    is_men_singles = "MEN" in t
+    return is_atp or is_challenger or is_itf_men or is_exhibition_men or is_men_singles
+
+
 @app.get("/tournaments", tags=["Elite - Tournaments"])
 async def get_tournaments(event_type: Optional[str] = None):
     """
-    Obtiene lista de torneos (solo ATP; el filtro se aplica al sincronizar en api_tennis_client.get_tournaments).
+    Obtiene lista de torneos de individuales masculinos (ATP, Challenger Men, ITF Men, etc.).
+    Misma lógica de filtro que los partidos mostrados en la app.
     
     Args:
-        event_type: Filtrar por tipo (opcional)
+        event_type: Filtrar por tipo exacto (opcional). Si no se pasa, se aplica filtro men's singles.
         
     Returns:
         Lista de torneos
@@ -4203,6 +4227,9 @@ async def get_tournaments(event_type: Optional[str] = None):
     
     try:
         tournaments = tournament_service.get_all_tournaments(event_type)
+        # Filtrar a individuales masculinos (como en partidos) salvo que se pida un event_type concreto
+        if not event_type:
+            tournaments = [t for t in tournaments if _is_men_singles_tournament(t.get("event_type_type"))]
         return {
             "total": len(tournaments),
             "tournaments": tournaments
