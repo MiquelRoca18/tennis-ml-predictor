@@ -675,11 +675,13 @@ def _recompute_kelly_stakes_for_response(p_row: dict, bankroll: float):
 
 @app.get("/matches", response_model=MatchesDateResponse, tags=["Matches"])
 async def get_matches_by_date(
-    date_param: Optional[str] = Query(None, alias="date", description="Fecha en formato YYYY-MM-DD")
+    date_param: Optional[str] = Query(None, alias="date", description="Fecha en formato YYYY-MM-DD"),
+    live: Optional[bool] = Query(True, description="Incluir enriquecimiento live/fixtures (True). Pasar false para respuesta más rápida."),
 ):
     """
     Obtiene todos los partidos de una fecha específica.
     OPTIMIZADO: Una sola consulta a BD, sin llamadas adicionales.
+    Parametro live=false: omite llamadas a API externa (respuesta más rápida, sin datos en directo).
     """
     import time
     start_time = time.time()
@@ -719,9 +721,9 @@ async def get_matches_by_date(
         logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
         today = date.today()
-        # Enriquecer con live/fixtures con timeout global 10s para no bloquear /matches
+        # Enriquecer con live/fixtures solo si live=True (timeout 5s para no bloquear)
         live_list, fixtures_resp = [], None
-        if api_client:
+        if live and api_client:
             try:
                 loop = asyncio.get_event_loop()
                 live_list, fixtures_resp = await asyncio.wait_for(
@@ -729,10 +731,10 @@ async def get_matches_by_date(
                         None,
                         lambda: _fetch_livescore_and_fixtures_sync(api_client, fecha, today),
                     ),
-                    10.0,
+                    5.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("⏱️ /matches: enriquecimiento timeout 10s, devolviendo sin live/fixtures")
+                logger.warning("⏱️ /matches: enriquecimiento timeout 5s, devolviendo sin live/fixtures")
             except Exception as e:
                 logger.debug("Enriquecimiento /matches: %s", e)
 
@@ -875,6 +877,55 @@ async def get_matches_by_date(
         raise
     except Exception as e:
         logger.error(f"Error obteniendo partidos: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/matches/status-batch", tags=["Matches"])
+async def get_matches_status_batch(request: Request):
+    """
+    Devuelve estado y ganador de varios partidos en una sola llamada.
+    Útil para liquidar apuestas sin N llamadas a /matches/{id}/full.
+    Body: { "match_ids": [1, 2, 3] }
+    Response: { "1": { "status": "completado", "winner": 1 }, "2": { "status": "pendiente", "winner": null }, ... }
+    """
+    try:
+        body = await request.json()
+        match_ids = body.get("match_ids") or []
+        if not isinstance(match_ids, list):
+            raise HTTPException(status_code=400, detail="match_ids debe ser una lista")
+        match_ids = [int(x) for x in match_ids if isinstance(x, (int, str)) and str(x).isdigit()]
+        if not match_ids:
+            return {}
+        rows = db.get_matches_status_batch(match_ids)
+        out = {}
+        for r in rows:
+            mid = r.get("id")
+            if mid is None:
+                continue
+            estado = r.get("estado") or "pendiente"
+            ganador_nombre = (r.get("resultado_ganador") or "").strip()
+            j1 = (r.get("jugador1_nombre") or "").strip()
+            j2 = (r.get("jugador2_nombre") or "").strip()
+            winner = None
+            if estado == "completado" and ganador_nombre:
+                if j1 and (ganador_nombre == j1 or ganador_nombre.lower() == j1.lower()):
+                    winner = 1
+                elif j2 and (ganador_nombre == j2 or ganador_nombre.lower() == j2.lower()):
+                    winner = 2
+                elif j1 and j2 and ganador_nombre:
+                    if ganador_nombre.lower() in j1.lower() or (ganador_nombre.split()[-1] if ganador_nombre else "") == (j1.split()[-1] if j1 else ""):
+                        winner = 1
+                    elif ganador_nombre.lower() in j2.lower() or (ganador_nombre.split()[-1] if ganador_nombre else "") == (j2.split()[-1] if j2 else ""):
+                        winner = 2
+            out[str(mid)] = {"status": estado, "winner": winner}
+        for mid in match_ids:
+            if str(mid) not in out:
+                out[str(mid)] = {"status": "pendiente", "winner": None}
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error status-batch: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

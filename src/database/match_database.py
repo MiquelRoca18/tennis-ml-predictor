@@ -832,6 +832,43 @@ class MatchDatabase:
         """Obtiene un partido por ID"""
         return self._fetchone("SELECT * FROM matches WHERE id = :id", {"id": match_id})
 
+    def get_matches_status_batch(self, match_ids: List[int]) -> List[Dict]:
+        """
+        Obtiene estado y ganador de múltiples partidos en una sola consulta.
+        Para liquidación de apuestas sin N llamadas a /matches/{id}/full.
+        Returns:
+            Lista de dicts con id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+        """
+        if not match_ids:
+            return []
+        try:
+            if self.is_postgres:
+                from sqlalchemy import text, bindparam
+                stmt = text("""
+                    SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+                    FROM matches
+                    WHERE id IN :match_ids
+                """).bindparams(bindparam("match_ids", expanding=True))
+                with self.engine.connect() as conn:
+                    rows = conn.execute(stmt, {"match_ids": match_ids}).fetchall()
+                return [dict(row._mapping) for row in rows]
+            placeholders = ",".join("?" * len(match_ids))
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+                FROM matches
+                WHERE id IN ({placeholders})
+                """,
+                match_ids
+            )
+            rows = cursor.fetchall()
+            col = [c[0] for c in cursor.description]
+            return [dict(zip(col, row)) for row in rows]
+        except Exception as e:
+            logger.warning("get_matches_status_batch: %s", e)
+            return []
+
     def get_matches_by_date(self, fecha: date) -> List[Dict]:
         """
         Obtiene todos los partidos de una fecha específica
