@@ -199,12 +199,18 @@ def _merge_live_into_match(match: dict, api_m: dict, db=None, match_id: Optional
 # ============================================================
 
 @router.get("/{match_id}/full", response_model=MatchFullResponse, response_model_by_alias=True)
-async def get_match_full(match_id: int):
+async def get_match_full(
+    match_id: int,
+    live: bool = Query(True, description="Si True, enriquece con get_livescore (API externa). Si False, solo BD para respuesta rápida."),
+):
     """
     Obtiene todos los datos de un partido en una sola llamada.
-    
-    OPTIMIZADO: Solo lee de la BD para respuesta rápida (<100ms).
-    Los datos se sincronizan en background por los schedulers.
+
+    Query params:
+    - live=true (default): enriquece con API get_livescore para partidos en directo (más lento).
+    - live=false: solo lee de BD, respuesta más rápida; útil para primera carga.
+
+    OPTIMIZADO: Con live=false la respuesta es rápida (<100ms). Con live=true puede tardar más por la API externa.
     """
     db = get_db()
     
@@ -234,18 +240,18 @@ async def get_match_full(match_id: int):
         if not match:
             raise HTTPException(status_code=404, detail="Partido no encontrado")
 
-        # 1b. Enriquecer con get_livescore: si API-Tennis marca el partido en directo, usar ese estado
-        # para que el detalle no muestre "PROGRAMADO" cuando el partido ya está en vivo.
+        # 1b. Enriquecer con get_livescore solo si live=True (evita latencia API externa en primera carga)
         db_estado = match.get("estado", "pendiente")
         if db_estado not in ["pendiente", "en_juego", "completado", "suspendido", "cancelado"]:
             db_estado = "pendiente"
-        try:
-            api_client = get_api_client()
-            live_estado = _enrich_match_with_livescore(match, api_client, db=db, match_id=match_id)
-            if live_estado == "en_juego":
-                db_estado = "en_juego"
-        except Exception:
-            pass
+        if live:
+            try:
+                api_client = get_api_client()
+                live_estado = _enrich_match_with_livescore(match, api_client, db=db, match_id=match_id)
+                if live_estado == "en_juego":
+                    db_estado = "en_juego"
+            except Exception:
+                pass
 
         # 2. Construir información del partido
         # Si el partido es futuro, no mostrar en_juego (API-Tennis puede tener bugs).
