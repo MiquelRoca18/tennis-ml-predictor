@@ -870,6 +870,52 @@ class MatchDatabase:
         logger.info(f"📊 Encontrados {len(matches)} partidos para {fecha}")
         return matches
 
+    def get_tournament_matches_with_predictions(
+        self, tournament_key: int, season: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        Obtiene partidos de un torneo con la última predicción (mismo formato que get_matches_by_date).
+
+        Returns:
+            Lista de partidos con columnas de predicción (jugador1_ev, kelly_stake_jugador1, etc.)
+        """
+        key_str = str(tournament_key)
+        params = {"key": key_str}
+        view_extra = "AND tournament_season = :season" if season is not None else ""
+        fallback_extra = "AND m.tournament_season = :season" if season is not None else ""
+        if season is not None:
+            params["season"] = str(season)
+
+        matches = self._fetchall_with_view_fallback(
+            f"""
+            SELECT * FROM matches_with_latest_prediction
+            WHERE tournament_key = :key {view_extra}
+            ORDER BY fecha_partido ASC, hora_inicio ASC, id ASC
+            """,
+            f"""
+            SELECT m.*, p.version as prediction_version, p.timestamp as prediction_timestamp,
+                COALESCE(p.jugador1_cuota, m.jugador1_cuota) as jugador1_cuota,
+                COALESCE(p.jugador2_cuota, m.jugador2_cuota) as jugador2_cuota,
+                p.jugador1_probabilidad, p.jugador2_probabilidad,
+                p.jugador1_ev, p.jugador2_ev, p.jugador1_edge, p.jugador2_edge,
+                p.recomendacion, p.mejor_opcion, p.confianza,
+                p.kelly_stake_jugador1, p.kelly_stake_jugador2,
+                p.confidence_level, p.confidence_score,
+                b.id as bet_id, b.jugador_apostado, b.cuota_apostada, b.stake,
+                b.resultado as bet_resultado, b.ganancia
+            FROM matches m
+            LEFT JOIN predictions p ON m.id = p.match_id AND p.version = (
+                SELECT MAX(version) FROM predictions WHERE match_id = m.id
+            )
+            LEFT JOIN bets b ON m.id = b.match_id AND b.estado = 'activa'
+            WHERE m.tournament_key = :key {fallback_extra}
+            ORDER BY m.fecha_partido ASC, m.hora_inicio ASC, m.id ASC
+            """,
+            params,
+        )
+        logger.info(f"📊 Encontrados {len(matches)} partidos para torneo {tournament_key}")
+        return matches
+
     def update_match_result(
         self, match_id: int, ganador: str, marcador: Optional[str] = None
     ) -> bool:

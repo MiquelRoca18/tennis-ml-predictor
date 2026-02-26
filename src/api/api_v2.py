@@ -485,6 +485,149 @@ def _get_current_bankroll(database) -> float:
     return float(Config.BANKROLL_INICIAL)
 
 
+def _rows_to_match_responses(
+    partidos_raw: List[Dict],
+    bankroll: float,
+    sets_by_match: Dict,
+    today: date,
+    database,
+) -> List[MatchResponse]:
+    """Convierte filas de BD (con predicción) a lista de MatchResponse. Usado por /matches y /tournaments/{id}/matches."""
+    partidos = []
+    for p in partidos_raw:
+        match_date = p.get("fecha_partido")
+        if isinstance(match_date, str):
+            try:
+                match_date = datetime.strptime(match_date[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                match_date = today
+        elif hasattr(match_date, "date") and callable(getattr(match_date, "date", None)):
+            match_date = match_date.date()
+        elif not isinstance(match_date, date):
+            match_date = today
+        is_future = match_date > today
+        if not is_future and match_date == today:
+            hora_inicio_val = p.get("hora_inicio")
+            if hora_inicio_val is not None:
+                try:
+                    if isinstance(hora_inicio_val, dt_time):
+                        start_dt = datetime.combine(match_date, hora_inicio_val)
+                    elif isinstance(hora_inicio_val, str):
+                        parts = hora_inicio_val.strip().split(":")
+                        h = int(parts[0]) if len(parts) > 0 else 0
+                        m = int(parts[1]) if len(parts) > 1 else 0
+                        start_dt = datetime.combine(match_date, dt_time(h, m, 0))
+                    else:
+                        start_dt = None
+                    if start_dt is not None and start_dt > datetime.now():
+                        is_future = True
+                except (ValueError, TypeError):
+                    pass
+        db_estado = p.get("estado", "pendiente")
+        effective_estado = "pendiente" if is_future else db_estado
+
+        j1_key = p.get("jugador1_key")
+        j2_key = p.get("jugador2_key")
+        jugador1 = JugadorInfo(
+            nombre=p["jugador1_nombre"],
+            ranking=p["jugador1_ranking"],
+            cuota=p.get("jugador1_cuota") or 0,
+            logo=p.get("jugador1_logo"),
+            key=str(j1_key) if j1_key is not None else None,
+        )
+        jugador2 = JugadorInfo(
+            nombre=p["jugador2_nombre"],
+            ranking=p["jugador2_ranking"],
+            cuota=p.get("jugador2_cuota") or 0,
+            logo=p.get("jugador2_logo"),
+            key=str(j2_key) if j2_key is not None else None,
+        )
+
+        prediccion = None
+        if p.get("prediction_version"):
+            kelly_j1, kelly_j2 = _recompute_kelly_stakes_for_response(p, bankroll)
+            prediccion = PredictionVersion(
+                version=p["prediction_version"],
+                timestamp=p["prediction_timestamp"],
+                jugador1_cuota=p["jugador1_cuota"],
+                jugador2_cuota=p["jugador2_cuota"],
+                jugador1_probabilidad=p["jugador1_probabilidad"],
+                jugador2_probabilidad=p["jugador2_probabilidad"],
+                jugador1_ev=p["jugador1_ev"],
+                jugador2_ev=p["jugador2_ev"],
+                jugador1_edge=p.get("jugador1_edge"),
+                jugador2_edge=p.get("jugador2_edge"),
+                recomendacion=p["recomendacion"],
+                mejor_opcion=p.get("mejor_opcion"),
+                confianza=p.get("confianza"),
+                kelly_stake_jugador1=kelly_j1,
+                kelly_stake_jugador2=kelly_j2,
+                confidence_level=p.get("confidence_level"),
+                confidence_score=p.get("confidence_score"),
+            )
+
+        match_scores = None
+        if not is_future and (
+            p.get("resultado_marcador") or p.get("event_final_result")
+            or effective_estado == "en_juego"
+        ):
+            try:
+                match_scores = _build_match_scores(p, database, pre_fetched_sets=sets_by_match)
+                if match_scores is None and p.get("event_final_result"):
+                    marcador = p.get("resultado_marcador") or p.get("event_final_result")
+                    sets_data = _parse_marcador_to_sets(marcador) if marcador else []
+                    if sets_data:
+                        match_scores = MatchScores(
+                            sets_result=p.get("event_final_result"),
+                            sets=sets_data,
+                            live=LiveData(
+                                current_game_score=p.get("event_game_result"),
+                                current_server=p.get("event_serve"),
+                                current_set=len(sets_data) + 1,
+                                is_tiebreak=False
+                            ) if effective_estado == "en_juego" else None
+                        )
+            except Exception:
+                pass
+
+        resultado = None
+        if not is_future and (
+            p.get("resultado_ganador")
+            or effective_estado in ["completado", "en_juego"]
+        ):
+            resultado = MatchResult(
+                ganador=p.get("resultado_ganador"),
+                marcador=p.get("resultado_marcador"),
+                scores=match_scores,
+                apostamos=p.get("bet_id") is not None,
+                resultado_apuesta=p.get("bet_resultado"),
+                stake=p.get("stake"),
+                ganancia=p.get("ganancia"),
+                roi=p.get("ganancia") / p.get("stake") if p.get("stake") else None,
+            )
+
+        partido = MatchResponse(
+            id=p["id"],
+            estado=EstadoPartido(effective_estado),
+            fecha_partido=p["fecha_partido"],
+            hora_inicio=p.get("hora_inicio"),
+            torneo=p.get("torneo"),
+            ronda=p.get("ronda"),
+            superficie=Superficie(p["superficie"]),
+            event_key=p.get("event_key"),
+            tournament_key=p.get("tournament_key"),
+            tournament_season=p.get("tournament_season"),
+            jugador1=jugador1,
+            jugador2=jugador2,
+            prediccion=prediccion,
+            resultado=resultado,
+            event_status=p.get("event_status"),
+            is_live=(effective_estado == "en_juego"),
+        )
+        partidos.append(partido)
+    return partidos
+
+
 def _recompute_kelly_stakes_for_response(p_row: dict, bankroll: float):
     """
     Recalcula kelly_stake_jugador1 y kelly_stake_jugador2 con el bankroll actual.
@@ -702,148 +845,9 @@ async def get_matches_by_date(
         # Bankroll actual para recalcular stake en cada predicción
         bankroll = _get_current_bankroll(db)
         # Convertir a modelos Pydantic
-        partidos = []
-        for p in partidos_raw:
-            # Partidos con fecha futura: nunca mostrar como "en directo" ni resultado
-            match_date = p.get("fecha_partido")
-            if isinstance(match_date, str):
-                try:
-                    match_date = datetime.strptime(match_date[:10], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    match_date = today
-            elif hasattr(match_date, "date") and callable(getattr(match_date, "date", None)):
-                match_date = match_date.date()
-            elif not isinstance(match_date, date):
-                match_date = today
-            # Partido futuro: fecha > hoy, o mismo día pero hora_inicio aún no ha llegado
-            is_future = match_date > today
-            if not is_future and match_date == today:
-                hora_inicio_val = p.get("hora_inicio")
-                if hora_inicio_val is not None:
-                    try:
-                        if isinstance(hora_inicio_val, dt_time):
-                            start_dt = datetime.combine(match_date, hora_inicio_val)
-                        elif isinstance(hora_inicio_val, str):
-                            parts = hora_inicio_val.strip().split(":")
-                            h = int(parts[0]) if len(parts) > 0 else 0
-                            m = int(parts[1]) if len(parts) > 1 else 0
-                            start_dt = datetime.combine(match_date, dt_time(h, m, 0))
-                        else:
-                            start_dt = None
-                        if start_dt is not None and start_dt > datetime.now():
-                            is_future = True
-                    except (ValueError, TypeError):
-                        pass
-            # Si el partido es futuro (fecha o hora_inicio), SIEMPRE mostrar pendiente.
-            # No confiar en db_estado="en_juego" para partidos futuros (API-Tennis puede tener bugs).
-            db_estado = p.get("estado", "pendiente")
-            effective_estado = "pendiente" if is_future else db_estado
-
-            # Construir jugadores
-            j1_key = p.get("jugador1_key")
-            j2_key = p.get("jugador2_key")
-            jugador1 = JugadorInfo(
-                nombre=p["jugador1_nombre"],
-                ranking=p["jugador1_ranking"],
-                cuota=p.get("jugador1_cuota") or 0,  # Sin cuota = 0, no mostrar en frontend
-                logo=p.get("jugador1_logo"),  # URL del logo desde API-Tennis
-                key=str(j1_key) if j1_key is not None else None,
-            )
-            jugador2 = JugadorInfo(
-                nombre=p["jugador2_nombre"],
-                ranking=p["jugador2_ranking"],
-                cuota=p.get("jugador2_cuota") or 0,
-                logo=p.get("jugador2_logo"),  # URL del logo desde API-Tennis
-                key=str(j2_key) if j2_key is not None else None,
-            )
-
-            # Construir predicción si existe (stake recalculado con bankroll actual)
-            prediccion = None
-            if p.get("prediction_version"):
-                kelly_j1, kelly_j2 = _recompute_kelly_stakes_for_response(p, bankroll)
-                prediccion = PredictionVersion(
-                    version=p["prediction_version"],
-                    timestamp=p["prediction_timestamp"],
-                    jugador1_cuota=p["jugador1_cuota"],
-                    jugador2_cuota=p["jugador2_cuota"],
-                    jugador1_probabilidad=p["jugador1_probabilidad"],
-                    jugador2_probabilidad=p["jugador2_probabilidad"],
-                    jugador1_ev=p["jugador1_ev"],
-                    jugador2_ev=p["jugador2_ev"],
-                    jugador1_edge=p.get("jugador1_edge"),
-                    jugador2_edge=p.get("jugador2_edge"),
-                    recomendacion=p["recomendacion"],
-                    mejor_opcion=p.get("mejor_opcion"),
-                    confianza=p.get("confianza"),
-                    kelly_stake_jugador1=kelly_j1,
-                    kelly_stake_jugador2=kelly_j2,
-                    confidence_level=p.get("confidence_level"),
-                    confidence_score=p.get("confidence_score"),
-                )
-
-            # Construir scores: misma lógica que detalle (match_sets primero, luego resultado_marcador).
-            # Para en_juego SIEMPRE intentar construir (aunque no haya marcador aún), así la card puede mostrar 0-0 o sets en curso.
-            # No enviar scores/resultado para partidos "ya empezados pero pendientes" (get_livescore no los devolvió) → en la card se muestran cuotas; en detalle "Solo Resultado Final".
-            match_scores = None
-            if not is_future and (
-                p.get("resultado_marcador") or p.get("event_final_result")
-                or effective_estado == "en_juego"
-            ):
-                try:
-                    match_scores = _build_match_scores(p, db, pre_fetched_sets=sets_by_match)
-                    if match_scores is None and p.get("event_final_result"):
-                        marcador = p.get("resultado_marcador") or p.get("event_final_result")
-                        sets_data = _parse_marcador_to_sets(marcador) if marcador else []
-                        if sets_data:
-                            match_scores = MatchScores(
-                                sets_result=p.get("event_final_result"),
-                                sets=sets_data,
-                                live=LiveData(
-                                    current_game_score=p.get("event_game_result"),
-                                    current_server=p.get("event_serve"),
-                                    current_set=len(sets_data) + 1,
-                                    is_tiebreak=False
-                                ) if effective_estado == "en_juego" else None
-                            )
-                    # En vivo sin datos reales: no enviar scores (la card mostrará cuotas, no 0-0)
-                except Exception:
-                    pass
-            
-            # Construir resultado (solo para completados o en juego, nunca para fecha futura)
-            resultado = None
-            if not is_future and (
-                p.get("resultado_ganador")
-                or effective_estado in ["completado", "en_juego"]
-            ):
-                resultado = MatchResult(
-                    ganador=p.get("resultado_ganador"),
-                    marcador=p.get("resultado_marcador"),
-                    scores=match_scores,
-                    apostamos=p.get("bet_id") is not None,
-                    resultado_apuesta=p.get("bet_resultado"),
-                    stake=p.get("stake"),
-                    ganancia=p.get("ganancia"),
-                    roi=p.get("ganancia") / p.get("stake") if p.get("stake") else None,
-                )
-
-            # Construir partido completo (estado efectivo: pendiente si fecha futura)
-            partido = MatchResponse(
-                id=p["id"],
-                estado=EstadoPartido(effective_estado),
-                fecha_partido=p["fecha_partido"],
-                hora_inicio=p.get("hora_inicio"),
-                torneo=p.get("torneo"),
-                ronda=p.get("ronda"),
-                superficie=Superficie(p["superficie"]),
-                jugador1=jugador1,
-                jugador2=jugador2,
-                prediccion=prediccion,
-                resultado=resultado,
-                event_status=p.get("event_status"),
-                is_live=(effective_estado == "en_juego"),
-            )
-
-            partidos.append(partido)
+        partidos = _rows_to_match_responses(
+            partidos_raw, bankroll, sets_by_match, today, db
+        )
 
         # Calcular resumen
         total = len(partidos)
@@ -4274,28 +4278,33 @@ async def get_tournament_matches(
     season: Optional[int] = None
 ):
     """
-    Obtiene partidos de un torneo
-    
-    Args:
-        tournament_key: ID del torneo
-        season: Temporada (opcional)
-        
-    Returns:
-        Lista de partidos del torneo
+    Obtiene partidos de un torneo (con predicciones, mismo formato que GET /matches).
     """
-    if not tournament_service:
-        raise HTTPException(status_code=503, detail="Tournament service not available")
-    
     try:
-        matches = tournament_service.get_tournament_matches(tournament_key, season)
-        
+        partidos_raw = db.get_tournament_matches_with_predictions(tournament_key, season)
+        if not partidos_raw:
+            return {
+                "tournament_key": tournament_key,
+                "season": season,
+                "total_matches": 0,
+                "matches": [],
+            }
+        bankroll = _get_current_bankroll(db)
+        match_ids_needing_scores = [
+            p["id"] for p in partidos_raw
+            if p.get("resultado_marcador") or p.get("event_final_result") or p.get("estado") == "en_juego"
+        ]
+        sets_by_match = db.get_match_sets_batch(match_ids_needing_scores) if match_ids_needing_scores else {}
+        today = date.today()
+        partidos = _rows_to_match_responses(
+            partidos_raw, bankroll, sets_by_match, today, db
+        )
         return {
             "tournament_key": tournament_key,
             "season": season,
-            "total_matches": len(matches),
-            "matches": matches
+            "total_matches": len(partidos),
+            "matches": partidos,
         }
-        
     except Exception as e:
         logger.error(f"Error obteniendo partidos del torneo: {e}")
         raise HTTPException(status_code=500, detail=str(e))

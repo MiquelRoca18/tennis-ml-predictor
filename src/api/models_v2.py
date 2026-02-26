@@ -387,6 +387,11 @@ class MatchResponse(BaseModel):
     ronda: Optional[str] = None
     superficie: Superficie
 
+    # IDs para navegación y detalle (opcionales para compatibilidad)
+    event_key: Optional[str] = None
+    tournament_key: Optional[str] = None
+    tournament_season: Optional[str] = None
+
     # Jugadores
     jugador1: JugadorInfo
     jugador2: JugadorInfo
