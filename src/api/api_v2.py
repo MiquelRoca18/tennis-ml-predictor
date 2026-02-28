@@ -917,10 +917,19 @@ async def get_matches_status_batch(request: Request):
                 elif j2 and (ganador_nombre == j2 or ganador_nombre.lower() == j2.lower()):
                     winner = 2
                 elif j1 and j2 and ganador_nombre:
-                    if ganador_nombre.lower() in j1.lower() or (ganador_nombre.split()[-1] if ganador_nombre else "") == (j1.split()[-1] if j1 else ""):
+                    # Apellido o nombre contenido (ej. "Medvedev" vs "D. Medvedev")
+                    g_last = (ganador_nombre.split()[-1] if ganador_nombre else "").lower()
+                    j1_last = (j1.split()[-1] if j1 else "").lower()
+                    j2_last = (j2.split()[-1] if j2 else "").lower()
+                    if g_last == j1_last or ganador_nombre.lower() in j1.lower():
                         winner = 1
-                    elif ganador_nombre.lower() in j2.lower() or (ganador_nombre.split()[-1] if ganador_nombre else "") == (j2.split()[-1] if j2 else ""):
+                    elif g_last == j2_last or ganador_nombre.lower() in j2.lower():
                         winner = 2
+            if estado == "completado":
+                logger.info(
+                    "status-batch: id=%s estado=completado resultado_ganador=%r winner=%s (j1=%r j2=%r)",
+                    mid, ganador_nombre or None, winner, j1[:30] if j1 else None, j2[:30] if j2 else None
+                )
             entry = {"status": estado, "winner": winner}
             fp = r.get("fecha_partido")
             if fp is not None:

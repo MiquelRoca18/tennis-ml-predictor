@@ -837,7 +837,8 @@ class MatchDatabase:
         Obtiene estado y ganador de múltiples partidos en una sola consulta.
         Para liquidación de apuestas sin N llamadas a /matches/{id}/full.
         Returns:
-            Lista de dicts con id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre
+            Lista de dicts con id, estado, resultado_ganador, resultado_marcador,
+            jugador1_nombre, jugador2_nombre, fecha_partido, hora_inicio
         """
         if not match_ids:
             return []
@@ -845,8 +846,8 @@ class MatchDatabase:
             if self.is_postgres:
                 from sqlalchemy import text, bindparam
                 stmt = text("""
-                    SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre,
-                           fecha_partido, hora_inicio
+                    SELECT id, estado, resultado_ganador, resultado_marcador,
+                           jugador1_nombre, jugador2_nombre, fecha_partido, hora_inicio
                     FROM matches
                     WHERE id IN :match_ids
                 """).bindparams(bindparam("match_ids", expanding=True))
@@ -857,8 +858,8 @@ class MatchDatabase:
             cursor = self.conn.cursor()
             cursor.execute(
                 f"""
-                SELECT id, estado, resultado_ganador, jugador1_nombre, jugador2_nombre,
-                       fecha_partido, hora_inicio
+                SELECT id, estado, resultado_ganador, resultado_marcador,
+                       jugador1_nombre, jugador2_nombre, fecha_partido, hora_inicio
                 FROM matches
                 WHERE id IN ({placeholders})
                 """,

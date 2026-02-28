@@ -406,10 +406,20 @@ class MatchUpdateService:
                 if event_final_result and event_final_result != "-":
                     update_data["event_final_result"] = event_final_result
 
-                    # Intentar determinar ganador
+                # Cuando el partido está completado, SIEMPRE intentar obtener el ganador de la API
+                # (event_winner o event_final_result); sin ganador no se puede liquidar la apuesta.
+                if nuevo_estado == "completado":
                     ganador = self._extract_winner(api_match, match)
                     if ganador:
                         update_data["resultado_ganador"] = ganador
+                    else:
+                        logger.warning(
+                            "Partido completado sin ganador en API: id=%s event_winner=%r event_final_result=%r event_status=%r",
+                            match_id,
+                            api_match.get("event_winner"),
+                            api_match.get("event_final_result"),
+                            api_match.get("event_status"),
+                        )
 
                 # Para partidos en vivo: solo sets completados (el set en curso no cuenta hasta que termine)
                 elif nuevo_estado == "en_juego":
