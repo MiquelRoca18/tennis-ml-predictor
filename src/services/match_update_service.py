@@ -155,13 +155,53 @@ class MatchUpdateService:
             try:
                 match = self.db.get_match(mid)
                 if not match:
+                    logger.debug("refresh-results: match id=%s no encontrado en BD", mid)
                     continue
                 if self._update_single_match(match):
                     updated_count += 1
+                else:
+                    logger.debug("refresh-results: match id=%s sin cambios (event_key=%s)", mid, match.get("event_key"))
             except Exception as e:
                 logger.warning("refresh result match %s: %s", mid, e)
                 errors += 1
         return {"updated_count": updated_count, "errors": errors}
+
+    def _normalize_player_match(self, name_db: str, name_api: str) -> bool:
+        """True si los dos nombres se refieren al mismo jugador (apellido o nombre completo)."""
+        if not name_db or not name_api:
+            return False
+        a = (name_db or "").strip().lower()
+        b = (name_api or "").strip().lower()
+        if a == b:
+            return True
+        a_last = a.split()[-1] if a else ""
+        b_last = b.split()[-1] if b else ""
+        return a_last == b_last or a in b or b in a
+
+    def _find_api_match_by_players(self, match: Dict, date_str: str) -> Optional[Dict]:
+        """
+        Cuando el partido en BD no tiene event_key, obtiene get_fixtures por fecha
+        y busca por jugador1/jugador2. Devuelve el dict del partido de la API o None.
+        """
+        j1 = (match.get("jugador1_nombre") or match.get("jugador1") or "").strip()
+        j2 = (match.get("jugador2_nombre") or match.get("jugador2") or "").strip()
+        if not j1 or not j2:
+            return None
+        params = {"date_start": date_str, "date_stop": date_str}
+        data = self.api_client._make_request("get_fixtures", params, timeout=15)
+        if not data or not data.get("result"):
+            return None
+        results = data["result"]
+        if not isinstance(results, list):
+            results = [results] if results else []
+        for m in results:
+            aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip()
+            aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip()
+            if self._normalize_player_match(j1, aj1) and self._normalize_player_match(j2, aj2):
+                return m
+            if self._normalize_player_match(j1, aj2) and self._normalize_player_match(j2, aj1):
+                return m
+        return None
 
     def _update_single_match(self, match: Dict) -> bool:
         """
@@ -176,10 +216,6 @@ class MatchUpdateService:
         match_id = match["id"]
         event_key = match.get("event_key")
 
-        # Si no hay event_key, no podemos actualizar
-        if not event_key:
-            return False
-
         # Si ya está completado Y tiene TODOS los datos, no necesita actualización
         if match.get("estado") == "completado" and match.get("resultado_ganador") and match.get("resultado_marcador"):
             # Verificar si tiene scores por set guardados
@@ -190,43 +226,52 @@ class MatchUpdateService:
             except:
                 pass  # Continuar para obtener los sets
 
-        try:
-            # Consultar API para obtener estado actual
-            # get_fixtures requiere date_start y date_stop
-            match_date = match.get("fecha_partido")
-            if not match_date:
-                return False
-            
-            # Convertir fecha a string si es necesario
-            if hasattr(match_date, 'strftime'):
-                date_str = match_date.strftime('%Y-%m-%d')
-            else:
-                date_str = str(match_date)
-            
+        match_date = match.get("fecha_partido")
+        if not match_date:
+            return False
+
+        if hasattr(match_date, 'strftime'):
+            date_str = match_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(match_date)
+
+        # Obtener partido de la API: por event_key o, si falta, por fecha + jugadores
+        api_match = None
+        if event_key:
             params = {
                 "date_start": date_str,
                 "date_stop": date_str,
-                "match_key": event_key  # API usa match_key, no event_key
+                "match_key": event_key
             }
             data = self.api_client._make_request("get_fixtures", params)
+            if data and data.get("result"):
+                results = data["result"]
+                if isinstance(results, list):
+                    for m in results:
+                        if str(m.get("event_key")) == str(event_key):
+                            api_match = m
+                            break
+                else:
+                    api_match = results
 
-            if not data or not data.get("result"):
-                return False
+        if not api_match:
+            api_match = self._find_api_match_by_players(match, date_str)
+            if api_match:
+                new_ek = api_match.get("event_key")
+                if new_ek is not None:
+                    try:
+                        self.db._execute(
+                            "UPDATE matches SET event_key = :ek WHERE id = :id",
+                            {"ek": str(new_ek), "id": match_id},
+                        )
+                        logger.info("Guardado event_key %s para match id=%s (fallback por jugadores)", new_ek, match_id)
+                    except Exception as e:
+                        logger.debug("No se pudo guardar event_key en BD: %s", e)
 
-            # Buscar el partido específico por event_key
-            api_match = None
-            results = data["result"]
-            if isinstance(results, list):
-                for m in results:
-                    # Convertir ambos a string para comparar (API devuelve int)
-                    if str(m.get("event_key")) == str(event_key):
-                        api_match = m
-                        break
-            else:
-                api_match = results
-            
-            if not api_match:
-                return False
+        if not api_match:
+            return False
+
+        try:
 
             # Extraer datos actualizados
             event_live = api_match.get("event_live", "0")

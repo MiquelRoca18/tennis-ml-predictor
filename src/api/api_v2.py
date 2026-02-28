@@ -897,6 +897,10 @@ async def get_matches_status_batch(request: Request):
         if not match_ids:
             return {}
         rows = db.get_matches_status_batch(match_ids)
+        if len(rows) < len(match_ids):
+            returned_ids = {r.get("id") for r in rows}
+            missing = [mid for mid in match_ids if mid not in returned_ids]
+            logger.debug("status-batch: BD devolvió %s filas para %s ids; faltan en BD: %s", len(rows), len(match_ids), missing)
         out = {}
         for r in rows:
             mid = r.get("id")
@@ -954,8 +958,11 @@ async def refresh_results_batch(request: Request):
         if not match_ids:
             return {"updated_count": 0, "errors": 0}
         if match_update_service is None:
+            logger.warning("refresh-results-batch: MatchUpdateService no disponible")
             return {"updated_count": 0, "errors": 0, "message": "MatchUpdateService no disponible"}
+        logger.info("refresh-results-batch: actualizando %s partidos (match_ids=%s)", len(match_ids), match_ids)
         result = match_update_service.update_matches_by_ids(match_ids)
+        logger.info("refresh-results-batch: updated_count=%s errors=%s", result.get("updated_count"), result.get("errors"))
         return result
     except HTTPException:
         raise
