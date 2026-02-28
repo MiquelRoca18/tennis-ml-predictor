@@ -155,12 +155,19 @@ class MatchUpdateService:
             try:
                 match = self.db.get_match(mid)
                 if not match:
-                    logger.debug("refresh-results: match id=%s no encontrado en BD", mid)
+                    logger.info("refresh-results: match id=%s NO encontrado en BD Railway", mid)
                     continue
+                event_key = match.get("event_key")
+                fecha = match.get("fecha_partido")
+                estado = match.get("estado", "?")
                 if self._update_single_match(match):
                     updated_count += 1
+                    logger.info("refresh-results: match id=%s ACTUALIZADO (estado previo=%s)", mid, estado)
                 else:
-                    logger.debug("refresh-results: match id=%s sin cambios (event_key=%s)", mid, match.get("event_key"))
+                    logger.info(
+                        "refresh-results: match id=%s sin actualización (event_key=%s, fecha=%s, estado=%s)",
+                        mid, event_key or "NULL", fecha, estado
+                    )
             except Exception as e:
                 logger.warning("refresh result match %s: %s", mid, e)
                 errors += 1
@@ -186,14 +193,23 @@ class MatchUpdateService:
         j1 = (match.get("jugador1_nombre") or match.get("jugador1") or "").strip()
         j2 = (match.get("jugador2_nombre") or match.get("jugador2") or "").strip()
         if not j1 or not j2:
+            logger.info("refresh fallback: match id=%s sin jugador1/jugador2 en BD", match.get("id"))
             return None
         params = {"date_start": date_str, "date_stop": date_str}
         data = self.api_client._make_request("get_fixtures", params, timeout=15)
         if not data or not data.get("result"):
+            logger.info(
+                "refresh fallback: get_fixtures fecha=%s devolvió vacío o sin result (match id=%s, %s vs %s)",
+                date_str, match.get("id"), j1, j2
+            )
             return None
         results = data["result"]
         if not isinstance(results, list):
             results = [results] if results else []
+        logger.info(
+            "refresh fallback: get_fixtures fecha=%s devolvió %s partidos; buscando %s vs %s (match id=%s)",
+            date_str, len(results), j1, j2, match.get("id")
+        )
         for m in results:
             aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip()
             aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip()
@@ -201,6 +217,10 @@ class MatchUpdateService:
                 return m
             if self._normalize_player_match(j1, aj2) and self._normalize_player_match(j2, aj1):
                 return m
+        logger.info(
+            "refresh fallback: no se encontró partido en API para %s vs %s fecha=%s (match id=%s)",
+            j1, j2, date_str, match.get("id")
+        )
         return None
 
     def _update_single_match(self, match: Dict) -> bool:
@@ -253,6 +273,11 @@ class MatchUpdateService:
                             break
                 else:
                     api_match = results
+            if not api_match and event_key:
+                logger.info(
+                    "refresh: get_fixtures con match_key=%s y fecha=%s no devolvió el partido (match id=%s)",
+                    event_key, date_str, match_id
+                )
 
         if not api_match:
             api_match = self._find_api_match_by_players(match, date_str)

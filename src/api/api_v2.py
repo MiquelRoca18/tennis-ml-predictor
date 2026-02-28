@@ -900,7 +900,7 @@ async def get_matches_status_batch(request: Request):
         if len(rows) < len(match_ids):
             returned_ids = {r.get("id") for r in rows}
             missing = [mid for mid in match_ids if mid not in returned_ids]
-            logger.debug("status-batch: BD devolvió %s filas para %s ids; faltan en BD: %s", len(rows), len(match_ids), missing)
+            logger.info("status-batch: BD devolvió %s filas para %s ids; ids NO en BD: %s", len(rows), len(match_ids), missing)
         out = {}
         for r in rows:
             mid = r.get("id")
