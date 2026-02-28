@@ -912,7 +912,13 @@ async def get_matches_status_batch(request: Request):
             j2 = (r.get("jugador2_nombre") or "").strip()
             winner = None
             if estado == "completado" and ganador_nombre:
-                if j1 and (ganador_nombre == j1 or ganador_nombre.lower() == j1.lower()):
+                # La BD a veces guarda el valor crudo de la API: "First Player" / "Second Player"
+                g_lower = ganador_nombre.lower()
+                if g_lower in ("first player", "first", "home"):
+                    winner = 1
+                elif g_lower in ("second player", "second", "away"):
+                    winner = 2
+                elif j1 and (ganador_nombre == j1 or ganador_nombre.lower() == j1.lower()):
                     winner = 1
                 elif j2 and (ganador_nombre == j2 or ganador_nombre.lower() == j2.lower()):
                     winner = 2
