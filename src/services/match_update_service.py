@@ -138,6 +138,31 @@ class MatchUpdateService:
             stats["errors"] += 1
             return stats
 
+    def update_matches_by_ids(self, match_ids: List[int]) -> Dict:
+        """
+        Fuerza la actualización de resultados para una lista de partidos (p. ej. los que tienen apuestas).
+        Útil cuando el usuario abre Mis apuestas: así el backend consulta la API y actualiza estado/ganador
+        antes de que el frontend llame a status-batch para liquidar.
+
+        Returns:
+            Dict con updated_count, errors
+        """
+        if not match_ids:
+            return {"updated_count": 0, "errors": 0}
+        updated_count = 0
+        errors = 0
+        for mid in match_ids:
+            try:
+                match = self.db.get_match(mid)
+                if not match:
+                    continue
+                if self._update_single_match(match):
+                    updated_count += 1
+            except Exception as e:
+                logger.warning("refresh result match %s: %s", mid, e)
+                errors += 1
+        return {"updated_count": updated_count, "errors": errors}
+
     def _update_single_match(self, match: Dict) -> bool:
         """
         Actualiza un solo partido consultando la API

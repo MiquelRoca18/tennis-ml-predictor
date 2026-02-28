@@ -936,6 +936,34 @@ async def get_matches_status_batch(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/matches/refresh-results-batch", tags=["Matches"])
+async def refresh_results_batch(request: Request):
+    """
+    Fuerza la actualización de resultados (estado, ganador) para una lista de partidos.
+    El backend consulta la API Tennis y actualiza la BD. Útil antes de liquidar apuestas:
+    el frontend llama a este endpoint con los match_ids de las apuestas activas, luego
+    llama a status-batch para obtener estado/winner ya actualizados.
+    Body: { "match_ids": [1, 2, 3] }
+    """
+    try:
+        body = await request.json()
+        match_ids = body.get("match_ids") or []
+        if not isinstance(match_ids, list):
+            raise HTTPException(status_code=400, detail="match_ids debe ser una lista")
+        match_ids = [int(x) for x in match_ids if isinstance(x, (int, str)) and str(x).isdigit()]
+        if not match_ids:
+            return {"updated_count": 0, "errors": 0}
+        if match_update_service is None:
+            return {"updated_count": 0, "errors": 0, "message": "MatchUpdateService no disponible"}
+        result = match_update_service.update_matches_by_ids(match_ids)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error refresh-results-batch: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/matches/{match_id}/details", response_model=MatchDetails, tags=["Matches"])
 async def get_match_details(match_id: int):
     """
