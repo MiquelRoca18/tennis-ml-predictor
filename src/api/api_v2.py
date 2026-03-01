@@ -296,6 +296,55 @@ def _partido_has_started(p: dict, today: date) -> bool:
         return True
 
 
+def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 8):
+    """
+    Para partidos en_juego que siguen sin event_game_result/event_serve, pide a la API
+    ese partido con get_fixtures(match_key=event_key). Solución global: no depende de
+    que el partido esté en el listado bulk de get_livescore/get_fixtures.
+    Modifica partidos_raw in-place.
+    """
+    if not api_client or not date_str:
+        return
+    need = [
+        p for p in partidos_raw
+        if p.get("estado") == "en_juego"
+        and not p.get("event_game_result")
+        and not p.get("event_serve")
+        and p.get("event_key") is not None
+    ][:max_partidos]
+    for p in need:
+        try:
+            ek = p.get("event_key")
+            data = api_client._make_request(
+                "get_fixtures",
+                {"date_start": date_str, "date_stop": date_str, "match_key": str(ek)},
+                timeout=2,
+            )
+            if not data or not data.get("result"):
+                continue
+            res = data["result"]
+            api_match = res[0] if isinstance(res, list) and len(res) > 0 else res
+            if not api_match or api_match.get("event_live") != "1":
+                if api_match and (api_match.get("event_final_result") or api_match.get("event_status")):
+                    if not _is_match_still_live(api_match):
+                        p["estado"] = "completado"
+                        p["event_final_result"] = api_match.get("event_final_result")
+                        p["event_status"] = api_match.get("event_status")
+                continue
+            if not _is_match_still_live(api_match):
+                p["estado"] = "completado"
+                p["event_final_result"] = api_match.get("event_final_result")
+                p["event_status"] = api_match.get("event_status")
+                continue
+            p["event_final_result"] = api_match.get("event_final_result")
+            p["event_game_result"] = api_match.get("event_game_result")
+            p["event_serve"] = api_match.get("event_serve")
+            p["event_status"] = api_match.get("event_status")
+            p["event_live"] = "1"
+        except Exception as e:
+            logger.debug("Enrich per-match get_fixtures for ek=%s: %s", p.get("event_key"), e)
+
+
 def _fetch_livescore_and_fixtures_sync(api_client, fecha: date, today: date):
     """
     Obtiene get_livescore y get_fixtures con timeout corto (5s cada uno).
@@ -904,6 +953,23 @@ async def get_matches_by_date(
                                 logger.debug("Enrich save_match_sets from get_fixtures: %s", ex)
             except Exception as e:
                 logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
+
+        # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido
+        if live and api_client and partidos_raw and fecha == today:
+            date_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]
+            try:
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 8),
+                    ),
+                    12.0,
+                )
+            except asyncio.TimeoutError:
+                logger.debug("/matches: per-match live enrichment timeout")
+            except Exception as e:
+                logger.debug("Enrich /matches per-match live: %s", e)
 
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
