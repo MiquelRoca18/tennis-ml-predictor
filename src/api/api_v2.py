@@ -371,7 +371,7 @@ def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str
     return None, False
 
 
-def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 20, database=None):
+def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 50, database=None):
     """
     Para partidos en_juego que siguen sin event_game_result/event_serve, pide a la API
     ese partido con get_fixtures(match_key=event_key). Modifica partidos_raw in-place.
@@ -435,6 +435,31 @@ def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, m
             p["event_serve"] = api_match.get("event_serve")
             p["event_status"] = api_match.get("event_status")
             p["event_live"] = "1"
+            # Guardar sets de la API (incl. set 1 en curso) para que la card tenga sets_data y muestre score
+            api_scores = api_match.get("scores") or []
+            if api_scores and database and hasattr(database, "save_match_sets"):
+                try:
+                    sets_to_save = []
+                    for i, sc in enumerate(api_scores):
+                        set_num = int(sc.get("score_set") or sc.get("set_number") or (i + 1))
+                        try:
+                            p1 = int(sc.get("score_first") or sc.get("player1_score") or 0)
+                        except (ValueError, TypeError):
+                            p1 = 0
+                        try:
+                            p2 = int(sc.get("score_second") or sc.get("player2_score") or 0)
+                        except (ValueError, TypeError):
+                            p2 = 0
+                        sets_to_save.append({
+                            "set_number": set_num,
+                            "player1_score": p1,
+                            "player2_score": p2,
+                            "tiebreak_score": sc.get("tiebreak_score"),
+                        })
+                    if sets_to_save:
+                        database.save_match_sets(p["id"], sets_to_save)
+                except Exception:
+                    pass
             if database:
                 try:
                     database.update_match_live_data(
@@ -1144,7 +1169,7 @@ async def get_matches_by_date(
         if still_no_live:
             logger.info("[LIVE] Tras get_fixtures: %d en_juego siguen sin datos: %s", len(still_no_live), [f"{p.get('id')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in still_no_live[:5]])
 
-        # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido (máx 20)
+        # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido (máx 50)
         if live and api_client and partidos_raw and fecha == today:
             date_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]
             try:
@@ -1152,7 +1177,7 @@ async def get_matches_by_date(
                 await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 20, db),
+                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 50, db),
                     ),
                     30.0,
                 )
@@ -1203,6 +1228,31 @@ async def get_matches_by_date(
                                 )
                             except Exception:
                                 pass
+                            # Guardar sets (incl. set 1 en curso) para que la card muestre score
+                            api_scores = api_match.get("scores") or []
+                            if api_scores and hasattr(db, "save_match_sets"):
+                                try:
+                                    sets_to_save = []
+                                    for i, sc in enumerate(api_scores):
+                                        set_num = int(sc.get("score_set") or sc.get("set_number") or (i + 1))
+                                        try:
+                                            p1 = int(sc.get("score_first") or sc.get("player1_score") or 0)
+                                        except (ValueError, TypeError):
+                                            p1 = 0
+                                        try:
+                                            p2 = int(sc.get("score_second") or sc.get("player2_score") or 0)
+                                        except (ValueError, TypeError):
+                                            p2 = 0
+                                        sets_to_save.append({
+                                            "set_number": set_num,
+                                            "player1_score": p1,
+                                            "player2_score": p2,
+                                            "tiebreak_score": sc.get("tiebreak_score"),
+                                        })
+                                    if sets_to_save:
+                                        db.save_match_sets(p["id"], sets_to_save)
+                                except Exception:
+                                    pass
                         else:
                             p["estado"] = "completado"
                             p["event_final_result"] = api_match.get("event_final_result")
