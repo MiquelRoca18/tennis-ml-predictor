@@ -552,6 +552,16 @@ def _build_match_scores(
 
         # Si no hay datos reales (ni sets ni sets_result ni live con info), no devolver scores
         if not sets_data and not sets_result and not live_data:
+            if estado == "en_juego":
+                logger.info(
+                    "[LIVE] _build_match_scores None id=%s %s vs %s: eg=%r es=%r sets=%d",
+                    match_id,
+                    match_data.get("jugador1_nombre"),
+                    match_data.get("jugador2_nombre"),
+                    match_data.get("event_game_result"),
+                    match_data.get("event_serve"),
+                    len(sets_data),
+                )
             return None
         
         return MatchScores(
@@ -727,6 +737,16 @@ def _rows_to_match_responses(
             except Exception:
                 pass
 
+        if effective_estado == "en_juego" and match_scores is None and (p.get("event_game_result") or p.get("event_serve")):
+            logger.info(
+                "[LIVE] en_juego con eg/es pero match_scores=None id=%s %s vs %s eg=%r es=%r",
+                p.get("id"),
+                p.get("jugador1_nombre"),
+                p.get("jugador2_nombre"),
+                p.get("event_game_result"),
+                p.get("event_serve"),
+            )
+
         resultado = None
         if not is_future and (
             p.get("resultado_ganador")
@@ -857,6 +877,15 @@ async def get_matches_by_date(
         db_time = time.time() - db_start
         logger.info(f"⏱️ DB query took {db_time:.2f}s for {len(partidos_raw)} matches")
 
+        en_juego_from_db = [p for p in partidos_raw if p.get("estado") == "en_juego"]
+        en_juego_with_live_data = [p for p in en_juego_from_db if p.get("event_game_result") or p.get("event_serve")]
+        logger.info(
+            "[LIVE] DB: %d en_juego, %d con event_game_result/event_serve; sin datos: %s",
+            len(en_juego_from_db),
+            len(en_juego_with_live_data),
+            [f"{p.get('id')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in en_juego_from_db if not (p.get("event_game_result") or p.get("event_serve"))],
+        )
+
         today = date.today()
         # Enriquecer con live/fixtures solo si live=True (timeout 5s para no bloquear)
         live_list, fixtures_resp = [], None
@@ -943,6 +972,10 @@ async def get_matches_by_date(
             except Exception as e:
                 logger.debug("Enrich /matches with get_livescore: %s", e)
 
+        still_no_live = [p for p in partidos_raw if p.get("estado") == "en_juego" and not (p.get("event_game_result") or p.get("event_serve"))]
+        if still_no_live and live_list:
+            logger.info("[LIVE] Tras get_livescore: %d en_juego siguen sin datos: %s", len(still_no_live), [f"{p.get('id')} ek={p.get('event_key')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in still_no_live[:5]])
+
         # Fallback: partidos ya empezados con get_fixtures (o en_juego sin datos en directo)
         if fixtures_resp and fixtures_resp.get("result") and fecha == today and partidos_raw:
             try:
@@ -1028,6 +1061,10 @@ async def get_matches_by_date(
             except Exception as e:
                 logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
 
+        still_no_live = [p for p in partidos_raw if p.get("estado") == "en_juego" and not (p.get("event_game_result") or p.get("event_serve"))]
+        if still_no_live:
+            logger.info("[LIVE] Tras get_fixtures: %d en_juego siguen sin datos: %s", len(still_no_live), [f"{p.get('id')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in still_no_live[:5]])
+
         # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido (máx 20)
         if live and api_client and partidos_raw and fecha == today:
             date_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]
@@ -1093,6 +1130,14 @@ async def get_matches_by_date(
                             p["event_status"] = api_match.get("event_status")
             except Exception as e:
                 logger.debug("Enrich /matches from fixtures by name (no event_key): %s", e)
+
+        final_no_live = [p for p in partidos_raw if p.get("estado") == "en_juego" and not (p.get("event_game_result") or p.get("event_serve"))]
+        if final_no_live:
+            logger.info(
+                "[LIVE] Tras todo el enriquecimiento: %d en_juego SIN datos en respuesta: %s",
+                len(final_no_live),
+                [f"id={p.get('id')} ek={p.get('event_key')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in final_no_live],
+            )
 
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
