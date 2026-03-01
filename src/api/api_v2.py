@@ -693,7 +693,12 @@ def _rows_to_match_responses(
                 except (ValueError, TypeError):
                     pass
         db_estado = p.get("estado", "pendiente")
-        effective_estado = "pendiente" if is_future else db_estado
+        # Si la BD dice en_juego, no sobrescribir a pendiente por is_future (hora puede estar en otro huso).
+        # Así todos los en_juego llevan resultado/LIVE y la card puede mostrar score o "resultado al finalizar".
+        if db_estado == "en_juego":
+            effective_estado = "en_juego"
+        else:
+            effective_estado = "pendiente" if is_future else db_estado
 
         j1_key = p.get("jugador1_key")
         j2_key = p.get("jugador2_key")
