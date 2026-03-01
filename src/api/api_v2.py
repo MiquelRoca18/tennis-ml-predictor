@@ -809,30 +809,69 @@ async def get_matches_by_date(
             except Exception as e:
                 logger.debug("Enrich /matches with get_livescore: %s", e)
 
-        # Fallback: partidos ya empezados con get_fixtures
+        # Fallback: partidos ya empezados con get_fixtures (o en_juego sin datos en directo)
         if fixtures_resp and fixtures_resp.get("result") and fecha == today and partidos_raw:
             try:
                 fixtures = fixtures_resp["result"]
                 if not isinstance(fixtures, list):
                     fixtures = [fixtures] if fixtures else []
                 fixtures_by_key = {str(f.get("event_key")): f for f in fixtures if f.get("event_key") is not None}
+                # Por nombre para partidos sin event_key o no encontrados por key
+                def _find_fixture_by_names(fixtures_list, j1: str, j2: str, fecha_str: str):
+                    j1l = (j1 or "").strip().lower()
+                    j2l = (j2 or "").strip().lower()
+                    if not j1l or not j2l:
+                        return None, False
+                    for f in fixtures_list:
+                        if f.get("event_live") != "1" and not f.get("event_final_result") and not f.get("scores"):
+                            continue
+                        aj1 = (f.get("event_first_player") or f.get("event_home_team") or "").strip().lower()
+                        aj2 = (f.get("event_second_player") or f.get("event_away_team") or "").strip().lower()
+                        adate = (f.get("event_date") or "")[:10]
+                        if adate and fecha_str != adate:
+                            continue
+                        def _nm(a, b):
+                            return a == b or (a.split()[-1] == b.split()[-1] if a and b else False) or (a in b or b in a)
+                        if _nm(j1l, aj1) and _nm(j2l, aj2):
+                            return f, False
+                        if _nm(j1l, aj2) and _nm(j2l, aj1):
+                            return f, True
+                    return None, False
+
                 for p in partidos_raw:
-                    if p.get("estado") == "en_juego":
+                    # Saltar en_juego que ya tienen datos en directo (enriquecidos por get_livescore)
+                    if p.get("estado") == "en_juego" and (p.get("event_game_result") or p.get("event_serve")):
                         continue
                     ek = p.get("event_key")
-                    if not ek:
-                        continue
-                    if not _partido_has_started(p, today):
-                        continue
-                    api_match = fixtures_by_key.get(str(ek))
+                    fecha_p = p.get("fecha_partido")
+                    fecha_str = fecha_p.strftime("%Y-%m-%d") if hasattr(fecha_p, "strftime") else (str(fecha_p)[:10] if fecha_p else "")
+                    api_match = None
+                    swapped_f = False
+                    if ek:
+                        api_match = fixtures_by_key.get(str(ek))
                     if not api_match:
+                        j1 = (p.get("jugador1_nombre") or p.get("jugador1") or "").strip()
+                        j2 = (p.get("jugador2_nombre") or p.get("jugador2") or "").strip()
+                        api_match, swapped_f = _find_fixture_by_names(fixtures, j1, j2, fecha_str)
+                    if not api_match:
+                        continue
+                    if not _partido_has_started(p, today) and p.get("estado") != "en_juego":
                         continue
                     if api_match.get("event_live") == "1" or api_match.get("event_final_result") or api_match.get("scores"):
                         if _is_match_still_live(api_match):
                             p["estado"] = "en_juego"
                             p["event_final_result"] = api_match.get("event_final_result")
-                            p["event_game_result"] = api_match.get("event_game_result")
-                            p["event_serve"] = api_match.get("event_serve")
+                            eg = api_match.get("event_game_result")
+                            es = api_match.get("event_serve")
+                            if swapped_f and (eg or es):
+                                if eg and "-" in str(eg):
+                                    parts = str(eg).strip().split("-", 1)
+                                    if len(parts) == 2:
+                                        eg = f"{parts[1].strip()}-{parts[0].strip()}"
+                                if es:
+                                    es = "Second Player" if (str(es).lower().startswith("first") or es == "1") else "First Player"
+                            p["event_game_result"] = eg
+                            p["event_serve"] = es
                             p["event_status"] = api_match.get("event_status")
                             p["event_live"] = api_match.get("event_live") or "1"
                         else:
