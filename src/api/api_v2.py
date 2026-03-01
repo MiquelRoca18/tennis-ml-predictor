@@ -329,6 +329,19 @@ def _names_match_flexible(our: str, api: str) -> bool:
     return False
 
 
+def _normalize_player_for_match(a: str, b: str) -> bool:
+    """Misma lógica que en detalle: True si mismo jugador (apellido o nombre contenido)."""
+    if not a or not b:
+        return False
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    if a == b:
+        return True
+    a_last = a.split()[-1] if a else ""
+    b_last = b.split()[-1] if b else ""
+    return a_last == b_last or a in b or b in a
+
+
 def _api_item_player_names(item: dict) -> tuple:
     """
     Obtiene (nombre_jugador1, nombre_jugador2) de un item de get_livescore o get_fixtures.
@@ -354,7 +367,7 @@ def _api_item_player_names(item: dict) -> tuple:
 
 
 def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str):
-    """Busca un fixture por nombres de jugadores (orden normal o invertido). Devuelve (fixture_dict, swapped)."""
+    """Busca un fixture por nombres de jugadores (orden normal o invertido). Misma lógica que detalle."""
     if not (j1 or "").strip() or not (j2 or "").strip():
         return None, False
     for f in fixtures_list or []:
@@ -364,9 +377,9 @@ def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str
         adate = (f.get("event_date") or "")[:10]
         if adate and fecha_str != adate:
             continue
-        if _names_match_flexible(j1, aj1) and _names_match_flexible(j2, aj2):
+        if _normalize_player_for_match(j1, aj1) and _normalize_player_for_match(j2, aj2):
             return f, False
-        if _names_match_flexible(j1, aj2) and _names_match_flexible(j2, aj1):
+        if _normalize_player_for_match(j1, aj2) and _normalize_player_for_match(j2, aj1):
             return f, True
     return None, False
 
@@ -1014,10 +1027,10 @@ async def get_matches_by_date(
                             # Permitir match por nombres aunque la API no envíe event_date (algunos partidos no lo traen)
                             if adate and fecha_str != adate:
                                 continue
-                            same = _names_match_flexible(j1, aj1) and _names_match_flexible(j2, aj2)
+                            same = _normalize_player_for_match(j1, aj1) and _normalize_player_for_match(j2, aj2)
                             swapped_order = False
                             if not same:
-                                swapped_order = _names_match_flexible(j1, aj2) and _names_match_flexible(j2, aj1)
+                                swapped_order = _normalize_player_for_match(j1, aj2) and _normalize_player_for_match(j2, aj1)
                                 same = swapped_order
                             if same:
                                 live_api = m

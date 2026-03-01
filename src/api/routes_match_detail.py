@@ -145,6 +145,18 @@ def _enrich_match_with_livescore(match: dict, api_client, db=None, match_id: Opt
                 if api_m.get("event_live") != "1":
                     return None
                 _merge_live_into_match(match, api_m, db=db, match_id=mid)
+                if db and mid:
+                    try:
+                        db.update_match_live_data(
+                            mid,
+                            event_game_result=match.get("event_game_result"),
+                            event_serve=match.get("event_serve"),
+                            event_final_result=match.get("event_final_result"),
+                            event_status=match.get("event_status"),
+                            event_live="1",
+                        )
+                    except Exception as e:
+                        logger.debug("No se pudo persistir live data en detalle: %s", e)
                 return "en_juego"
         # 2) Si no hay event_key en BD (o no coincidió), emparejar por jugadores + fecha
         j1 = (match.get("jugador1_nombre") or match.get("jugador1") or "").strip()
@@ -162,10 +174,22 @@ def _enrich_match_with_livescore(match: dict, api_client, db=None, match_id: Opt
             api_j1 = (api_m.get("event_first_player") or api_m.get("event_home_team") or "").strip()
             api_j2 = (api_m.get("event_second_player") or api_m.get("event_away_team") or "").strip()
             api_date = (api_m.get("event_date") or "")[:10]
-            if not api_date:
+            if api_date and api_date != fecha_str:
                 continue
-            if _normalize_player_for_match(j1, api_j1) and _normalize_player_for_match(j2, api_j2) and api_date == fecha_str:
+            if _normalize_player_for_match(j1, api_j1) and _normalize_player_for_match(j2, api_j2):
                 _merge_live_into_match(match, api_m, db=db, match_id=mid)
+                if db and mid:
+                    try:
+                        db.update_match_live_data(
+                            mid,
+                            event_game_result=match.get("event_game_result"),
+                            event_serve=match.get("event_serve"),
+                            event_final_result=match.get("event_final_result"),
+                            event_status=match.get("event_status"),
+                            event_live="1",
+                        )
+                    except Exception as e:
+                        logger.debug("No se pudo persistir live data en detalle: %s", e)
                 # Persistir event_key en BD si faltaba, para futuras peticiones
                 if (event_key is None or (isinstance(event_key, str) and not event_key.strip())) and mid and db:
                     try:
