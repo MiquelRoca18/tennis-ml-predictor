@@ -756,8 +756,15 @@ def _rows_to_match_responses(
                                 is_tiebreak=False
                             ) if effective_estado == "en_juego" else None
                         )
-            except Exception:
-                pass
+            except Exception as e:
+                if effective_estado == "en_juego":
+                    logger.warning(
+                        "[LIVE] _build_match_scores exception id=%s %s vs %s: %s",
+                        p.get("id"),
+                        p.get("jugador1_nombre"),
+                        p.get("jugador2_nombre"),
+                        e,
+                    )
 
         if effective_estado == "en_juego" and match_scores is None and (p.get("event_game_result") or p.get("event_serve")):
             logger.info(
@@ -767,6 +774,15 @@ def _rows_to_match_responses(
                 p.get("jugador2_nombre"),
                 p.get("event_game_result"),
                 p.get("event_serve"),
+            )
+        if effective_estado == "en_juego":
+            logger.info(
+                "[LIVE] card id=%s %s vs %s → scores=%s live=%s",
+                p.get("id"),
+                p.get("jugador1_nombre"),
+                p.get("jugador2_nombre"),
+                "yes" if match_scores else "no",
+                "yes" if (match_scores and getattr(match_scores, "live", None)) else "no",
             )
 
         resultado = None
