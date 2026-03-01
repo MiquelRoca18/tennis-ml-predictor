@@ -296,7 +296,57 @@ def _partido_has_started(p: dict, today: date) -> bool:
         return True
 
 
-def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 8):
+def _normalize_name_for_match(name: str) -> str:
+    """Normaliza nombre para comparación: minúsculas, sin puntos, espacios colapsados."""
+    if not name:
+        return ""
+    return " ".join((name or "").replace(".", " ").lower().split())
+
+
+def _names_match_flexible(our: str, api: str) -> bool:
+    """
+    Emparejamiento flexible de nombres (ej. "P. Dev S D" vs "Dev Singh", "G. Voelzke" vs "Voelzke").
+    True si: iguales normalizados, mismo apellido (última palabra), o alguna palabra significativa está contenida.
+    """
+    a = _normalize_name_for_match(our)
+    b = _normalize_name_for_match(api)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    a_words = [w for w in a.split() if len(w) >= 2]
+    b_words = [w for w in b.split() if len(w) >= 2]
+    if a_words and b_words and a_words[-1] == b_words[-1]:
+        return True
+    for w in a_words:
+        if w in b:
+            return True
+    for w in b_words:
+        if w in a:
+            return True
+    return False
+
+
+def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str):
+    """Busca un fixture por nombres de jugadores (orden normal o invertido). Devuelve (fixture_dict, swapped)."""
+    if not (j1 or "").strip() or not (j2 or "").strip():
+        return None, False
+    for f in fixtures_list or []:
+        if f.get("event_live") != "1" and not f.get("event_final_result") and not f.get("scores"):
+            continue
+        aj1 = (f.get("event_first_player") or f.get("event_home_team") or "").strip()
+        aj2 = (f.get("event_second_player") or f.get("event_away_team") or "").strip()
+        adate = (f.get("event_date") or "")[:10]
+        if adate and fecha_str != adate:
+            continue
+        if _names_match_flexible(j1, aj1) and _names_match_flexible(j2, aj2):
+            return f, False
+        if _names_match_flexible(j1, aj2) and _names_match_flexible(j2, aj1):
+            return f, True
+    return None, False
+
+
+def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 20):
     """
     Para partidos en_juego que siguen sin event_game_result/event_serve, pide a la API
     ese partido con get_fixtures(match_key=event_key). Solución global: no depende de
@@ -318,7 +368,7 @@ def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, m
             data = api_client._make_request(
                 "get_fixtures",
                 {"date_start": date_str, "date_stop": date_str, "match_key": str(ek)},
-                timeout=2,
+                timeout=4,
             )
             if not data or not data.get("result"):
                 continue
@@ -347,8 +397,9 @@ def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, m
 
 def _fetch_livescore_and_fixtures_sync(api_client, fecha: date, today: date):
     """
-    Obtiene get_livescore y get_fixtures con timeout corto (5s cada uno).
-    Para usar en executor desde /matches y no bloquear la respuesta más de 10s.
+    Obtiene get_livescore (SIN filtrar por tipo de evento) y get_fixtures.
+    Para enriquecer la lista usamos TODOS los partidos en vivo de la API, no solo
+    men singles, así partidos de torneos con event_type distinto no se pierden.
     Returns:
         (live_list, fixtures_resp) — fixtures_resp puede ser None
     """
@@ -357,7 +408,10 @@ def _fetch_livescore_and_fixtures_sync(api_client, fecha: date, today: date):
     if not api_client:
         return (live_list, fixtures_resp)
     try:
-        live_list = api_client.get_livescore(timeout=5) or []
+        data = api_client._make_request("get_livescore", {}, timeout=5)
+        live_list = (data.get("result") or []) if data else []
+        # Solo partidos que estén en vivo (event_live=1) para emparejar
+        live_list = [m for m in live_list if m.get("event_live") == "1"]
     except Exception:
         pass
     if fecha == today:
@@ -804,31 +858,18 @@ async def get_matches_by_date(
                         for m in live_list:
                             if m.get("event_live") != "1":
                                 continue
-                            aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip().lower()
-                            aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip().lower()
+                            aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip()
+                            aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip()
                             adate = (m.get("event_date") or "")[:10]
                             if not j1 or not j2:
                                 continue
                             # Permitir match por nombres aunque la API no envíe event_date (algunos partidos no lo traen)
                             if adate and fecha_str != adate:
                                 continue
-                            j1l = j1.lower()
-                            j2l = j2.lower()
-
-                            def _names_match(a: str, b: str) -> bool:
-                                if not a or not b:
-                                    return False
-                                return (
-                                    a == b
-                                    or a.split()[-1] == b.split()[-1]
-                                    or a in b
-                                    or b in a
-                                )
-
-                            same = _names_match(j1l, aj1) and _names_match(j2l, aj2)
+                            same = _names_match_flexible(j1, aj1) and _names_match_flexible(j2, aj2)
                             swapped_order = False
                             if not same:
-                                swapped_order = _names_match(j1l, aj2) and _names_match(j2l, aj1)
+                                swapped_order = _names_match_flexible(j1, aj2) and _names_match_flexible(j2, aj1)
                                 same = swapped_order
                             if same:
                                 live_api = m
@@ -865,28 +906,6 @@ async def get_matches_by_date(
                 if not isinstance(fixtures, list):
                     fixtures = [fixtures] if fixtures else []
                 fixtures_by_key = {str(f.get("event_key")): f for f in fixtures if f.get("event_key") is not None}
-                # Por nombre para partidos sin event_key o no encontrados por key
-                def _find_fixture_by_names(fixtures_list, j1: str, j2: str, fecha_str: str):
-                    j1l = (j1 or "").strip().lower()
-                    j2l = (j2 or "").strip().lower()
-                    if not j1l or not j2l:
-                        return None, False
-                    for f in fixtures_list:
-                        if f.get("event_live") != "1" and not f.get("event_final_result") and not f.get("scores"):
-                            continue
-                        aj1 = (f.get("event_first_player") or f.get("event_home_team") or "").strip().lower()
-                        aj2 = (f.get("event_second_player") or f.get("event_away_team") or "").strip().lower()
-                        adate = (f.get("event_date") or "")[:10]
-                        if adate and fecha_str != adate:
-                            continue
-                        def _nm(a, b):
-                            return a == b or (a.split()[-1] == b.split()[-1] if a and b else False) or (a in b or b in a)
-                        if _nm(j1l, aj1) and _nm(j2l, aj2):
-                            return f, False
-                        if _nm(j1l, aj2) and _nm(j2l, aj1):
-                            return f, True
-                    return None, False
-
                 for p in partidos_raw:
                     # Saltar en_juego que ya tienen datos en directo (enriquecidos por get_livescore)
                     if p.get("estado") == "en_juego" and (p.get("event_game_result") or p.get("event_serve")):
@@ -954,7 +973,7 @@ async def get_matches_by_date(
             except Exception as e:
                 logger.debug("Enrich /matches with get_fixtures fallback: %s", e)
 
-        # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido
+        # Tercer paso (global): partidos en_juego que aún no tienen datos — petición por partido (máx 20)
         if live and api_client and partidos_raw and fecha == today:
             date_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]
             try:
@@ -962,14 +981,52 @@ async def get_matches_by_date(
                 await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 8),
+                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 20),
                     ),
-                    12.0,
+                    30.0,
                 )
             except asyncio.TimeoutError:
                 logger.debug("/matches: per-match live enrichment timeout")
             except Exception as e:
                 logger.debug("Enrich /matches per-match live: %s", e)
+
+        # Cuarto paso: partidos en_juego que siguen sin datos (incl. sin event_key) — buscar en fixtures por nombre
+        if live and partidos_raw and fecha == today and fixtures_resp and fixtures_resp.get("result"):
+            try:
+                fixtures = fixtures_resp.get("result") or []
+                if isinstance(fixtures, list) and fixtures:
+                    for p in partidos_raw:
+                        if p.get("estado") != "en_juego" or p.get("event_game_result") or p.get("event_serve"):
+                            continue
+                        j1 = (p.get("jugador1_nombre") or p.get("jugador1") or "").strip()
+                        j2 = (p.get("jugador2_nombre") or p.get("jugador2") or "").strip()
+                        fecha_p = p.get("fecha_partido")
+                        fecha_str = fecha_p.strftime("%Y-%m-%d") if hasattr(fecha_p, "strftime") else (str(fecha_p)[:10] if fecha_p else "")
+                        api_match, swapped_f = _find_fixture_by_names(fixtures, j1, j2, fecha_str)
+                        if not api_match:
+                            continue
+                        if _is_match_still_live(api_match):
+                            p["estado"] = "en_juego"
+                            p["event_final_result"] = api_match.get("event_final_result")
+                            eg = api_match.get("event_game_result")
+                            es = api_match.get("event_serve")
+                            if swapped_f and (eg or es):
+                                if eg and "-" in str(eg):
+                                    parts = str(eg).strip().split("-", 1)
+                                    if len(parts) == 2:
+                                        eg = f"{parts[1].strip()}-{parts[0].strip()}"
+                                if es:
+                                    es = "Second Player" if (str(es).lower().startswith("first") or es == "1") else "First Player"
+                            p["event_game_result"] = eg
+                            p["event_serve"] = es
+                            p["event_status"] = api_match.get("event_status")
+                            p["event_live"] = api_match.get("event_live") or "1"
+                        else:
+                            p["estado"] = "completado"
+                            p["event_final_result"] = api_match.get("event_final_result")
+                            p["event_status"] = api_match.get("event_status")
+            except Exception as e:
+                logger.debug("Enrich /matches from fixtures by name (no event_key): %s", e)
 
         # Cargar match_sets en batch para evitar N+1 (una query en vez de una por partido)
         match_ids_needing_scores = [
