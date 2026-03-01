@@ -327,6 +327,30 @@ def _names_match_flexible(our: str, api: str) -> bool:
     return False
 
 
+def _api_item_player_names(item: dict) -> tuple:
+    """
+    Obtiene (nombre_jugador1, nombre_jugador2) de un item de get_livescore o get_fixtures.
+    Prueba todas las claves conocidas por si la API varía por torneo o método.
+    """
+    n1 = (
+        item.get("event_first_player")
+        or item.get("event_home_team")
+        or item.get("first_player")
+        or item.get("player1_name")
+        or item.get("event_first_player_name")
+        or ""
+    )
+    n2 = (
+        item.get("event_second_player")
+        or item.get("event_away_team")
+        or item.get("second_player")
+        or item.get("player2_name")
+        or item.get("event_second_player_name")
+        or ""
+    )
+    return (n1 or "").strip(), (n2 or "").strip()
+
+
 def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str):
     """Busca un fixture por nombres de jugadores (orden normal o invertido). Devuelve (fixture_dict, swapped)."""
     if not (j1 or "").strip() or not (j2 or "").strip():
@@ -334,8 +358,7 @@ def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str
     for f in fixtures_list or []:
         if f.get("event_live") != "1" and not f.get("event_final_result") and not f.get("scores"):
             continue
-        aj1 = (f.get("event_first_player") or f.get("event_home_team") or "").strip()
-        aj2 = (f.get("event_second_player") or f.get("event_away_team") or "").strip()
+        aj1, aj2 = _api_item_player_names(f)
         adate = (f.get("event_date") or "")[:10]
         if adate and fecha_str != adate:
             continue
@@ -858,8 +881,7 @@ async def get_matches_by_date(
                         for m in live_list:
                             if m.get("event_live") != "1":
                                 continue
-                            aj1 = (m.get("event_first_player") or m.get("event_home_team") or "").strip()
-                            aj2 = (m.get("event_second_player") or m.get("event_away_team") or "").strip()
+                            aj1, aj2 = _api_item_player_names(m)
                             adate = (m.get("event_date") or "")[:10]
                             if not j1 or not j2:
                                 continue
@@ -2616,6 +2638,106 @@ async def admin_debug_odds_sync():
         }
     except Exception as e:
         logger.error(f"❌ Error en debug-odds-sync: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/debug-live-enrichment", tags=["Admin"])
+async def admin_debug_live_enrichment(date_param: Optional[str] = Query(None, description="Fecha YYYY-MM-DD (default: hoy)")):
+    """
+    Diagnóstico: por qué las cards en directo no muestran resultado.
+    
+    Devuelve:
+    - db_live: partidos en_juego de la BD (jugador1_nombre, jugador2_nombre, event_key, event_game_result, event_serve)
+    - api_livescore: lo que devuelve get_livescore (nombres y event_key para comparar)
+    - api_fixtures: lo que devuelve get_fixtures para esa fecha (mismo formato)
+    Así puedes ver si los nombres o event_key no coinciden.
+    """
+    from datetime import date as date_type
+    try:
+        today = date_type.today()
+        if date_param:
+            try:
+                req_date = datetime.strptime(date_param[:10], "%Y-%m-%d").date()
+            except ValueError:
+                req_date = today
+        else:
+            req_date = today
+
+        # 1. Partidos en_juego (o todos de esa fecha) de la BD
+        rows = db.get_matches_by_date(req_date) or []
+        db_live = []
+        for r in rows:
+            if r.get("estado") != "en_juego":
+                continue
+            db_live.append({
+                "id": r.get("id"),
+                "jugador1_nombre": (r.get("jugador1_nombre") or "").strip(),
+                "jugador2_nombre": (r.get("jugador2_nombre") or "").strip(),
+                "event_key": r.get("event_key"),
+                "event_game_result": r.get("event_game_result"),
+                "event_serve": r.get("event_serve"),
+                "torneo": r.get("torneo"),
+            })
+
+        # 2. get_livescore (raw, sin filtrar)
+        livescore_list = []
+        if api_client:
+            try:
+                data = api_client._make_request("get_livescore", {}, timeout=8)
+                raw = (data.get("result") or []) if data else []
+                for m in raw:
+                    if m.get("event_live") != "1":
+                        continue
+                    n1, n2 = _api_item_player_names(m)
+                    livescore_list.append({
+                        "event_key": m.get("event_key"),
+                        "event_first_player": n1,
+                        "event_second_player": n2,
+                        "event_game_result": m.get("event_game_result"),
+                        "event_serve": m.get("event_serve"),
+                        "event_date": (m.get("event_date") or "")[:10],
+                        "event_status": m.get("event_status"),
+                    })
+            except Exception as e:
+                livescore_list = {"error": str(e)}
+
+        # 3. get_fixtures para esa fecha
+        fixtures_list = []
+        if api_client and req_date == today:
+            try:
+                date_str = req_date.strftime("%Y-%m-%d")
+                data = api_client._make_request(
+                    "get_fixtures", {"date_start": date_str, "date_stop": date_str}, timeout=8
+                )
+                raw = data.get("result") if data else []
+                if not isinstance(raw, list):
+                    raw = [raw] if raw else []
+                for f in raw:
+                    if f.get("event_live") != "1" and not f.get("event_final_result") and not f.get("scores"):
+                        continue
+                    n1, n2 = _api_item_player_names(f)
+                    fixtures_list.append({
+                        "event_key": f.get("event_key"),
+                        "event_first_player": n1,
+                        "event_second_player": n2,
+                        "event_game_result": f.get("event_game_result"),
+                        "event_serve": f.get("event_serve"),
+                        "event_date": (f.get("event_date") or "")[:10],
+                    })
+            except Exception as e:
+                fixtures_list = {"error": str(e)}
+
+        return {
+            "date": str(req_date),
+            "db_live_count": len(db_live),
+            "db_live": db_live,
+            "api_livescore_count": len(livescore_list) if isinstance(livescore_list, list) else 0,
+            "api_livescore": livescore_list,
+            "api_fixtures_count": len(fixtures_list) if isinstance(fixtures_list, list) else 0,
+            "api_fixtures": fixtures_list,
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en debug-live-enrichment: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
