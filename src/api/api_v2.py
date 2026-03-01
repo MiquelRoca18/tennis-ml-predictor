@@ -369,12 +369,11 @@ def _find_fixture_by_names(fixtures_list: list, j1: str, j2: str, fecha_str: str
     return None, False
 
 
-def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 20):
+def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, max_partidos: int = 20, database=None):
     """
     Para partidos en_juego que siguen sin event_game_result/event_serve, pide a la API
-    ese partido con get_fixtures(match_key=event_key). Solución global: no depende de
-    que el partido esté en el listado bulk de get_livescore/get_fixtures.
-    Modifica partidos_raw in-place.
+    ese partido con get_fixtures(match_key=event_key). Modifica partidos_raw in-place.
+    Si database se pasa, persiste event_game_result/event_serve en BD.
     """
     if not api_client or not date_str:
         return
@@ -414,6 +413,18 @@ def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, m
             p["event_serve"] = api_match.get("event_serve")
             p["event_status"] = api_match.get("event_status")
             p["event_live"] = "1"
+            if database:
+                try:
+                    database.update_match_live_data(
+                        p["id"],
+                        event_game_result=p.get("event_game_result"),
+                        event_serve=p.get("event_serve"),
+                        event_final_result=p.get("event_final_result"),
+                        event_status=p.get("event_status"),
+                        event_live="1",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.debug("Enrich per-match get_fixtures for ek=%s: %s", p.get("event_key"), e)
 
@@ -914,6 +925,17 @@ async def get_matches_by_date(
                             p["event_serve"] = es
                             p["event_status"] = live_api.get("event_status")
                             p["event_live"] = "1"
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_game_result=eg,
+                                    event_serve=es,
+                                    event_final_result=p.get("event_final_result"),
+                                    event_status=live_api.get("event_status"),
+                                    event_live="1",
+                                )
+                            except Exception:
+                                pass
                         else:
                             p["estado"] = "completado"
                             p["event_final_result"] = live_api.get("event_final_result")
@@ -964,6 +986,17 @@ async def get_matches_by_date(
                             p["event_serve"] = es
                             p["event_status"] = api_match.get("event_status")
                             p["event_live"] = api_match.get("event_live") or "1"
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_game_result=eg,
+                                    event_serve=es,
+                                    event_final_result=p.get("event_final_result"),
+                                    event_status=api_match.get("event_status"),
+                                    event_live="1",
+                                )
+                            except Exception:
+                                pass
                         else:
                             p["estado"] = "completado"
                             p["event_final_result"] = api_match.get("event_final_result")
@@ -1003,7 +1036,7 @@ async def get_matches_by_date(
                 await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 20),
+                        lambda: _enrich_live_per_match_sync(partidos_raw, api_client, date_str, 20, db),
                     ),
                     30.0,
                 )
@@ -1043,6 +1076,17 @@ async def get_matches_by_date(
                             p["event_serve"] = es
                             p["event_status"] = api_match.get("event_status")
                             p["event_live"] = api_match.get("event_live") or "1"
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_game_result=eg,
+                                    event_serve=es,
+                                    event_final_result=p.get("event_final_result"),
+                                    event_status=api_match.get("event_status"),
+                                    event_live="1",
+                                )
+                            except Exception:
+                                pass
                         else:
                             p["estado"] = "completado"
                             p["event_final_result"] = api_match.get("event_final_result")
