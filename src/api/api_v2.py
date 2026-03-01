@@ -250,11 +250,13 @@ def _is_set_completed(p1: int, p2: int) -> bool:
 
 
 def _is_match_still_live(api_data: dict) -> bool:
-    """True si el partido sigue en directo; False si event_status es Finished, Retired, etc."""
+    """True si el partido sigue en directo; False si event_status es Finished, Retired, Cancelled, etc."""
     status = (api_data.get("event_status") or "").strip().upper()
     if not status:
         return True  # Sin estado, confiar en event_live
     if status == "FINISHED" or "FINISH" in status:
+        return False
+    if "CANCEL" in status or "POSTPON" in status or "SUSPEND" in status:
         return False
     if "RETIR" in status or "WALK" in status or "DEFAULT" in status or "WO " in status or status == "WO":
         return False
@@ -402,11 +404,31 @@ def _enrich_live_per_match_sync(partidos_raw: list, api_client, date_str: str, m
                         p["estado"] = "completado"
                         p["event_final_result"] = api_match.get("event_final_result")
                         p["event_status"] = api_match.get("event_status")
+                        if database:
+                            try:
+                                database.update_match_live_data(
+                                    p["id"],
+                                    event_final_result=api_match.get("event_final_result"),
+                                    event_status=api_match.get("event_status"),
+                                    force_estado="completado",
+                                )
+                            except Exception:
+                                pass
                 continue
             if not _is_match_still_live(api_match):
                 p["estado"] = "completado"
                 p["event_final_result"] = api_match.get("event_final_result")
                 p["event_status"] = api_match.get("event_status")
+                if database:
+                    try:
+                        database.update_match_live_data(
+                            p["id"],
+                            event_final_result=api_match.get("event_final_result"),
+                            event_status=api_match.get("event_status"),
+                            force_estado="completado",
+                        )
+                    except Exception:
+                        pass
                 continue
             p["event_final_result"] = api_match.get("event_final_result")
             p["event_game_result"] = api_match.get("event_game_result")
@@ -885,6 +907,23 @@ async def get_matches_by_date(
             len(en_juego_with_live_data),
             [f"{p.get('id')} {p.get('jugador1_nombre','')} vs {p.get('jugador2_nombre','')}" for p in en_juego_from_db if not (p.get("event_game_result") or p.get("event_serve"))],
         )
+        # Corregir partidos que en BD siguen en_juego pero event_status es Cancelled/Finished (p. ej. actualizados por match_update_service)
+        for p in partidos_raw:
+            if p.get("estado") != "en_juego":
+                continue
+            status = (p.get("event_status") or "").strip().upper()
+            if not status:
+                continue
+            if "CANCEL" in status or "FINISH" in status or "POSTPON" in status:
+                p["estado"] = "completado"
+                try:
+                    db.update_match_live_data(
+                        p["id"],
+                        event_status=p.get("event_status"),
+                        force_estado="completado",
+                    )
+                except Exception:
+                    pass
 
         today = date.today()
         # Enriquecer con live/fixtures solo si live=True (timeout 5s para no bloquear)
@@ -969,6 +1008,15 @@ async def get_matches_by_date(
                             p["estado"] = "completado"
                             p["event_final_result"] = live_api.get("event_final_result")
                             p["event_status"] = live_api.get("event_status")
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_final_result=live_api.get("event_final_result"),
+                                    event_status=live_api.get("event_status"),
+                                    force_estado="completado",
+                                )
+                            except Exception:
+                                pass
             except Exception as e:
                 logger.debug("Enrich /matches with get_livescore: %s", e)
 
@@ -1034,6 +1082,15 @@ async def get_matches_by_date(
                             p["estado"] = "completado"
                             p["event_final_result"] = api_match.get("event_final_result")
                             p["event_status"] = api_match.get("event_status")
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_final_result=api_match.get("event_final_result"),
+                                    event_status=api_match.get("event_status"),
+                                    force_estado="completado",
+                                )
+                            except Exception:
+                                pass
                         api_scores = api_match.get("scores") or []
                         if api_scores and hasattr(db, "save_match_sets"):
                             try:
@@ -1128,6 +1185,15 @@ async def get_matches_by_date(
                             p["estado"] = "completado"
                             p["event_final_result"] = api_match.get("event_final_result")
                             p["event_status"] = api_match.get("event_status")
+                            try:
+                                db.update_match_live_data(
+                                    p["id"],
+                                    event_final_result=api_match.get("event_final_result"),
+                                    event_status=api_match.get("event_status"),
+                                    force_estado="completado",
+                                )
+                            except Exception:
+                                pass
             except Exception as e:
                 logger.debug("Enrich /matches from fixtures by name (no event_key): %s", e)
 
