@@ -2642,7 +2642,7 @@ async def admin_debug_odds_sync():
 
 
 @app.get("/admin/debug-live-enrichment", tags=["Admin"])
-async def admin_debug_live_enrichment(date_param: Optional[str] = Query(None, description="Fecha YYYY-MM-DD (default: hoy)")):
+async def admin_debug_live_enrichment(date_param: Optional[str] = Query(None, alias="date", description="Fecha YYYY-MM-DD (default: hoy)")):
     """
     Diagnóstico: por qué las cards en directo no muestran resultado.
     
@@ -2683,7 +2683,7 @@ async def admin_debug_live_enrichment(date_param: Optional[str] = Query(None, de
         livescore_list = []
         if api_client:
             try:
-                data = api_client._make_request("get_livescore", {}, timeout=8)
+                data = api_client._make_request("get_livescore", {}, timeout=5)
                 raw = (data.get("result") or []) if data else []
                 for m in raw:
                     if m.get("event_live") != "1":
@@ -2707,7 +2707,7 @@ async def admin_debug_live_enrichment(date_param: Optional[str] = Query(None, de
             try:
                 date_str = req_date.strftime("%Y-%m-%d")
                 data = api_client._make_request(
-                    "get_fixtures", {"date_start": date_str, "date_stop": date_str}, timeout=8
+                    "get_fixtures", {"date_start": date_str, "date_stop": date_str}, timeout=5
                 )
                 raw = data.get("result") if data else []
                 if not isinstance(raw, list):
