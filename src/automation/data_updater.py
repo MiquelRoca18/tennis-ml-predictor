@@ -1,7 +1,11 @@
 """
-Sistema de actualización automática de datos
+Sistema de actualización automática de datos desde TML (TennisMyLife).
+
+Fuente por defecto: https://stats.tennismylife.org/data (datos actualizados).
+Para otra URL base configurar TML_BASE_URL.
 """
 
+import os
 import pandas as pd
 import requests
 from datetime import datetime
@@ -14,12 +18,14 @@ logger = logging.getLogger(__name__)
 
 class DataUpdater:
     """
-    Actualiza automáticamente los datos de partidos desde TML GitHub
+    Actualiza automáticamente los datos de partidos desde TML (stats.tennismylife.org por defecto).
     """
 
     def __init__(self, data_path="datos/processed/dataset_features_completas.csv"):
         self.data_path = Path(data_path)
-        self.tml_base_url = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
+        self.tml_base_url = (
+            os.getenv("TML_BASE_URL", "https://stats.tennismylife.org/data").rstrip("/")
+        )
 
     def obtener_ultima_fecha_local(self):
         """
@@ -77,8 +83,8 @@ class DataUpdater:
             year = datetime.now().year
 
         try:
-            # URL del archivo de datos del año (TML-Database usa formato: 2024.csv)
-            url = f"https://raw.githubusercontent.com/Tennismylife/TML-Database/master/{year}.csv"
+            # URL del archivo de datos del año (TML web por defecto; formato 2024.csv)
+            url = f"{self.tml_base_url}/{year}.csv"
 
             logger.info(f"📥 Descargando datos de {year} desde TML...")
 

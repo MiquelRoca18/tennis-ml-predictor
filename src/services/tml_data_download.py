@@ -1,8 +1,13 @@
 """
-Descarga de CSVs desde TML-Database (GitHub) para ELO y predicciones.
-Usado por POST /admin/refresh-elo-data y por el webhook de GitHub.
+Descarga de CSVs desde TML (TennisMyLife) para ELO y predicciones.
+
+Fuente por defecto: web oficial https://stats.tennismylife.org/data (datos actualizados).
+Para usar otra base URL configurar la variable de entorno TML_BASE_URL.
+
+Usado por: POST /admin/refresh-elo-data, cron diario 5 AM.
 """
 
+import os
 import urllib.request
 import logging
 from pathlib import Path
@@ -11,13 +16,18 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
-TML_BASE_URL = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
+# Base URL: por defecto TML web (datos actualizados). Formato: {TML_BASE_URL}/{year}.csv
+TML_BASE_URL = os.getenv(
+    "TML_BASE_URL",
+    "https://stats.tennismylife.org/data",
+).rstrip("/")
 DATA_RAW = Path("datos/raw")
 
 
 def download_tml_csvs(years: List[int]) -> Tuple[List[str], List[str]]:
     """
-    Descarga los CSV de TML-Database para los años indicados y los guarda en datos/raw/.
+    Descarga los CSV de TML (stats.tennismylife.org/data por defecto) para los años indicados
+    y los guarda en datos/raw/. Misma estructura que el histórico (tourney_id, winner_id, etc.).
 
     Args:
         years: Lista de años (ej: [2025, 2026]). Se descargan como {año}.csv.
@@ -40,7 +50,7 @@ def download_tml_csvs(years: List[int]) -> Tuple[List[str], List[str]]:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 dest.write_bytes(resp.read())
             downloaded.append(str(yr))
-            logger.info(f"✅ TML-Database CSV descargado: {yr}.csv")
+            logger.info(f"✅ TML CSV descargado: {yr}.csv")
         except Exception as e:
             errors.append(f"{yr}: {e}")
             logger.warning(f"⚠️ No se pudo descargar {yr}.csv: {e}")

@@ -77,12 +77,11 @@ def descargar_datos_automaticamente(año):
     cuotas_file = odds_dir / f"tennis_odds_{año}_{año}.csv"
     cuotas_excel = odds_dir / f"{año}.xlsx"
 
-    # 1. Descargar datos de partidos (TML GitHub)
+    # 1. Descargar datos de partidos (TML web por defecto: stats.tennismylife.org/data)
     if not partidos_file.exists():
         logger.info(f"  Descargando partidos {año} de TML...")
-        url_partidos = (
-            f"https://raw.githubusercontent.com/Tennismylife/TML-Database/master/{año}.csv"
-        )
+        tml_base = os.getenv("TML_BASE_URL", "https://stats.tennismylife.org/data").rstrip("/")
+        url_partidos = f"{tml_base}/{año}.csv"
         try:
             response = requests.get(url_partidos, timeout=30)
             response.raise_for_status()

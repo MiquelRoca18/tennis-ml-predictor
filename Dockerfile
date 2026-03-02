@@ -32,7 +32,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Instalar solo dependencias runtime necesarias (+ curl para descargar TML-Database en build)
+# Instalar solo dependencias runtime necesarias (+ curl para descargar TML web en build)
 RUN apt-get update && apt-get install -y \
     libgomp1 \
     curl \
@@ -55,9 +55,10 @@ RUN chmod +x start.sh
 # Crear directorios necesarios (resultados para backtesting; logs)
 RUN mkdir -p logs datos/raw datos/processed resultados
 
-# Descargar CSVs de TML-Database para ELO en producción (2025 + 2026; cada build tiene datos recientes)
-RUN curl -sL "https://raw.githubusercontent.com/Tennismylife/TML-Database/master/2025.csv" -o datos/raw/2025.csv && \
-    curl -sL "https://raw.githubusercontent.com/Tennismylife/TML-Database/master/2026.csv" -o datos/raw/2026.csv
+# Descargar CSVs TML desde web oficial (datos actualizados)
+ARG TML_BASE_URL=https://stats.tennismylife.org/data
+RUN curl -sL "${TML_BASE_URL}/2025.csv" -o datos/raw/2025.csv && \
+    curl -sL "${TML_BASE_URL}/2026.csv" -o datos/raw/2026.csv
 
 # Crear usuario no-root para seguridad
 RUN useradd -m -u 1000 tennisml && \
