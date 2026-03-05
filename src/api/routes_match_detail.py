@@ -39,8 +39,8 @@ from src.services.match_stats_calculator import MatchStatsCalculator
 
 logger = logging.getLogger(__name__)
 
-# Router para endpoints de detalle
-router = APIRouter(prefix="/v2/matches", tags=["Match Detail v2"])
+# Router para endpoints de detalle (unificado: /matches/{id}/full|timeline|stats|pbp|odds|h2h)
+router = APIRouter(prefix="/matches", tags=["Match Detail"])
 
 # Instancia del calculador de estadísticas
 stats_calculator = MatchStatsCalculator()

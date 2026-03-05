@@ -178,11 +178,11 @@ flowchart TD
 
 - **Info:** `GET /`, `GET /health`, `GET /keepalive`.
 - **Partidos:** `GET /matches?date=`, `GET /matches/upcoming`, `GET /matches/range`, `GET /matches/{id}/details`, `GET /matches/{id}/analysis`, `POST /matches/predict`, `PUT /matches/{id}/result`, `POST /matches/{id}/refresh`, `POST /matches/status-batch`, `POST /matches/refresh-results-batch`.
-- **Detalle v2:** `GET /v2/matches/{id}/full`, `GET /v2/matches/{id}/timeline`, `GET /v2/matches/{id}/stats`, `GET /v2/matches/{id}/pbp`, `GET /v2/matches/{id}/odds`, `GET /v2/matches/{id}/h2h`.
+- **Detalle de partido:** `GET /matches/{id}/details`, `GET /matches/{id}/full`, `GET /matches/{id}/timeline`, `GET /matches/{id}/stats`, `GET /matches/{id}/pbp`, `GET /matches/{id}/odds`, `GET /matches/{id}/h2h`.
 - **Stats:** `GET /stats/summary`, `GET /stats/daily`.
 - **Config:** `GET /config`, `GET /settings/betting`, `PATCH /settings/betting`.
 - **Cron / Admin (solo para cron-job.org):** `GET /admin/trigger-retraining` (sync cuotas y predicciones), `GET /cron/refresh-elo` (actualizar ELO desde TML), `GET /admin/cron-status` (último resultado de cada cron).
-- **Elite (jugadores, H2H, rankings, torneos, cuotas, punto a punto):** `GET /players/*`, `GET /h2h/*`, `GET /rankings/*`, `GET /tournaments/*`, `GET /matches/{id}/odds/*`, `GET /matches/{id}/pointbypoint`, etc.
+- **Elite (jugadores, H2H, rankings, torneos):** `GET /players/*`, `GET /h2h/*`, `GET /rankings/*`, `GET /tournaments/*`.
 
 Documentación interactiva: `/docs` (Swagger), `/redoc` (ReDoc).
 
@@ -240,7 +240,7 @@ Documentación interactiva: `/docs` (Swagger), `/redoc` (ReDoc).
 - **Cliente:** `src/services/api/apiClient.ts`: instancia Axios con `baseURL`, timeout 45 s, headers JSON e interceptores para errores (timeout, red, 4xx/5xx).
 - **Servicios que consumen la API:**
   - **matchService:** `/matches`, `/matches/refresh-results-batch`, `/matches/status-batch`, `POST /matches/predict`, `PUT /matches/{id}/result`, `POST /matches/{id}/refresh`, `/settings/betting`, `/matches/{id}/history`, etc.
-  - **matchDetailService:** `/v2/matches/{id}/full`, timeline, pbp, odds.
+  - **matchDetailService:** `/matches/{id}/details`, timeline, pbp, odds.
   - **tournamentService:** `/tournaments`, `/tournaments/{key}`, sync.
   - **playerService:** `/players/lookup`, `/{key}`, matches, upcoming, stats.
   - **rankingsService:** `/rankings/ATP`.
@@ -260,7 +260,7 @@ Documentación interactiva: `/docs` (Swagger), `/redoc` (ReDoc).
 ## 6. Flujo de datos (resumen)
 
 1. **Partidos y cuotas:** API-Tennis → backend (jobs o endpoints) → BD (PostgreSQL en Railway). Tenly pide partidos por fecha o ID a la API.
-2. **Predicciones:** Backend genera predicciones con baseline ELO + mercado (features desde CSV/BD, cuotas desde API-Tennis), las guarda en `predictions` y las sirve en detalle de partido (`/v2/matches/{id}/full` o similares).
+2. **Predicciones:** Backend genera predicciones con baseline ELO + mercado (features desde CSV/BD, cuotas desde API-Tennis), las guarda en `predictions` y las sirve en detalle de partido (`/matches/{id}/details` o similares).
 3. **Resultados:** El usuario o un job actualiza resultados; el backend puede actualizar desde API-Tennis y Tenly usa batch de refresh para marcar apuestas ganadas/perdidas.
 4. **Usuario (opcional):** Supabase para login, favoritos y bankroll; Tenly combina datos de la API del predictor con datos de Supabase.
 

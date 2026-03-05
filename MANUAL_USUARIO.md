@@ -90,23 +90,14 @@ A continuación se listan el resto de endpoints que expone la API, útiles para 
 - **GET /tournaments/{tournament_key}** — Detalle de un torneo.  
 - **GET /tournaments/{tournament_key}/matches** — Partidos de un torneo.
 
-**Cuotas y estadísticas de partido**  
-- **GET /matches/{id}/odds/multi** — Cuotas de múltiples casas.  
-- **GET /matches/{id}/odds/best** — Mejores cuotas.  
-- **GET /matches/{id}/odds/comparison** — Comparativa de cuotas.  
-- **GET /matches/{id}/stats/detailed** — Estadísticas detalladas del partido.  
-- **GET /matches/{id}/stats/summary** — Resumen de estadísticas.  
-- **GET /matches/{id}/pointbypoint** — Punto por punto (si está disponible).  
-- **GET /matches/{id}/games** — Juegos del partido.  
-- **GET /matches/{id}/breakpoints** — Break points.
-
-**Detalle de partido (v2)**  
-- **GET /v2/matches/{id}/full** — Mismo contenido que `/matches/{id}/details`.  
-- **GET /v2/matches/{id}/timeline** — Timeline de juegos.  
-- **GET /v2/matches/{id}/stats** — Estadísticas en formato v2.  
-- **GET /v2/matches/{id}/pbp** — Punto por punto.  
-- **GET /v2/matches/{id}/odds** — Cuotas.  
-- **GET /v2/matches/{id}/h2h** — H2H en formato v2.
+**Detalle de partido (timeline, stats, cuotas, H2H)**  
+- **GET /matches/{id}/details** — Detalle completo (recomendado).  
+- **GET /matches/{id}/full** — Mismo contenido que `details`.  
+- **GET /matches/{id}/timeline** — Timeline de juegos.  
+- **GET /matches/{id}/stats** — Estadísticas del partido.  
+- **GET /matches/{id}/pbp** — Punto por punto.  
+- **GET /matches/{id}/odds** — Cuotas de bookmakers.  
+- **GET /matches/{id}/h2h** — Head-to-head entre los jugadores.
 
 Para crons externos (p. ej. cron-job.org) se usan **GET /admin/trigger-retraining** (sync cuotas y predicciones), **GET /cron/refresh-elo** (actualizar datos ELO) y **GET /admin/cron-status** (ver último resultado de cada cron). El resto de la API se documenta en `/docs`.
 
