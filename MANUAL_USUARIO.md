@@ -61,7 +61,58 @@ Si usas Tenly sin cuenta, el bankroll puede guardarse aquí; con cuenta, puede s
 
 ---
 
-## 7. Uso típico (resumen)
+## 7. Más endpoints (referencia)
+
+A continuación se listan el resto de endpoints que expone la API, útiles para torneos, perfiles de jugador, clasificaciones, búsqueda y datos extra de partidos. La documentación interactiva en `/docs` muestra parámetros y respuestas.
+
+**Partidos (adicionales)**  
+- **GET /matches/range** — Partidos en un rango de fechas.  
+- **GET /matches/{id}/analysis** — Análisis del partido (predicción, EV, etc.).  
+- **GET /matches/{id}/history** — Historial de encuentros entre los dos jugadores (H2H).
+
+**Jugadores**  
+- **GET /players/lookup** — Búsqueda de jugadores por texto (query).  
+- **GET /players/{player_key}** — Perfil de un jugador (datos básicos).  
+- **GET /players/{player_key}/matches** — Partidos del jugador.  
+- **GET /players/{player_key}/upcoming** — Próximos partidos del jugador.  
+- **GET /players/{player_key}/stats** — Estadísticas del jugador (por temporada, superficie, etc.).
+
+**Head-to-head (H2H)**  
+- **GET /h2h/{player1_key}/{player2_key}** — Enfrentamientos directos entre dos jugadores.  
+- **GET /h2h/match/{match_id}** — H2H en el contexto de un partido concreto.
+
+**Clasificaciones**  
+- **GET /rankings/{league}** — Ranking de una liga/circuito (ej.: atp, wta).  
+- **GET /rankings/player/{player_key}** — Posición en el ranking de un jugador.
+
+**Torneos**  
+- **GET /tournaments** — Lista de torneos.  
+- **GET /tournaments/{tournament_key}** — Detalle de un torneo.  
+- **GET /tournaments/{tournament_key}/matches** — Partidos de un torneo.
+
+**Cuotas y estadísticas de partido**  
+- **GET /matches/{id}/odds/multi** — Cuotas de múltiples casas.  
+- **GET /matches/{id}/odds/best** — Mejores cuotas.  
+- **GET /matches/{id}/odds/comparison** — Comparativa de cuotas.  
+- **GET /matches/{id}/stats/detailed** — Estadísticas detalladas del partido.  
+- **GET /matches/{id}/stats/summary** — Resumen de estadísticas.  
+- **GET /matches/{id}/pointbypoint** — Punto por punto (si está disponible).  
+- **GET /matches/{id}/games** — Juegos del partido.  
+- **GET /matches/{id}/breakpoints** — Break points.
+
+**Detalle de partido (v2)**  
+- **GET /v2/matches/{id}/full** — Mismo contenido que `/matches/{id}/details`.  
+- **GET /v2/matches/{id}/timeline** — Timeline de juegos.  
+- **GET /v2/matches/{id}/stats** — Estadísticas en formato v2.  
+- **GET /v2/matches/{id}/pbp** — Punto por punto.  
+- **GET /v2/matches/{id}/odds** — Cuotas.  
+- **GET /v2/matches/{id}/h2h** — H2H en formato v2.
+
+Para crons externos (p. ej. cron-job.org) se usan **GET /admin/trigger-retraining** (sync cuotas y predicciones), **GET /cron/refresh-elo** (actualizar datos ELO) y **GET /admin/cron-status** (ver último resultado de cada cron). El resto de la API se documenta en `/docs`.
+
+---
+
+## 8. Uso típico (resumen)
 
 | Objetivo              | Acción |
 |-----------------------|--------|
@@ -73,7 +124,7 @@ Si usas Tenly sin cuenta, el bankroll puede guardarse aquí; con cuenta, puede s
 
 ---
 
-## 8. Errores frecuentes
+## 9. Errores frecuentes
 
 - **Timeout o sin respuesta:** El servidor (Railway) puede estar "dormido"; llama a `/keepalive` o espera a que la siguiente petición lo reactive.
 - **404 en un partido:** El ID no existe o la fecha no tiene partidos; comprueba la fecha y el ID.
@@ -83,7 +134,7 @@ Para desarrollo local, la API suele estar en `http://localhost:8000` (mismos pat
 
 ---
 
-## 9. Ejecutar la API en local
+## 10. Ejecutar la API en local
 
 Si quieres descargar el código del backend y ejecutar la API en tu ordenador (por ejemplo para desarrollo o para que un profesor pueda reproducir el proyecto):
 

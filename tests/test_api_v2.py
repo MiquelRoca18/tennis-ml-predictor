@@ -193,36 +193,18 @@ def run_tests():
         results["failed"] += 1
 
     # ============================================================
-    # TEST 4: Administración
+    # TEST 4: Cron / Admin (solo endpoints usados por cron-job.org)
     # ============================================================
 
-    log("\n⚙️  TEST 4: Endpoints de Administración", Colors.YELLOW)
+    log("\n⚙️  TEST 4: Cron status", Colors.YELLOW)
     log("-" * 50, Colors.YELLOW)
 
-    # 4.1 Estado del scheduler
+    # 4.1 Último resultado de crons (trigger-retraining, refresh-elo)
     results["total"] += 1
-    response = test_endpoint("GET /admin/scheduler-status", "GET", "/admin/scheduler-status")
-    if response and "scheduler_running" in response:
+    response = test_endpoint("GET /admin/cron-status", "GET", "/admin/cron-status")
+    if response and "trigger_retraining" in response and "refresh_elo" in response:
         results["passed"] += 1
-        log(f"   Scheduler running: {response['scheduler_running']}", Colors.GREEN)
-        log(f"   Próxima ejecución: {response.get('next_run', 'N/A')}", Colors.GREEN)
-    else:
-        results["failed"] += 1
-
-    # 4.2 Partidos pendientes
-    results["total"] += 1
-    response = test_endpoint("GET /admin/pending-matches", "GET", "/admin/pending-matches")
-    if response and "total" in response:
-        results["passed"] += 1
-        log(f"   Partidos pendientes: {response['total']}", Colors.GREEN)
-    else:
-        results["failed"] += 1
-
-    # 4.3 Actualización manual
-    results["total"] += 1
-    response = test_endpoint("POST /admin/update-odds", "POST", "/admin/update-odds")
-    if response and response.get("success"):
-        results["passed"] += 1
+        log("   Cron status: trigger_retraining y refresh_elo presentes", Colors.GREEN)
     else:
         results["failed"] += 1
 

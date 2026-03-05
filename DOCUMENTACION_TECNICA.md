@@ -181,8 +181,7 @@ flowchart TD
 - **Detalle v2:** `GET /v2/matches/{id}/full`, `GET /v2/matches/{id}/timeline`, `GET /v2/matches/{id}/stats`, `GET /v2/matches/{id}/pbp`, `GET /v2/matches/{id}/odds`, `GET /v2/matches/{id}/h2h`.
 - **Stats:** `GET /stats/summary`, `GET /stats/daily`.
 - **Config:** `GET /config`, `GET /settings/betting`, `PATCH /settings/betting`.
-- **Admin:** `POST /admin/detect-new-matches`, `POST /admin/sync-odds-and-predictions`, `POST /admin/regenerate-all-predictions`, `GET /admin/scheduler-status`, `GET /admin/jobs-health`, etc.
-- **Cron:** `GET /cron/refresh-elo`.
+- **Cron / Admin (solo para cron-job.org):** `GET /admin/trigger-retraining` (sync cuotas y predicciones), `GET /cron/refresh-elo` (actualizar ELO desde TML), `GET /admin/cron-status` (último resultado de cada cron).
 - **Elite (jugadores, H2H, rankings, torneos, cuotas, punto a punto):** `GET /players/*`, `GET /h2h/*`, `GET /rankings/*`, `GET /tournaments/*`, `GET /matches/{id}/odds/*`, `GET /matches/{id}/pointbypoint`, etc.
 
 Documentación interactiva: `/docs` (Swagger), `/redoc` (ReDoc).
