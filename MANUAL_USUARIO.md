@@ -12,7 +12,6 @@ Es la **API REST** que sirve partidos, predicciones y datos de tenis. La app **T
 
 **Documentación interactiva:**  
 - Swagger: `https://tennis-ml-predictor-production.up.railway.app/docs`  
-- ReDoc: `https://tennis-ml-predictor-production.up.railway.app/redoc`
 
 ---
 
@@ -41,7 +40,7 @@ Tenly usa estos endpoints para mostrar el listado y el detalle de cada partido.
 
 - **POST /matches/predict** — Genera una predicción para un partido. Se envía en el cuerpo (JSON): jugadores, superficie, cuota, fecha, etc. La API devuelve probabilidad, EV, decisión (APOSTAR/NO APOSTAR) y stake recomendado.
 
-Las predicciones también se generan **automáticamente** en el servidor cuando se detectan partidos nuevos con cuotas (jobs cada 2 h y al arrancar). No hace falta llamar a `/matches/predict` manualmente para los partidos que ya están en Tenly.
+Las predicciones también se generan **automáticamente** en el servidor cuando se detectan partidos nuevos con cuotas (jobs cada 4 h y al arrancar). No hace falta llamar a `/matches/predict` manualmente para los partidos que ya están en Tenly.
 
 ---
 
