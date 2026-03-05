@@ -8,7 +8,7 @@ Uso:
     from src.config import Config
 
     # Acceder a configuración
-    api_key = Config.ODDS_API_KEY
+    api_key = Config.API_TENNIS_API_KEY
     model_path = Config.MODEL_PATH
 """
 

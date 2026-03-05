@@ -9,7 +9,7 @@ Uso:
     from src.config.settings import Config
 
     # Acceder a configuración
-    api_key = Config.ODDS_API_KEY
+    api_key = Config.API_TENNIS_API_KEY  # o Config.MODEL_PATH, etc.
     model_path = Config.MODEL_PATH
 
     # Validar configuración
@@ -34,6 +34,9 @@ class Config:
     """
 
     # ==================== API KEYS ====================
+    # API-Tennis (obligatoria para partidos y cuotas). La lee api_tennis_client por os.getenv.
+    API_TENNIS_API_KEY = os.getenv("API_TENNIS_API_KEY", "")
+    # Legacy: The Odds API no se usa; las cuotas vienen de API-Tennis. Se mantiene por compatibilidad.
     ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 
     # ==================== EMAIL ====================
@@ -87,8 +90,8 @@ class Config:
     # depósito España DGOJ 600€/24h). 250€ permite 1–2 apuestas/día sin superar límite diario.
     MAX_STAKE_EUR = float(os.getenv("MAX_STAKE_EUR", "250"))
 
-    # ==================== BOOKMAKERS ====================
-    # The Odds API
+    # ==================== BOOKMAKERS (legacy) ====================
+    # The Odds API: no se usa en el proyecto; partidos y cuotas vienen de API-Tennis.
     ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
     ODDS_REGIONS = os.getenv("ODDS_REGIONS", "eu,us")
     ODDS_MARKETS = os.getenv("ODDS_MARKETS", "h2h")
@@ -137,18 +140,10 @@ class Config:
 
         # Validaciones opcionales (solo en modo strict)
         if strict:
-            if not cls.ODDS_API_KEY:
-                errors.append("ODDS_API_KEY no configurada")
-
             if cls.EMAIL_ENABLED and (not cls.EMAIL_ADDRESS or not cls.EMAIL_PASSWORD):
                 errors.append("Email habilitado pero credenciales no configuradas")
         else:
-            # En modo no-strict, solo advertir
-            if not cls.ODDS_API_KEY:
-                warnings.append(
-                    "ODDS_API_KEY no configurada (funcionalidad de bookmakers limitada)"
-                )
-
+            # En modo no-strict, solo advertir (ODDS_API_KEY no se usa; cuotas vía API-Tennis)
             if cls.EMAIL_ENABLED and (not cls.EMAIL_ADDRESS or not cls.EMAIL_PASSWORD):
                 warnings.append("Email habilitado pero credenciales no configuradas")
 
@@ -178,12 +173,11 @@ class Config:
         print("=" * 60)
 
         print(f"\n🔑 API Keys:")
+        print(f"   API_TENNIS_API_KEY: {'✅ Configurada' if cls.API_TENNIS_API_KEY else '❌ No configurada'} (partidos y cuotas)")
         if show_secrets:
-            print(f"   ODDS_API_KEY: {cls.ODDS_API_KEY or '❌ No configurada'}")
+            print(f"   ODDS_API_KEY (legacy, no usada): {cls.ODDS_API_KEY or '—'}")
         else:
-            print(
-                f"   ODDS_API_KEY: {'✅ Configurada' if cls.ODDS_API_KEY else '❌ No configurada'}"
-            )
+            print(f"   ODDS_API_KEY (legacy, no usada): {'—'}")
 
         print(f"\n📧 Email:")
         print(f"   Habilitado: {'✅ Sí' if cls.EMAIL_ENABLED else '❌ No'}")
@@ -224,8 +218,8 @@ class Config:
         if cls.KELLY_ENABLED:
             print(f"   Fracción: {cls.KELLY_FRACTION*100:.0f}%")
 
-        print(f"\n🌐 Bookmakers:")
-        print(f"   API Base URL: {cls.ODDS_API_BASE_URL}")
+        print(f"\n🌐 Bookmakers (legacy, no usados; cuotas vía API-Tennis):")
+        print(f"   ODDS_API_BASE_URL: {cls.ODDS_API_BASE_URL}")
         print(f"   Regiones: {cls.ODDS_REGIONS}")
         print(f"   Formato: {cls.ODDS_FORMAT}")
         print(f"   Max Requests/mes: {cls.ODDS_MAX_REQUESTS_PER_MONTH}")
@@ -268,8 +262,11 @@ ENV_TEMPLATE = """# ===========================================
 # Tennis ML Predictor - Configuración
 # ===========================================
 
-# API Keys
-ODDS_API_KEY=tu_api_key_aqui
+# API-Tennis (obligatoria para partidos y cuotas)
+API_TENNIS_API_KEY=tu_api_key_api_tennis
+
+# ODDS_API_KEY: no se usa; las cuotas vienen de API-Tennis
+# ODDS_API_KEY=opcional_no_usada
 
 # Email Configuration (opcional)
 EMAIL_ENABLED=false

@@ -1,6 +1,8 @@
-# 🎾 Tennis ML Predictor
+# 🎾 Tenly API (Backend)
 
-Sistema de predicción de partidos de tenis para apuestas deportivas. Usa **baseline ELO + mercado**: probabilidad = 60% ELO + 40% probabilidad implícita de la cuota, con EV, Kelly y filtros conservadores (min prob, max cuota).
+API REST del proyecto **Tenly**: predicción de partidos de tenis para apuestas deportivas. Usa **baseline ELO + mercado** (60% ELO + 40% probabilidad implícita de la cuota), con EV, Kelly y filtros conservadores.
+
+**Documentación:** [Manual de usuario](docs/MANUAL_USUARIO.md) · [Documentación técnica](docs/DOCUMENTACION_TECNICA.md)
 
 ## 📊 Estrategia en producción
 
@@ -129,8 +131,8 @@ sistema.generar_reporte()
 ### Variables de Entorno (.env)
 
 ```bash
-# API de Bookmakers (opcional)
-ODDS_API_KEY=tu_api_key_aqui
+# API-Tennis (obligatoria para partidos y cuotas)
+API_TENNIS_API_KEY=tu_api_key_api_tennis
 
 # Email para alertas (opcional)
 EMAIL_USER=tu_email@gmail.com
@@ -146,7 +148,7 @@ KELLY_FRACTION=0.25
 
 - **Modelos**: Editar `src/models/hyperparameter_tuning.py`
 - **Features**: Añadir en `src/features/`
-- **Bookmakers**: Configurar en `src/config/settings.py`
+- **API-Tennis y parámetros**: Configurar en `src/config/settings.py` y `.env`
 
 ---
 
@@ -172,8 +174,7 @@ Este proyecto está bajo la Licencia MIT. Ver `LICENSE` para más detalles.
 
 ## APIs
 
-- **TML Database** por los datos de partidos
-- **The Odds API** por las cuotas de bookmakers
-- Comunidad de ML y apuestas deportivas
+- **API-Tennis** (api-tennis.com): partidos, cuotas, resultados y rankings.
+- **TML** (stats.tennismylife.org): CSVs de histórico para el cálculo de ELO.
 
 
