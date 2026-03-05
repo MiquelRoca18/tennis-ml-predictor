@@ -1,180 +1,93 @@
-# 🎾 Tenly API (Backend)
+# Tenly — API Backend
 
-API REST del proyecto **Tenly**: predicción de partidos de tenis para apuestas deportivas. Usa **baseline ELO + mercado** (60% ELO + 40% probabilidad implícita de la cuota), con EV, Kelly y filtros conservadores.
+API REST del proyecto **Tenly**. Expone un backend en **FastAPI** que:
 
-**Documentación:** [Manual de usuario](docs/MANUAL_USUARIO.md) · [Documentación técnica](docs/DOCUMENTACION_TECNICA.md)
+- Gestiona partidos de tenis (pendientes, en juego, completados) sobre una base de datos SQLite/PostgreSQL.
+- Calcula predicciones con un **baseline ELO + mercado** (sin modelo ML `.pkl`).
+- Devuelve probabilidad, valor esperado (EV), decisión (apostar/no apostar) y stake recomendado (Kelly fraccional).
+- Se despliega en **Railway** usando `Dockerfile`, `start.sh` y `railway.json`.
 
-## 📊 Estrategia en producción
+## 📚 Documentación
 
-- **Baseline**: 60% ELO + 40% mercado (sin modelo ML)
-- **Filtros**: EV > 10%, cuota < 2.0, probabilidad > 70%
-- **Backtesting**: ROI estable 4/4 años con esta configuración
+- **Manual de usuario (API):** `MANUAL_USUARIO.md`
+- **Documentación técnica (arquitectura, modelo, Railway, frontend):** `DOCUMENTACION_TECNICA.md`
 
----
+## 🚀 Puesta en marcha en local
 
-## 🚀 Inicio Rápido
-
-### Requisitos Previos
+### Requisitos
 
 - Python 3.8+
-- pip
-- Git
+- `pip`
+- (Opcional) virtualenv (`python -m venv venv`)
 
-### Instalación y Configuración
+### Pasos
 
 ```bash
 # 1. Clonar repositorio
-git clone https://github.com/MiquelRoca18/tennis-ml-predictor.git
+git clone &lt;URL_DEL_REPO_BACKEND&gt;
 cd tennis-ml-predictor
 
-# 2. Crear entorno virtual (recomendado)
+# 2. (Opcional) Crear y activar entorno virtual
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
-# 4. Configurar variables de entorno (opcional, para bookmakers y email)
+# 4. Configurar variables de entorno
 cp .env.template .env
-# Editar .env con tus credenciales
-```
+# Editar .env y añadir al menos API_TENNIS_API_KEY (api-tennis.com)
 
-### Ejecutar la API
-
-```bash
-# Levantar la API (predicciones con baseline ELO + mercado)
+# 5. Levantar la API
 uvicorn src.api.api_v2:app --reload --host 0.0.0.0 --port 8000
 ```
 
----
+- Documentación interactiva disponible en `http://localhost:8000/docs` y `http://localhost:8000/redoc`.
+- Si no se define `DATABASE_URL`, se usa **SQLite** (`matches_v2.db`). En Railway se usa PostgreSQL vía `DATABASE_URL`.
 
-## 💡 ¿Qué hace este sistema?
+## 🧠 Modelo de predicción (resumen)
 
-1. **Predicciones** con baseline: probabilidad = 60% ELO + 40% mercado (cuota)
-2. **ELO y features** desde histórico en BD (FeatureGeneratorService)
-3. **EV, Kelly y filtros** (min prob, max cuota) para recomendaciones de apuesta
-4. **API** para crear partidos, obtener predicciones y listar partidos del día
-5. **Automatización** opcional: fetch diario de partidos, actualización de datos
+- **Sin modelo ML**: las predicciones usan solo:
+  - Probabilidad ELO (`prob_elo`) calculada desde el histórico de partidos.
+  - Probabilidad implícita de la cuota (`prob_mercado = 1 / cuota`).
+- **Combinación:** `prob_j1 = 0.6 × prob_elo + 0.4 × prob_mercado` (configurable con `BASELINE_ELO_PESO`).
+- **EV:** `EV = prob_j1 × cuota − 1`.
+- **Decisión:** APOSTAR si `EV &gt; EV_THRESHOLD`.
+- **Stake:** criterio de Kelly fraccional con límites (mínimo, máximo % del bankroll, máximo €/apuesta).
 
----
+Para el detalle completo (glosario, fórmulas y ejemplo numérico) ver la sección 2.2 de `DOCUMENTACION_TECNICA.md`.
 
-## 📁 Estructura del Proyecto
+## 🧱 Estructura principal
 
-```
+```text
 tennis-ml-predictor/
-├── scripts/
-│   ├── backtesting_produccion_real_completo.py  # Backtesting (baseline ELO)
-│   └── internal/            # Scripts de uso ocasional
-│
 ├── src/
-│   ├── config/              # Configuración centralizada
-│   ├── api/                  # API FastAPI
-│   ├── prediction/          # Predictor baseline + FeatureGeneratorService
-│   ├── features/            # ELO, forma, H2H, superficie
-│   ├── utils/               # Utilidades compartidas
-│   ├── automation/          # DataUpdater, daily match fetcher
-│   └── services/             # Odds, predicciones, etc.
+│   ├── api/            # FastAPI (api_v2, rutas de detalle)
+│   ├── config/         # Configuración centralizada (Config)
+│   ├── database/       # MatchDatabase (SQLite/PostgreSQL)
+│   ├── prediction/     # PredictorCalibrado, FeatureGeneratorService
+│   ├── features/       # ELO, forma, H2H, superficie, etc.
+│   ├── services/       # API-Tennis, odds, stats, torneos, players…
+│   ├── automation/     # Jobs de detección/sync de partidos
+│   └── utils/          # Utilidades (Kelly, logs, etc.)
 │
-├── datos/                   # Datos y cache
-└── resultados/              # Opcional (backtesting)
+├── datos/              # CSV de histórico (TML), cache, etc.
+├── scripts/            # Backtesting y utilidades de mantenimiento
+├── tests/              # Tests de API y sistema
+├── DOCUMENTACION_TECNICA.md
+├── MANUAL_USUARIO.md
+├── Dockerfile
+├── railway.json
+└── start.sh
 ```
 
----
+## 🛠 Despliegue en Railway (resumen)
 
-## 🎯 Uso
+- **Build:** Railway usa `Dockerfile` para construir la imagen.
+- **Start:** `railway.json` ejecuta `./start.sh` (`uvicorn src.api.api_v2:app ...`).
+- **Variables críticas:**
+  - `DATABASE_URL` (PostgreSQL de Railway).
+  - `API_TENNIS_API_KEY` (api-tennis.com).
 
-### Predicciones (baseline ELO + mercado)
-
-```python
-from src.prediction.predictor_calibrado import PredictorCalibrado
-from src.config.settings import Config
-
-predictor = PredictorCalibrado(Config.MODEL_PATH)
-resultado = predictor.predecir_partido(
-    jugador1="Djokovic",
-    jugador2="Nadal",
-    superficie="Clay",
-    cuota=2.10
-)
-# resultado["probabilidad"], resultado["expected_value"], resultado["decision"], etc.
-
-print(f"Probabilidad Djokovic: {prob:.2%}")
-```
-
-### 4. Sistema de Tracking
-
-```python
-from src.tracking import TrackingSystem
-
-# Inicializar tracking con Kelly
-sistema = TrackingSystem(
-    modelo_path='modelos/production/random_forest_calibrado.pkl',
-    bankroll_actual=1000,
-    usar_kelly=True
-)
-
-# Registrar predicción
-sistema.predecir_y_registrar(
-    jugador1="Federer",
-    jugador2="Murray",
-    cuota=2.10
-)
-
-# Generar reporte
-sistema.generar_reporte()
-```
-
----
-
-## 🔧 Configuración Avanzada
-
-### Variables de Entorno (.env)
-
-```bash
-# API-Tennis (obligatoria para partidos y cuotas)
-API_TENNIS_API_KEY=tu_api_key_api_tennis
-
-# Email para alertas (opcional)
-EMAIL_USER=tu_email@gmail.com
-EMAIL_PASSWORD=tu_app_password
-
-# Parámetros del sistema
-MIN_BET=5
-MAX_BET_PCT=5
-KELLY_FRACTION=0.25
-```
-
-### Personalización
-
-- **Modelos**: Editar `src/models/hyperparameter_tuning.py`
-- **Features**: Añadir en `src/features/`
-- **API-Tennis y parámetros**: Configurar en `src/config/settings.py` y `.env`
-
----
-
-## 📊 Fases del Proyecto
-
-| Fase | Descripción | Estado |
-|------|-------------|--------|
-| 1 | Datos y Preprocesamiento | ✅ |
-| 2 | Calibración de Modelos | ✅ |
-| 3 | Feature Engineering + Optimización | ✅ |
-| 4 | Sistema de Tracking | ✅ |
-| 5 | Kelly Criterion | ✅ |
-| 6 | Múltiples Bookmakers | ✅ |
-| 7 | Automatización 24/7 | ✅ |
-
----
-
-## 📝 Licencia
-
-Este proyecto está bajo la Licencia MIT. Ver `LICENSE` para más detalles.
-
----
-
-## APIs
-
-- **API-Tennis** (api-tennis.com): partidos, cuotas, resultados y rankings.
-- **TML** (stats.tennismylife.org): CSVs de histórico para el cálculo de ELO.
-
+Consulta `DOCUMENTACION_TECNICA.md` para el flujo detallado de jobs y predicciones en producción.
 
