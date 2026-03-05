@@ -29,8 +29,7 @@ Si `/health` devuelve `"status": "ok"`, la API está operativa.
 
 - **GET /matches?date=YYYY-MM-DD** — Lista de partidos para una fecha (ej: `?date=2025-03-04`).
 - **GET /matches/upcoming** — Partidos próximos.
-- **GET /matches/{id}/details** — Detalle de un partido por ID.
-- **GET /v2/matches/{id}/full** — Detalle completo (v2): marcador, predicción, cuotas, etc.
+- **GET /matches/{id}/details** — Detalle completo de un partido (marcador, predicción, cuotas, estadísticas, etc.).
 
 Tenly usa estos endpoints para mostrar el listado y el detalle de cada partido.
 
@@ -68,7 +67,7 @@ Si usas Tenly sin cuenta, el bankroll puede guardarse aquí; con cuenta, puede s
 |-----------------------|--------|
 | Saber si la API está bien | `GET /health` |
 | Ver partidos de un día    | `GET /matches?date=YYYY-MM-DD` |
-| Ver detalle de un partido | `GET /v2/matches/{id}/full` |
+| Ver detalle de un partido | `GET /matches/{id}/details` |
 | Generar predicción a mano | `POST /matches/predict` con JSON |
 | Ver documentación        | Abrir `/docs` o `/redoc` en el navegador |
 

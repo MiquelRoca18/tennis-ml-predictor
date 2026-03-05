@@ -44,6 +44,7 @@ from src.api.models_v2 import (
     LiveData,
     MatchScores,
 )
+from src.api.models_match_detail import MatchFullResponse
 from src.database.match_database import MatchDatabase
 from src.prediction.predictor_calibrado import PredictorCalibrado
 from src.config.settings import Config
@@ -92,7 +93,11 @@ predictor = None
 api_client = APITennisClient()
 
 # Registrar routers de endpoints v2 (después de inicializar db y api_client)
-from src.api.routes_match_detail import router as match_detail_router, configure_dependencies
+from src.api.routes_match_detail import (
+    router as match_detail_router,
+    configure_dependencies,
+    get_match_full,
+)
 configure_dependencies(db, api_client)
 app.include_router(match_detail_router)
 logger.info("✅ Router de detalle de partidos v2 registrado")
@@ -1439,104 +1444,21 @@ async def refresh_results_batch(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/matches/{match_id}/details", response_model=MatchDetails, tags=["Matches"])
-async def get_match_details(match_id: int):
+@app.get("/matches/{match_id}/details", response_model=MatchFullResponse, tags=["Matches"])
+async def get_match_details(
+    match_id: int,
+    live: bool = Query(
+        True,
+        description="Si True, incluye enriquecimiento en vivo; si False, solo datos de BD.",
+    ),
+):
     """
-    Vista Detallada - Obtiene estadísticas detalladas de un partido
-    
-    Incluye:
-    - Estadísticas básicas (sets, juegos)
-    - Estadísticas avanzadas (% saque, break points) - si disponible
-    - Duración estimada - si disponible
+    Detalle completo de un partido (alias del endpoint principal v2).
+
+    Alias de compatibilidad para el frontend y clientes externos:
+    devuelve exactamente la misma información que `GET /v2/matches/{id}/full`.
     """
-    try:
-        # Obtener partido de la DB
-        match = db.get_match(match_id)
-        if not match:
-            raise HTTPException(status_code=404, detail="Partido no encontrado")
-        
-        # Inicializar variables
-        stats_basicas = None
-        stats_avanzadas = None
-        duracion = None
-        
-        # Intentar obtener datos de la API si hay event_key
-        event_key = match.get("event_key")
-        if event_key:
-            try:
-                # Consultar API
-                params = {"event_key": event_key}
-                api_data = api_client._make_request("get_fixtures", params)
-                
-                if api_data and api_data.get("result"):
-                    api_match = api_data["result"][0] if isinstance(api_data["result"], list) else api_data["result"]
-                    
-                    # Extraer datos
-                    scores = api_match.get("scores", [])
-                    pointbypoint = api_match.get("pointbypoint", [])
-                    
-                    # Inicializar servicio de estadísticas
-                    stats_service = MatchStatsService()
-                    
-                    # Calcular estadísticas básicas si hay scores
-                    if scores:
-                        stats_basicas = stats_service.calcular_estadisticas_basicas(scores)
-                    
-                    # Calcular estadísticas avanzadas si hay datos punto por punto
-                    if pointbypoint:
-                        stats_avanzadas_raw = stats_service.calcular_estadisticas_avanzadas(pointbypoint, scores)
-                        if stats_avanzadas_raw:
-                            stats_avanzadas = MatchStatsAdvanced(**stats_avanzadas_raw)
-                        
-                        # Estimar duración
-                        timeline = stats_service.generar_timeline(pointbypoint)
-                        duracion = stats_service._estimar_duracion(len(timeline))
-            except Exception as e:
-                logger.warning(f"No se pudieron obtener datos de la API para partido {match_id}: {e}")
-        
-        # Si no hay estadísticas de la API, crear básicas desde resultado_marcador
-        if not stats_basicas and match.get("resultado_marcador"):
-            # Intentar parsear resultado_marcador (ej: "2 - 0", "6-4, 7-5")
-            marcador = match.get("resultado_marcador", "")
-            try:
-                # Si es formato "2 - 0" (sets)
-                if " - " in marcador:
-                    parts = marcador.split(" - ")
-                    if len(parts) == 2:
-                        stats_basicas = {
-                            "total_sets": int(parts[0]) + int(parts[1]),
-                            "sets_ganados_jugador1": int(parts[0]),
-                            "sets_ganados_jugador2": int(parts[1]),
-                            "total_juegos": 0,
-                            "juegos_ganados_jugador1": 0,
-                            "juegos_ganados_jugador2": 0,
-                            "marcador_por_sets": []
-                        }
-            except:
-                pass
-        
-        # Si aún no hay estadísticas básicas, retornar error
-        if not stats_basicas:
-            raise HTTPException(
-                status_code=404,
-                detail="No hay estadísticas disponibles para este partido"
-            )
-        
-        # Construir respuesta
-        return MatchDetails(
-            match_id=match_id,
-            estado=match.get("estado", "pendiente"),
-            ganador=match.get("resultado_ganador"),
-            duracion_estimada=duracion,
-            estadisticas_basicas=MatchStatsBasic(**stats_basicas),
-            estadisticas_avanzadas=stats_avanzadas,
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error obteniendo detalles del partido: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await get_match_full(match_id=match_id, live=live)
 
 
 @app.get("/matches/{match_id}/analysis", response_model=MatchAnalysis, tags=["Matches"])
