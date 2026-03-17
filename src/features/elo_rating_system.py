@@ -3,6 +3,7 @@ Sistema ELO para tenis
 Implementación basada en investigaciones de FiveThirtyEight y adaptado para tenis ATP
 """
 
+import re
 import pandas as pd
 import numpy as np
 import logging
@@ -68,54 +69,65 @@ class TennisELO:
 
     def update_ratings(self, winner, loser, surface=None, margin=None):
         """
-        Actualiza ratings después de un partido
+        Actualiza ratings después de un partido.
+
+        El ELO global y el ELO por superficie son memorias independientes:
+        - El ELO global siempre se actualiza usando los ratings globales.
+        - El ELO de superficie se actualiza usando los ratings de esa superficie.
+        Nunca se mezclan los dos para el cálculo.
 
         Args:
             winner: Nombre del ganador
             loser: Nombre del perdedor
             surface: Superficie del partido (opcional)
-            margin: Margen de victoria en sets (opcional, para ajuste)
+            margin: Diferencia de sets (sets_ganador - sets_perdedor, opcional)
 
         Returns:
             dict con ratings nuevos y cambios
         """
-        # Obtener ratings actuales
-        rating_winner = self.get_rating(winner, surface)
-        rating_loser = self.get_rating(loser, surface)
-
-        # Probabilidad esperada
-        expected_winner = self.expected_score(rating_winner, rating_loser)
-        expected_loser = 1 - expected_winner
-
         # Ajuste por margen (opcional)
         k = self.k_factor
         if margin and margin > 0:
             # Victorias amplias importan más (pero no demasiado)
             k = k * min(1 + margin / 10, 1.5)
 
-        # Nuevos ratings
-        new_rating_winner = rating_winner + k * (1 - expected_winner)
-        new_rating_loser = rating_loser + k * (0 - expected_loser)
+        # --- ELO GLOBAL (siempre se actualiza con ratings globales) ---
+        rw_g = self.ratings.get(winner, self.base_rating)
+        rl_g = self.ratings.get(loser, self.base_rating)
+        exp_w_g = self.expected_score(rw_g, rl_g)
 
-        # Actualizar ratings generales
-        self.ratings[winner] = new_rating_winner
-        self.ratings[loser] = new_rating_loser
+        new_rw_g = rw_g + k * (1 - exp_w_g)
+        new_rl_g = rl_g + k * (0 - (1 - exp_w_g))
 
-        # Actualizar ratings por superficie si se especificó
+        self.ratings[winner] = new_rw_g
+        self.ratings[loser] = new_rl_g
+
+        # --- ELO POR SUPERFICIE (cálculo independiente del global) ---
         if surface and surface in self.ratings_by_surface:
-            self.ratings_by_surface[surface][winner] = new_rating_winner
-            self.ratings_by_surface[surface][loser] = new_rating_loser
+            rw_s = self.ratings_by_surface[surface].get(winner, self.base_rating)
+            rl_s = self.ratings_by_surface[surface].get(loser, self.base_rating)
+            exp_w_s = self.expected_score(rw_s, rl_s)
+
+            new_rw_s = rw_s + k * (1 - exp_w_s)
+            new_rl_s = rl_s + k * (0 - (1 - exp_w_s))
+
+            self.ratings_by_surface[surface][winner] = new_rw_s
+            self.ratings_by_surface[surface][loser] = new_rl_s
+        else:
+            # Si no hay superficie, los valores de superficie son los globales
+            new_rw_s, new_rl_s = new_rw_g, new_rl_g
+            rw_s, rl_s = rw_g, rl_g
 
         return {
             "winner": winner,
             "loser": loser,
-            "winner_rating_old": rating_winner,
-            "winner_rating_new": new_rating_winner,
-            "winner_change": new_rating_winner - rating_winner,
-            "loser_rating_old": rating_loser,
-            "loser_rating_new": new_rating_loser,
-            "loser_change": new_rating_loser - rating_loser,
-            "expected_winner_prob": expected_winner,
+            "winner_rating_old": rw_g,
+            "winner_rating_new": new_rw_g,
+            "winner_change": new_rw_g - rw_g,
+            "loser_rating_old": rl_g,
+            "loser_rating_new": new_rl_g,
+            "loser_change": new_rl_g - rl_g,
+            "expected_winner_prob": exp_w_g,
         }
 
     def calculate_historical_elos(self, df_matches):
@@ -180,21 +192,30 @@ class TennisELO:
             elo_diffs.append(elo_winner - elo_loser)
             elo_diffs_surface.append(elo_winner_surf - elo_loser_surf)
 
-            # Probabilidad esperada
-            expected_prob = self.expected_score(elo_winner, elo_loser)
+            # Probabilidad esperada: usa ELO de superficie, igual que en producción
+            expected_prob = self.expected_score(elo_winner_surf, elo_loser_surf)
             expected_probs.append(expected_prob)
 
             # ACTUALIZAR ELOs para el siguiente partido
-            # Calcular margen si hay información de score
+            # Calcular margen de sets (diferencia: sets_ganador - sets_perdedor)
             margin = 0
             if "score" in row and pd.notna(row["score"]):
-                # Intentar extraer sets ganados (simplificado)
                 score_str = str(row["score"])
-                # Contar sets ganados por el ganador (números antes del guión)
                 try:
                     sets = score_str.split()
-                    margin = len([s for s in sets if s[0] > s[-1]]) if len(sets) > 0 else 0
-                except:
+                    winner_sets = 0
+                    loser_sets = 0
+                    for s in sets:
+                        # Ignorar tokens que no sean scores de set (RET, W/O, etc.)
+                        m = re.match(r'^(\d+)-(\d+)', s)
+                        if m:
+                            a, b = int(m.group(1)), int(m.group(2))
+                            if a > b:
+                                winner_sets += 1
+                            elif b > a:
+                                loser_sets += 1
+                    margin = winner_sets - loser_sets
+                except Exception:
                     margin = 0
 
             self.update_ratings(winner, loser, surface, margin)

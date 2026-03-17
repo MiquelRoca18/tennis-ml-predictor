@@ -221,7 +221,7 @@ class ProductionFeatureGenerator:
         features["jugador_elo_surface"] = elo_j_surf
         features["oponente_elo_surface"] = elo_o_surf
         features["elo_diff_surface"] = elo_j_surf - elo_o_surf
-        features["elo_expected_prob"] = self.elo_system.expected_score(elo_j, elo_o)
+        features["elo_expected_prob"] = self.elo_system.expected_score(elo_j_surf, elo_o_surf)
 
         # 2. Rankings (4 features)
         rank_j = self._obtener_ranking(jugador, fecha)
