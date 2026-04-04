@@ -14,7 +14,9 @@ import logging
 # Así, al empezar 2027 no hay que tocar código: se buscará 2027.csv automáticamente.
 AÑOS_ELO_ATRAS = 8  # ej. en 2026 cargamos 2018..2026
 
+from src.config import Config
 from src.features.elo_rating_system import TennisELO
+from src.features.welo_rating_system import WEloRatingSystem
 from src.features.features_servicio_resto import ServicioRestoCalculator
 from src.features.features_forma_reciente import FormaRecienteCalculator
 from src.features.features_h2h_mejorado import HeadToHeadCalculator
@@ -287,7 +289,16 @@ class FeatureGeneratorService:
         logger.info("  📊 Inicializando calculadores...")
 
         # ELO
-        self.elo_system = TennisELO(k_factor=32, base_rating=1500)
+        if Config.USE_WELO:
+            self.elo_system = WEloRatingSystem(
+                base_rating=1500.0,
+                use_temporal_decay=True,
+                decay_half_life_days=Config.WELO_DECAY_HALF_LIFE_DAYS,
+            )
+            logger.info("  ⚡ ELO system: WElo (weighted, surface, decay)")
+        else:
+            self.elo_system = TennisELO(k_factor=32, base_rating=1500)
+            logger.info("  ⚡ ELO system: TennisELO standard k=32")
         self.df_historico = self.elo_system.calculate_historical_elos(self.df_historico)
         logger.info(f"  ✅ Sistema ELO inicializado con {len(self.elo_system.ratings)} jugadores")
 
