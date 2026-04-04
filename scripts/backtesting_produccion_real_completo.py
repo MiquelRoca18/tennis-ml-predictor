@@ -333,6 +333,8 @@ class BacktestingProduccionReal:
         min_stake_eur=5.0,
         apostar_todos_partidos=False,
         max_stake_eur=None,
+        ev_formula: str = "original",
+        series_permitidas: list = None,
         **kwargs,  # ignora value_model_path, selected_features_path, conformal, modelo_por_superficie, etc.
     ):
         self.modelo_path = Path(modelo_path) if modelo_path else Path(".")
@@ -354,6 +356,8 @@ class BacktestingProduccionReal:
         self.min_stake_eur = min_stake_eur
         self.apostar_todos_partidos = apostar_todos_partidos
         self.max_stake_eur = max_stake_eur  # tope realista por apuesta (ej. 100€); None = sin tope
+        self.ev_formula = ev_formula.strip().lower() if ev_formula else "original"
+        self.series_permitidas = series_permitidas
 
         logger.info(f"🎯 Backtesting de Producción REAL - BASELINE ELO + MERCADO")
         if use_flat_stake:
@@ -484,13 +488,39 @@ class BacktestingProduccionReal:
         """Calcula Expected Value"""
         return (prob * cuota) - 1
 
-    def ejecutar_backtesting(self, df_odds, df_historico, año_backtest=None):
+    def _construir_indice_walkovers(self, df_tml):
+        """Construye un índice de walkovers (W/O) del histórico TML.
+
+        Los walkovers son partidos donde el rival no se presentó a jugar.
+        En las casas de apuestas, si el partido no se jugó, la apuesta es NO ACCIÓN
+        (el dinero se devuelve). Hay que excluirlos del backtesting.
+
+        Returns:
+            set de tuplas (winner_normalizado, loser_normalizado, "YYYY-MM-DD")
+        """
+        idx = set()
+        if df_tml is None or df_tml.empty or "score" not in df_tml.columns:
+            return idx
+
+        df_wo = df_tml[df_tml["score"].str.contains(r"\bW/O\b", na=False, case=False)].copy()
+        df_wo["tourney_date"] = pd.to_datetime(df_wo["tourney_date"].astype(str))
+        for _, row in df_wo.iterrows():
+            w_norm = self.normalizar_nombre(str(row["winner_name"]))
+            l_norm = self.normalizar_nombre(str(row["loser_name"]))
+            fecha_str = row["tourney_date"].strftime("%Y-%m-%d")
+            idx.add((w_norm, l_norm, fecha_str))
+
+        logger.info(f"   [Walkovers] {len(idx)} W/O detectados en TML → se tratarán como no acción")
+        return idx
+
+    def ejecutar_backtesting(self, df_odds, df_historico, año_backtest=None, df_tml_año=None):
         """Ejecuta backtesting completo
 
         Args:
             df_odds: DataFrame con cuotas
             df_historico: DataFrame con partidos históricos (para features)
             año_backtest: Año del backtest (ej: 2024). Si no se pasa, se infiere del rango de df_odds.
+            df_tml_año: DataFrame TML del año de backtest, para detectar walkovers (opcional).
         """
         if año_backtest is None:
             año_backtest = df_odds["fecha"].dt.year.min() if "fecha" in df_odds.columns else 2024
@@ -498,7 +528,20 @@ class BacktestingProduccionReal:
         logger.info(f"\n{'='*70}")
         logger.info(f"🎲 BACKTESTING DE PRODUCCIÓN REAL - AÑO {año_backtest}")
         logger.info(f"{'='*70}")
-        logger.info(f"Total partidos con cuotas: {len(df_odds)}")
+        logger.info(f"Total partidos con cuotas (raw): {len(df_odds)}")
+
+        # FIX LEAKAGE SUTIL: Eliminar partidos de años anteriores que puedan estar
+        # en el archivo de odds del año actual (ej. 2023-12-31 en odds_2024).
+        # Para esos partidos el ELO inicial ya incluye su resultado → leakage.
+        n_before = len(df_odds)
+        df_odds = df_odds[df_odds["fecha"].dt.year >= año_backtest].copy()
+        n_filtrados_año = n_before - len(df_odds)
+        if n_filtrados_año > 0:
+            logger.warning(
+                f"   [LEAKAGE FIX] Eliminados {n_filtrados_año} partidos de años anteriores "
+                f"encontrados en el archivo de odds {año_backtest} → no se predicen"
+            )
+        logger.info(f"   Partidos a simular en {año_backtest}: {len(df_odds)}")
 
         # Fase 3.2: filtrar solo Grand Slams + Masters 1000 (excluir ATP 250/500)
         if self.solo_torneos_principales and "serie" in df_odds.columns:
@@ -527,19 +570,73 @@ class BacktestingProduccionReal:
             df_odds = df_odds[mask].copy()
             logger.info(f"   Tras filtro solo SF/Final: {len(df_odds)} partidos")
 
+        # Filtro por serie (ATP250 / ATP500 / Masters Cup / Grand Slam)
+        if self.series_permitidas and "serie" in df_odds.columns:
+            df_odds = df_odds[df_odds["serie"].isin(self.series_permitidas)].copy()
+            logger.info(f"   [Filtro serie] {len(df_odds)} partidos en {self.series_permitidas}")
+
         # Histórico: solo datos ANTES del año de backtest (evitar data leakage)
         fecha_limite = f"{año_backtest}-01-01"
         df_historico_pre = df_historico[df_historico["tourney_date"] < fecha_limite].copy()
+
+        # Verificar separación temporal (leakage check explícito)
+        if not df_historico_pre.empty:
+            max_fecha_hist = df_historico_pre["tourney_date"].max()
+            min_fecha_test = df_odds["fecha"].min() if not df_odds.empty else pd.Timestamp(fecha_limite)
+            logger.info(f"   [Walk-forward OK] Histórico hasta: {max_fecha_hist.date()} | Test desde: {min_fecha_test.date()}")
+            if max_fecha_hist >= min_fecha_test:
+                logger.error("   ⚠️  LEAKAGE DETECTADO: el histórico contiene fechas del período de test")
+        else:
+            logger.warning(f"   [Walk-forward] Histórico vacío para {año_backtest}")
+
         feature_gen = ProductionFeatureGenerator(df_historico_pre)
+
+        # Construir índice de walkovers del año de backtest
+        walkovers_idx = self._construir_indice_walkovers(df_tml_año)
 
         # Ordenar partidos cronológicamente
         df_odds = df_odds.sort_values("fecha").reset_index(drop=True)
+
+        # ---------------------------------------------------------------
+        # ALEATORIZACIÓN J1/J2 — FIX SESGO DE DATOS
+        # ---------------------------------------------------------------
+        # En tennis-data.co.uk jugador_1 es SIEMPRE el ganador real.
+        # Esto haría que el sistema apostara casi siempre a J1 y acertara
+        # trivialmente, inflando win rate y ROI sin mérito real.
+        #
+        # Solución: para cada partido, decidir aleatoriamente (50/50) si
+        # presentamos el partido como (ganador, perdedor) o al revés.
+        # El sistema predice sin saber quién ganó. La columna _ganador_es_j1
+        # guarda la verdad para calcular ganancias/pérdidas correctamente.
+        #
+        # Semilla fija por año → resultados reproducibles entre runs.
+        import numpy as np
+        rng = np.random.default_rng(seed=año_backtest)
+        swap_mask = rng.integers(0, 2, size=len(df_odds)).astype(bool)
+        df_odds = df_odds.copy()
+        df_odds["_ganador_es_j1"] = ~swap_mask  # True = J1 es el ganador real
+
+        swap_idx = df_odds.index[swap_mask]
+        # Intercambiar nombres y cuotas en las filas marcadas para swap
+        df_odds.loc[swap_idx, ["jugador_1", "jugador_2"]] = (
+            df_odds.loc[swap_idx, ["jugador_2", "jugador_1"]].values
+        )
+        df_odds.loc[swap_idx, ["cuota_jugador_1", "cuota_jugador_2"]] = (
+            df_odds.loc[swap_idx, ["cuota_jugador_2", "cuota_jugador_1"]].values
+        )
+        n_swapped = swap_mask.sum()
+        logger.info(
+            f"   [Aleatorización] {n_swapped}/{len(df_odds)} partidos con J1/J2 invertido "
+            f"→ el sistema no sabe quién ganó"
+        )
+        # ---------------------------------------------------------------
 
         bankroll_actual = self.bankroll_inicial
         apuestas_realizadas = []
         bankroll_history = [self.bankroll_inicial]
         partidos_sin_jugadores = 0
         partidos_procesados = 0
+        partidos_walkover = 0
         total_staked_flat = 0.0
         total_profit_flat = 0.0
         # Apuestas colocadas pero aún no liquidadas (mismo día): el siguiente Kelly usa bankroll - pendientes
@@ -568,6 +665,28 @@ class BacktestingProduccionReal:
 
             fecha = pd.to_datetime(partido_odds["fecha"])
             fecha_date = pd.Timestamp(fecha).date()
+
+            # Ganador/perdedor real independientemente del swap
+            ganador_es_j1 = bool(partido_odds["_ganador_es_j1"])
+            winner_real = j1_nombre if ganador_es_j1 else j2_nombre
+            loser_real  = j2_nombre if ganador_es_j1 else j1_nombre
+
+            # WALKOVER (W/O): el partido no se jugó → no acción (dinero devuelto en casas reales).
+            # ELO se actualiza igualmente porque el ganador queda registrado en el histórico.
+            fecha_str = fecha.strftime("%Y-%m-%d")
+            # El índice de walkovers usa los nombres normalizados del ganador/perdedor real
+            winner_norm = self.normalizar_nombre(winner_real)
+            loser_norm  = self.normalizar_nombre(loser_real)
+            if (winner_norm, loser_norm, fecha_str) in walkovers_idx:
+                partidos_walkover += 1
+                feature_gen.actualizar_con_partido(
+                    winner_real, loser_real,
+                    partido_odds.get("superficie", "Hard"),
+                    partido_odds.get("ganador_rank", 999),
+                    partido_odds.get("perdedor_rank", 999),
+                    fecha,
+                )
+                continue  # No apostar: no acción
 
             # Liquidar apuestas del día anterior (así el bankroll refleja resultados ya conocidos)
             if last_settlement_date is not None and fecha_date > last_settlement_date:
@@ -605,14 +724,20 @@ class BacktestingProduccionReal:
                 elo_j2 = feature_gen.elo_system.get_rating(j2_nombre, superficie)
                 prob_elo = feature_gen.elo_system.expected_score(elo_j1, elo_j2)
                 prob_mercado = 1.0 / cuota_j1 if cuota_j1 and cuota_j1 > 0 else 0.5
-                w = self.baseline_elo_peso
-                prob_j1_gana = w * prob_elo + (1 - w) * prob_mercado
+                if self.ev_formula == "corregida":
+                    # Fórmula corregida: ELO es el modelo, mercado es el benchmark
+                    # No mezclamos mercado en la probabilidad del modelo
+                    prob_j1_gana = prob_elo
+                else:
+                    # Fórmula original (backward compatible)
+                    w = self.baseline_elo_peso
+                    prob_j1_gana = w * prob_elo + (1 - w) * prob_mercado
             except Exception as e:
                 logger.warning(f"Error en predicción para {j1_nombre} vs {j2_nombre}: {str(e)}")
-                # Actualizar feature generator incluso si falla la predicción
+                # Actualizar feature generator con el ganador real (no con el orden del swap)
                 feature_gen.actualizar_con_partido(
-                    j1_nombre,
-                    j2_nombre,
+                    winner_real,
+                    loser_real,
                     superficie,
                     partido_odds.get("ganador_rank", 999),
                     partido_odds.get("perdedor_rank", 999),
@@ -629,44 +754,49 @@ class BacktestingProduccionReal:
             ev_j1 = self.calcular_ev(prob_j1_gana, cuota_j1)
             ev_j2 = self.calcular_ev(1 - prob_j1_gana, cuota_j2)
 
-            # Modo "todos los partidos": en cada partido apostar 1€ al lado con mayor EV (sin filtros)
+            # Modo "todos los partidos": apostar 1€ al lado con mayor EV (sin filtros)
             if self.apostar_todos_partidos:
                 stake = self.min_stake_eur
                 if ev_j1 >= ev_j2:
-                    ganancia = stake * (cuota_j1 - 1)
+                    acierto = ganador_es_j1
+                    ganancia = stake * (cuota_j1 - 1) if acierto else -stake
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j1_nombre, "oponente": j2_nombre,
                         "prob_modelo": prob_j1_gana, "cuota": cuota_j1, "ev": ev_j1,
-                        "stake": stake, "resultado": 1, "ganancia": ganancia, "bankroll_despues": None,
+                        "stake": stake, "resultado": int(acierto), "ganancia": ganancia,
+                        "bankroll_despues": None,
                     })
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
                 else:
-                    ganancia = -stake
+                    acierto = not ganador_es_j1
+                    ganancia = stake * (cuota_j2 - 1) if acierto else -stake
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j2_nombre, "oponente": j1_nombre,
                         "prob_modelo": 1 - prob_j1_gana, "cuota": cuota_j2, "ev": ev_j2,
-                        "stake": stake, "resultado": 0, "ganancia": ganancia, "bankroll_despues": None,
+                        "stake": stake, "resultado": int(acierto), "ganancia": ganancia,
+                        "bankroll_despues": None,
                     })
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
-            # Filtros normales: favoritos, prob mínima, EV
+
+            # Filtros normales: EV mínimo, prob mínima, cuota máxima
             elif (
                 ev_j1 > self.umbral_ev
                 and ev_j1 > ev_j2
                 and cuota_j1 < self.max_cuota
                 and prob_j1_gana > self.min_probabilidad
             ):
-                # Apostar a jugador 1 (Kelly con bankroll disponible = bankroll - apuestas pendientes)
                 if self.use_flat_stake:
                     stake = self.flat_stake_eur
                 else:
                     stake = self.calcular_kelly_stake(prob_j1_gana, cuota_j1, available_bankroll)
                 if stake > 0 and available_bankroll >= self.min_stake_eur:
-                    # jugador_1 SIEMPRE es el ganador en los datos
-                    ganancia = stake * (cuota_j1 - 1)
+                    # Resultado real: ganamos si j1 es el ganador real
+                    acierto = ganador_es_j1
+                    ganancia = stake * (cuota_j1 - 1) if acierto else -stake
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
@@ -681,7 +811,7 @@ class BacktestingProduccionReal:
                             "cuota": cuota_j1,
                             "ev": ev_j1,
                             "stake": stake,
-                            "resultado": 1,
+                            "resultado": int(acierto),
                             "ganancia": ganancia,
                             "bankroll_despues": None,
                         }
@@ -693,14 +823,14 @@ class BacktestingProduccionReal:
                 and cuota_j2 < self.max_cuota
                 and (1 - prob_j1_gana) > self.min_probabilidad
             ):
-                # Apostar a jugador 2 (Kelly con bankroll disponible = bankroll - apuestas pendientes)
                 if self.use_flat_stake:
                     stake = self.flat_stake_eur
                 else:
                     stake = self.calcular_kelly_stake(1 - prob_j1_gana, cuota_j2, available_bankroll)
                 if stake > 0 and available_bankroll >= self.min_stake_eur:
-                    # jugador_2 SIEMPRE es el perdedor en los datos
-                    ganancia = -stake
+                    # Resultado real: ganamos si j2 es el ganador real (es decir, j1 NO ganó)
+                    acierto = not ganador_es_j1
+                    ganancia = stake * (cuota_j2 - 1) if acierto else -stake
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
@@ -715,17 +845,17 @@ class BacktestingProduccionReal:
                             "cuota": cuota_j2,
                             "ev": ev_j2,
                             "stake": stake,
-                            "resultado": 0,
+                            "resultado": int(acierto),
                             "ganancia": ganancia,
                             "bankroll_despues": None,
                         }
                     )
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
 
-            # 4. ACTUALIZAR FEATURE GENERATOR con el resultado real
+            # 4. ACTUALIZAR FEATURE GENERATOR con el ganador/perdedor REAL
             feature_gen.actualizar_con_partido(
-                j1_nombre,
-                j2_nombre,
+                winner_real,
+                loser_real,
                 superficie,
                 partido_odds.get("ganador_rank", 999),
                 partido_odds.get("perdedor_rank", 999),
@@ -747,6 +877,7 @@ class BacktestingProduccionReal:
         logger.info(f"{'='*70}")
         logger.info(f"Partidos con cuotas: {len(df_odds)}")
         logger.info(f"Partidos sin jugadores: {partidos_sin_jugadores}")
+        logger.info(f"Walkovers (no acción): {partidos_walkover}")
         logger.info(f"Partidos procesados: {partidos_procesados}")
         logger.info(f"Apuestas realizadas: {len(apuestas_realizadas)}")
 
@@ -813,6 +944,116 @@ class BacktestingProduccionReal:
         logger.info(f"\n💾 Resultados guardados en: {self.resultados_dir}")
 
 
+def verificar_integridad_datos(años_backtest, datos_dir, odds_dir):
+    """
+    Verifica la integridad del walk-forward cross-validation:
+
+    Para cada año Y testado:
+    - Confirma que los datos de entrenamiento (TML) no contienen fechas del período de test
+    - Detecta walkovers y partidos de años anteriores en archivos de odds
+    - Muestra el gap temporal entre training y test
+    - Verifica volumen de datos disponible para ELO
+
+    Esta función es solo informativa: imprime un reporte y devuelve True si hay algún problema.
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("🔍 VERIFICACIÓN DE INTEGRIDAD: Walk-Forward Cross-Validation")
+    logger.info("=" * 70)
+    logger.info("  Metodología: para cada año Y, ELO se entrena con datos < Y-01-01.")
+    logger.info("  Partidos de Y son el set de test. No hay contacto entre train y test.\n")
+
+    hay_problemas = False
+    datos_dir = Path(datos_dir)
+    odds_dir = Path(odds_dir)
+
+    for año in años_backtest:
+        logger.info(f"  Año {año}:")
+
+        # 1. Verificar existencia de archivos
+        tml_file = datos_dir / f"atp_matches_{año}_tml.csv"
+        odds_file = odds_dir / f"tennis_odds_{año}_{año}.csv"
+        tml_previo = datos_dir / f"atp_matches_{año-1}_tml.csv"
+
+        if not tml_file.exists():
+            logger.warning(f"    ⚠️  TML {año} no encontrado: {tml_file}")
+            hay_problemas = True
+        if not odds_file.exists():
+            logger.warning(f"    ⚠️  Odds {año} no encontrado: {odds_file}")
+            hay_problemas = True
+            continue
+
+        try:
+            df_odds = pd.read_csv(odds_file)
+            df_odds["fecha"] = pd.to_datetime(df_odds["fecha"])
+        except Exception as e:
+            logger.error(f"    ❌ Error leyendo odds {año}: {e}")
+            hay_problemas = True
+            continue
+
+        # 2. Verificar partidos de años anteriores en archivo de odds
+        n_fuera_año = (df_odds["fecha"].dt.year < año).sum()
+        if n_fuera_año > 0:
+            logger.warning(
+                f"    ⚠️  [LEAKAGE] {n_fuera_año} partidos anteriores a {año} en odds_{año} "
+                f"→ se filtrarán automáticamente"
+            )
+            hay_problemas = True
+        else:
+            logger.info(f"    ✅ Fechas odds: {df_odds['fecha'].min().date()} a {df_odds['fecha'].max().date()}")
+
+        # 3. Verificar el histórico de entrenamiento
+        fecha_limite = pd.Timestamp(f"{año}-01-01")
+        dfs_hist = []
+        for y_hist in range(max(2018, año - 3), año + 1):
+            hist_f = datos_dir / f"atp_matches_{y_hist}_tml.csv"
+            if hist_f.exists():
+                df_h = pd.read_csv(hist_f)
+                df_h["tourney_date"] = pd.to_datetime(df_h["tourney_date"].astype(str))
+                dfs_hist.append(df_h)
+
+        if dfs_hist:
+            df_hist_total = pd.concat(dfs_hist, ignore_index=True)
+            df_hist_pre = df_hist_total[df_hist_total["tourney_date"] < fecha_limite]
+
+            max_hist = df_hist_pre["tourney_date"].max()
+            gap_dias = (fecha_limite - max_hist).days
+            logger.info(
+                f"    ✅ Histórico train: {len(df_hist_pre)} partidos hasta {max_hist.date()} "
+                f"(gap {gap_dias}d antes de test)"
+            )
+
+            # Confirmar que NO hay partidos del test en el histórico de train
+            df_leak = df_hist_pre[df_hist_pre["tourney_date"] >= df_odds["fecha"].min()]
+            if not df_leak.empty:
+                logger.error(
+                    f"    ❌ LEAKAGE DETECTADO: {len(df_leak)} partidos del período de test "
+                    f"están en el histórico de entrenamiento"
+                )
+                hay_problemas = True
+
+        # 4. Detectar walkovers en el año
+        if tml_file.exists():
+            try:
+                df_tml = pd.read_csv(tml_file)
+                n_wo = df_tml["score"].str.contains(r"\bW/O\b", na=False).sum() if "score" in df_tml.columns else 0
+                n_ret = df_tml["score"].str.contains("RET", na=False).sum() if "score" in df_tml.columns else 0
+                logger.info(
+                    f"    ✅ TML {año}: {len(df_tml)} partidos | {n_wo} walkovers (no acción) | "
+                    f"{n_ret} retiradas (apuesta válida)"
+                )
+            except Exception as e:
+                logger.warning(f"    ⚠️  No se pudo leer TML {año}: {e}")
+
+        logger.info("")
+
+    if hay_problemas:
+        logger.warning("  ⚠️  Se encontraron problemas menores (ver arriba). Se corrigen automáticamente.")
+    else:
+        logger.info("  ✅ Integridad verificada: walk-forward sin leakage en todos los años.")
+    logger.info("=" * 70 + "\n")
+    return hay_problemas
+
+
 def main():
     """
     Función principal. Backtesting baseline 60% ELO + 40% mercado para todos los años (2021-2024).
@@ -823,6 +1064,12 @@ def main():
     # 4 años de backtesting; histórico se carga desde AÑO_INICIO para tener ELO con más contexto
     AÑOS = [2021, 2022, 2023, 2024]
     AÑO_INICIO = min(AÑOS)  # 2021: primer año para construir histórico (evita ELO "en frío")
+
+    # Verificar integridad del walk-forward cross-validation antes de ejecutar
+    datos_dir = Path("datos/raw")
+    odds_dir = Path("datos/odds_historicas")
+    verificar_integridad_datos(AÑOS, datos_dir, odds_dir)
+
     # Por defecto: solo año anterior (BACKTEST_SOLO_ANO_ANTERIOR=1). Si BACKTEST_SOLO_ANO_ANTERIOR=0: multi-año (2021..año).
     solo_ano_anterior = os.environ.get("BACKTEST_SOLO_ANO_ANTERIOR", "1").lower() in ("1", "true", "yes")
     if solo_ano_anterior:
@@ -882,6 +1129,10 @@ def main():
     max_stake_env = os.environ.get("BACKTEST_MAX_STAKE_EUR")
     max_stake_eur = float(max_stake_env) if max_stake_env else None
 
+    ev_formula = os.environ.get("BACKTEST_EV_FORMULA", "original").strip().lower()
+    series_raw = os.environ.get("BACKTEST_SERIES", "").strip()
+    series_permitidas = [s.strip() for s in series_raw.split(",")] if series_raw else None
+
     backtester = BacktestingProduccionReal(
         modelo_path="",
         bankroll_inicial=1000.0,
@@ -895,6 +1146,8 @@ def main():
         min_stake_eur=min_stake_eur,
         apostar_todos_partidos=apostar_todos_partidos,
         max_stake_eur=max_stake_eur,
+        ev_formula=ev_formula,
+        series_permitidas=series_permitidas,
     )
     backtester.cargar_modelo()
 
@@ -950,7 +1203,16 @@ def main():
             resumen_años.append({"año": AÑO_BACKTESTING, "apuestas": 0, "ganadas": 0, "perdidas": 0, "win_rate_%": None, "roi_%": None})
             continue
 
-        apuestas, bankroll_history = backtester.ejecutar_backtesting(df_odds, df_historico, año_backtest=AÑO_BACKTESTING)
+        # Cargar TML del año de backtest para detección de walkovers
+        tml_año_file = datos_dir / f"atp_matches_{AÑO_BACKTESTING}_tml.csv"
+        df_tml_año = None
+        if tml_año_file.exists():
+            df_tml_año = pd.read_csv(tml_año_file)
+            df_tml_año["tourney_date"] = pd.to_datetime(df_tml_año["tourney_date"].astype(str))
+
+        apuestas, bankroll_history = backtester.ejecutar_backtesting(
+            df_odds, df_historico, año_backtest=AÑO_BACKTESTING, df_tml_año=df_tml_año
+        )
 
         if apuestas:
             ganadas = sum(1 for a in apuestas if a.get("resultado") == 1)
