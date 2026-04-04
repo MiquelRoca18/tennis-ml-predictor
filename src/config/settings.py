@@ -72,6 +72,18 @@ class Config:
     USE_WELO = os.getenv("USE_WELO", "false").lower() == "true"
     WELO_DECAY_HALF_LIFE_DAYS = int(os.getenv("WELO_DECAY_HALF_LIFE_DAYS", "365"))
 
+    # LightGBM model (Fase 4)
+    USE_LGBM_MODEL = os.getenv("USE_LGBM_MODEL", "auto").lower()
+    # "auto"  → usa LightGBM si existe el .pkl, sino fallback a baseline
+    # "true"  → fuerza LightGBM (error si no existe)
+    # "false" → fuerza baseline
+    LGBM_MODEL_PATH = os.getenv("LGBM_MODEL_PATH", "modelos/lgbm_tennis.pkl")
+    LGBM_FEATURE_COLS = [
+        "elo_diff_surface", "h2h_reciente_rate", "diff_win_rate_60d",
+        "diff_carga_score", "diff_dias_descanso", "ventaja_superficie",
+        "rank_diff", "elo_diff",
+    ]
+
     # ==================== DATOS ====================
     DATA_PATH = os.getenv("DATA_PATH", "datos/processed/dataset_final.csv")
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")
