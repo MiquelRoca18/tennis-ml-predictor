@@ -854,25 +854,29 @@ class BacktestingProduccionReal:
                 if ev_j1 >= ev_j2:
                     acierto = ganador_es_j1
                     ganancia = stake * (cuota_j1 - 1) if acierto else -stake
+                    prob_mercado_j1 = 1.0 / cuota_j1 if cuota_j1 > 0 else 0.5
+                    clv_apuesta = prob_j1_gana - prob_mercado_j1
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j1_nombre, "oponente": j2_nombre,
                         "prob_modelo": prob_j1_gana, "cuota": cuota_j1, "ev": ev_j1,
                         "stake": stake, "resultado": int(acierto), "ganancia": ganancia,
-                        "bankroll_despues": None,
+                        "bankroll_despues": None, "clv": clv_apuesta,
                     })
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
                 else:
                     acierto = not ganador_es_j1
                     ganancia = stake * (cuota_j2 - 1) if acierto else -stake
+                    prob_mercado_j2 = 1.0 / cuota_j2 if cuota_j2 > 0 else 0.5
+                    clv_apuesta = (1 - prob_j1_gana) - prob_mercado_j2
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append({
                         "fecha": fecha, "partido_num": len(apuestas_realizadas) + 1,
                         "jugador_apostado": j2_nombre, "oponente": j1_nombre,
                         "prob_modelo": 1 - prob_j1_gana, "cuota": cuota_j2, "ev": ev_j2,
                         "stake": stake, "resultado": int(acierto), "ganancia": ganancia,
-                        "bankroll_despues": None,
+                        "bankroll_despues": None, "clv": clv_apuesta,
                     })
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
 
@@ -894,6 +898,8 @@ class BacktestingProduccionReal:
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
+                    prob_mercado_j1 = 1.0 / cuota_j1 if cuota_j1 > 0 else 0.5
+                    clv_apuesta = prob_j1_gana - prob_mercado_j1
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append(
                         {
@@ -908,6 +914,7 @@ class BacktestingProduccionReal:
                             "resultado": int(acierto),
                             "ganancia": ganancia,
                             "bankroll_despues": None,
+                            "clv": clv_apuesta,
                         }
                     )
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
@@ -928,6 +935,8 @@ class BacktestingProduccionReal:
                     if self.use_flat_stake:
                         total_staked_flat += stake
                         total_profit_flat += ganancia
+                    prob_mercado_j2 = 1.0 / cuota_j2 if cuota_j2 > 0 else 0.5
+                    clv_apuesta = (1 - prob_j1_gana) - prob_mercado_j2
                     apuesta_idx = len(apuestas_realizadas)
                     apuestas_realizadas.append(
                         {
@@ -942,6 +951,7 @@ class BacktestingProduccionReal:
                             "resultado": int(acierto),
                             "ganancia": ganancia,
                             "bankroll_despues": None,
+                            "clv": clv_apuesta,
                         }
                     )
                     pending_bets.append({"stake": stake, "ganancia": ganancia, "idx": apuesta_idx})
@@ -1252,6 +1262,7 @@ def main():
         logger.info("📌 Bankroll se arrastra entre años (inicial 1000€, sin reiniciar por año)")
 
     resumen_años = []
+    todas_apuestas_clv = []
     for AÑO_BACKTESTING in AÑOS:
         logger.info("\n" + "=" * 70)
         logger.info(f"🎾 BACKTESTING DE PRODUCCIÓN REAL - AÑO {AÑO_BACKTESTING}")
@@ -1320,6 +1331,7 @@ def main():
                 "año": AÑO_BACKTESTING, "apuestas": len(apuestas), "ganadas": ganadas, "perdidas": perdidas,
                 "win_rate_%": round(win_rate, 1), "roi_%": round(roi, 2), "bankroll_final": bankroll_final
             })
+            todas_apuestas_clv.extend(apuestas)
             if accumulate_bankroll:
                 backtester.bankroll_inicial = bankroll_final
         else:
@@ -1346,6 +1358,14 @@ def main():
         br_final = resumen_años[-1].get("bankroll_final", backtester.bankroll_inicial)
         ganancia_neta = br_final - 1000.0
         logger.info("  💰 BANKROLL 1000€ (arrastrado 4 años): Final %.2f€ | Ganancia neta %+.2f€", br_final, ganancia_neta)
+
+    if todas_apuestas_clv and any("clv" in a for a in todas_apuestas_clv):
+        clvs = [a["clv"] for a in todas_apuestas_clv if "clv" in a]
+        clv_medio = sum(clvs) / len(clvs)
+        clv_positivo_pct = sum(1 for c in clvs if c > 0) / len(clvs) * 100
+        logger.info(f"   CLV medio: {clv_medio:+.4f} | CLV>0: {clv_positivo_pct:.1f}%")
+        logger.info(f"   (CLV>0 y positivo = modelo tiene edge real vs mercado)")
+
     logger.info("=" * 70)
     logger.info("✅ PROCESO COMPLETADO")
 
