@@ -46,7 +46,9 @@ COPY --from=builder /root/.local /root/.local
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 
-# Sistema usa solo baseline ELO + mercado (no .pkl ni selected_features)
+# LightGBM model baked in for first deploy; Railway persistent volume at /app/modelos
+# keeps the model alive across redeploys and auto-retraining updates it in place.
+COPY modelos/ modelos/
 
 # Script de arranque
 COPY start.sh ./start.sh
