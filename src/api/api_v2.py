@@ -163,6 +163,10 @@ live_events_service = None
 _last_trigger_retraining_result: Optional[Dict] = None
 _last_refresh_elo_result: Optional[Dict] = None
 
+# Lock para reentrenamiento LightGBM (evita ejecuciones paralelas)
+_retraining_lock = threading.Lock()
+_retraining_in_progress = False
+
 def reset_predictor():
     """Resetea el predictor en memoria. La próxima predicción creará una nueva instancia."""
     global predictor
@@ -2293,6 +2297,55 @@ async def cron_refresh_elo():
         }
         _last_refresh_elo_result = out
         return out
+
+
+@app.post("/admin/retrain-lgbm", tags=["Admin"])
+async def retrain_lgbm_endpoint():
+    """
+    Lanza el reentrenamiento del modelo LightGBM en un hilo background.
+    Safe para llamar desde cron-job.org semanalmente.
+    Retorna inmediatamente; el entrenamiento tarda ~13 min.
+    """
+    global _retraining_in_progress
+
+    if _retraining_in_progress:
+        raise HTTPException(status_code=409, detail="Retraining already in progress")
+
+    def _run_training():
+        global _retraining_in_progress
+        with _retraining_lock:
+            _retraining_in_progress = True
+            try:
+                import subprocess, sys
+                logger.info("[retrain-lgbm] Starting LightGBM retraining...")
+                result = subprocess.run(
+                    [sys.executable, "scripts/train_model_lgbm.py",
+                     "--years", "2021", "2022", "2023", "2024",
+                     "--output", Config.LGBM_MODEL_PATH],
+                    capture_output=True, text=True, timeout=1800,
+                )
+                if result.returncode == 0:
+                    logger.info("[retrain-lgbm] Training complete. Reloading predictor...")
+                    from src.prediction.feature_generator_service import reset_instance as reset_fgs
+                    reset_fgs()
+                    reset_predictor()
+                    logger.info("[retrain-lgbm] Predictor reloaded with new model.")
+                else:
+                    logger.error(f"[retrain-lgbm] Training failed:\n{result.stderr}")
+            except Exception as e:
+                logger.error(f"[retrain-lgbm] Exception during training: {e}")
+            finally:
+                _retraining_in_progress = False
+
+    thread = threading.Thread(target=_run_training, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "LightGBM retraining launched in background (~13 min)"}
+
+
+@app.get("/admin/retrain-lgbm/status", tags=["Admin"])
+async def retrain_lgbm_status():
+    """Devuelve si hay un reentrenamiento LightGBM en curso."""
+    return {"in_progress": _retraining_in_progress}
 
 
 @app.get("/admin/cron-status", tags=["Admin"])
