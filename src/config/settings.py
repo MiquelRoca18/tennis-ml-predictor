@@ -68,6 +68,10 @@ class Config:
     USE_BASELINE_ELO = os.getenv("USE_BASELINE_ELO", "false").lower() == "true"
     BASELINE_ELO_PESO = float(os.getenv("BASELINE_ELO_PESO", "0.6"))  # 60% ELO, 40% mercado
 
+    # WElo: K-factor variable por nivel de torneo + decay temporal (Kovalchik 2021)
+    USE_WELO = os.getenv("USE_WELO", "false").lower() == "true"
+    WELO_DECAY_HALF_LIFE_DAYS = int(os.getenv("WELO_DECAY_HALF_LIFE_DAYS", "365"))
+
     # ==================== DATOS ====================
     DATA_PATH = os.getenv("DATA_PATH", "datos/processed/dataset_final.csv")
     DATA_BACKUP_DIR = os.getenv("DATA_BACKUP_DIR", "backups")

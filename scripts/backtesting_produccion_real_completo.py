@@ -591,6 +591,19 @@ class BacktestingProduccionReal:
 
         feature_gen = ProductionFeatureGenerator(df_historico_pre)
 
+        # Soporte WElo (activado con USE_WELO=true)
+        use_welo = os.environ.get("USE_WELO", "false").lower() == "true"
+        if use_welo:
+            from src.features.welo_rating_system import WEloRatingSystem
+            welo_system = WEloRatingSystem(
+                use_temporal_decay=True,
+                decay_half_life_days=int(os.environ.get("WELO_DECAY_HALF_LIFE_DAYS", "365")),
+            )
+            # Recalcular ELOs históricos con WElo sobre los mismos datos pre-test
+            welo_system.calculate_historical_elos(df_historico_pre)
+            feature_gen.elo_system = welo_system
+            logger.info("   [WElo] Sistema WElo activado (K variable + decay temporal)")
+
         # Construir índice de walkovers del año de backtest
         walkovers_idx = self._construir_indice_walkovers(df_tml_año)
 
