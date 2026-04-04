@@ -335,6 +335,8 @@ class BacktestingProduccionReal:
         max_stake_eur=None,
         ev_formula: str = "original",
         series_permitidas: list = None,
+        modelo_lgbm_path: str = None,
+        lgbm_feature_cols: list = None,
         **kwargs,  # ignora value_model_path, selected_features_path, conformal, modelo_por_superficie, etc.
     ):
         self.modelo_path = Path(modelo_path) if modelo_path else Path(".")
@@ -358,6 +360,18 @@ class BacktestingProduccionReal:
         self.max_stake_eur = max_stake_eur  # tope realista por apuesta (ej. 100€); None = sin tope
         self.ev_formula = ev_formula.strip().lower() if ev_formula else "original"
         self.series_permitidas = series_permitidas
+
+        self.modelo_lgbm = None
+        self.lgbm_feature_cols = lgbm_feature_cols or [
+            "elo_diff_surface", "h2h_reciente_rate", "diff_win_rate_60d",
+            "diff_carga_score", "diff_dias_descanso", "ventaja_superficie",
+            "rank_diff", "elo_diff",
+        ]
+        if modelo_lgbm_path and Path(modelo_lgbm_path).exists():
+            import pickle
+            with open(modelo_lgbm_path, "rb") as f:
+                self.modelo_lgbm = pickle.load(f)
+            logger.info(f"   [LightGBM] Modelo cargado: {modelo_lgbm_path}")
 
         logger.info(f"🎯 Backtesting de Producción REAL - BASELINE ELO + MERCADO")
         if use_flat_stake:
@@ -512,6 +526,62 @@ class BacktestingProduccionReal:
 
         logger.info(f"   [Walkovers] {len(idx)} W/O detectados en TML → se tratarán como no acción")
         return idx
+
+    def _calcular_features_lgbm(self, j1: str, j2: str, superficie: str, fecha, feature_gen) -> dict:
+        """Calcula features del modelo LightGBM para un partido (sin data leakage)."""
+        import pandas as pd
+        from src.features.features_h2h_mejorado import HeadToHeadCalculator
+        from src.features.features_forma_reciente import FormaRecienteCalculator
+        from src.features.features_fatiga import FatigaCalculator
+        from src.features.features_superficie import SuperficieSpecializationCalculator
+
+        df_pre = feature_gen.df[
+            feature_gen.df["tourney_date"] < pd.Timestamp(fecha)
+        ].copy()
+
+        sup_calc = SuperficieSpecializationCalculator(df_pre) if len(df_pre) > 0 else None
+        sup_norm = sup_calc._normalizar_superficie(superficie) if sup_calc else "Hard"
+
+        elo_j1 = feature_gen.elo_system.get_rating(j1, sup_norm)
+        elo_j2 = feature_gen.elo_system.get_rating(j2, sup_norm)
+        elo_j1_g = feature_gen.elo_system.get_rating(j1)
+        elo_j2_g = feature_gen.elo_system.get_rating(j2)
+
+        if len(df_pre) == 0:
+            return {
+                "elo_diff_surface": elo_j1 - elo_j2,
+                "elo_diff": elo_j1_g - elo_j2_g,
+                "h2h_reciente_rate": 0.5,
+                "diff_win_rate_60d": 0.0,
+                "diff_carga_score": 0.0,
+                "diff_dias_descanso": 0.0,
+                "ventaja_superficie": 0.0,
+                "rank_diff": 0.0,
+            }
+
+        h2h = HeadToHeadCalculator(df_pre).calcular_h2h(j1, j2, fecha, sup_norm)
+        forma_j1 = FormaRecienteCalculator(df_pre).calcular_forma(j1, fecha)
+        forma_j2 = FormaRecienteCalculator(df_pre).calcular_forma(j2, fecha)
+        fat_j1 = FatigaCalculator(df_pre).calcular_fatiga(j1, fecha)
+        fat_j2 = FatigaCalculator(df_pre).calcular_fatiga(j2, fecha)
+        ventaja = sup_calc.calcular_ventaja_superficie(j1, j2, fecha, sup_norm)
+
+        return {
+            "elo_diff_surface": float(elo_j1 - elo_j2),
+            "elo_diff": float(elo_j1_g - elo_j2_g),
+            "h2h_reciente_rate": float(h2h.get("h2h_reciente_rate", 0.5)),
+            "diff_win_rate_60d": float(
+                forma_j1.get("win_rate_60d", 0.5) - forma_j2.get("win_rate_60d", 0.5)
+            ),
+            "diff_carga_score": float(
+                fat_j1.get("carga_reciente_score", 0.3) - fat_j2.get("carga_reciente_score", 0.3)
+            ),
+            "diff_dias_descanso": float(
+                fat_j1.get("dias_desde_ultimo_partido", 7) - fat_j2.get("dias_desde_ultimo_partido", 7)
+            ),
+            "ventaja_superficie": float(ventaja.get("ventaja_superficie", 0.0)),
+            "rank_diff": 0.0,
+        }
 
     def ejecutar_backtesting(self, df_odds, df_historico, año_backtest=None, df_tml_año=None):
         """Ejecuta backtesting completo
@@ -737,7 +807,18 @@ class BacktestingProduccionReal:
                 elo_j2 = feature_gen.elo_system.get_rating(j2_nombre, superficie)
                 prob_elo = feature_gen.elo_system.expected_score(elo_j1, elo_j2)
                 prob_mercado = 1.0 / cuota_j1 if cuota_j1 and cuota_j1 > 0 else 0.5
-                if self.ev_formula == "corregida":
+                if self.modelo_lgbm is not None:
+                    # Modo LightGBM: calcular features y usar el modelo
+                    features_lgbm = self._calcular_features_lgbm(
+                        j1_nombre, j2_nombre, superficie, fecha, feature_gen
+                    )
+                    import numpy as np
+                    X = np.array([[
+                        float(features_lgbm.get(col, 0.0) or 0.0)
+                        for col in self.lgbm_feature_cols
+                    ]])
+                    prob_j1_gana = float(np.clip(self.modelo_lgbm.predict_proba(X)[0, 1], 0.01, 0.99))
+                elif self.ev_formula == "corregida":
                     # Fórmula corregida: ELO es el modelo, mercado es el benchmark
                     # No mezclamos mercado en la probabilidad del modelo
                     prob_j1_gana = prob_elo
@@ -1145,6 +1226,7 @@ def main():
     ev_formula = os.environ.get("BACKTEST_EV_FORMULA", "original").strip().lower()
     series_raw = os.environ.get("BACKTEST_SERIES", "").strip()
     series_permitidas = [s.strip() for s in series_raw.split(",")] if series_raw else None
+    modelo_lgbm_path = os.environ.get("BACKTEST_LGBM_MODEL", "").strip() or None
 
     backtester = BacktestingProduccionReal(
         modelo_path="",
@@ -1161,6 +1243,7 @@ def main():
         max_stake_eur=max_stake_eur,
         ev_formula=ev_formula,
         series_permitidas=series_permitidas,
+        modelo_lgbm_path=modelo_lgbm_path,
     )
     backtester.cargar_modelo()
 
