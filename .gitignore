@@ -138,3 +138,10 @@ datos/odds_historicas/*.csv
 !MANUAL_USUARIO.md
 !DOCUMENTACION_TECNICA.md
 scripts/README.md
+
+# Claude Code
+.claude/settings.local.json
+.claude/agent-memory-local/
+.claude/
+CLAUDE.md
+docs/
