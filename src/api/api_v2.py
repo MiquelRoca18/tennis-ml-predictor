@@ -2348,6 +2348,77 @@ async def retrain_lgbm_status():
     return {"in_progress": _retraining_in_progress}
 
 
+@app.post("/admin/regenerate-predictions", tags=["Admin"])
+async def regenerate_predictions():
+    """
+    Borra las predicciones de todos los partidos pendientes futuros y las regenera
+    con el modelo activo. Útil tras cambiar de modelo (ej. activar WElo + LightGBM).
+    """
+    db = MatchDatabase()
+    try:
+        today = datetime.now().date().isoformat()
+
+        # Obtener partidos pendientes con cuotas (necesitan cuotas para predecir)
+        pending = db._fetchall(
+            """
+            SELECT id, jugador1_nombre, jugador2_nombre, superficie,
+                   jugador1_cuota, jugador2_cuota
+            FROM matches
+            WHERE estado = 'pendiente'
+              AND fecha_partido >= :today
+              AND jugador1_cuota IS NOT NULL
+              AND jugador2_cuota IS NOT NULL
+            ORDER BY fecha_partido ASC
+            """,
+            {"today": today},
+        )
+
+        if not pending:
+            return {"ok": True, "regenerated": 0, "message": "No hay partidos pendientes con cuotas"}
+
+        # Borrar predicciones existentes para forzar regeneración limpia
+        match_ids = [m["id"] for m in pending]
+        placeholders = ",".join(str(i) for i in match_ids)
+        db._execute(
+            f"DELETE FROM predictions WHERE match_id IN ({placeholders})"
+        )
+
+        # Regenerar con el predictor actual (nuevo modelo)
+        from src.prediction.predictor_calibrado import PredictorCalibrado
+        from src.services.prediction_runner import run_prediction_and_save
+        predictor = PredictorCalibrado(Config.MODEL_PATH)
+
+        regenerated = 0
+        for m in pending:
+            try:
+                if run_prediction_and_save(
+                    db=db,
+                    predictor=predictor,
+                    match_id=m["id"],
+                    player1_name=m["jugador1_nombre"] or "",
+                    player2_name=m["jugador2_nombre"] or "",
+                    surface=m["superficie"] or "Hard",
+                    player1_odds=float(m["jugador1_cuota"]),
+                    player2_odds=float(m["jugador2_cuota"]),
+                ):
+                    regenerated += 1
+            except Exception as e:
+                logger.warning(f"[regenerate] Error en match {m['id']}: {e}")
+
+        logger.info(f"[regenerate-predictions] {regenerated}/{len(pending)} predicciones regeneradas")
+        return {
+            "ok": True,
+            "total_pending": len(pending),
+            "regenerated": regenerated,
+            "model": predictor.nombre_modelo,
+        }
+    except Exception as e:
+        logger.error(f"[regenerate-predictions] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
 @app.get("/admin/cron-status", tags=["Admin"])
 async def admin_cron_status():
     """
